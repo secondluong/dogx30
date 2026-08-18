@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">X30 遥控台</string>
+
+    <string name="connect_subtitle">连接机器狗上的 RK3588 网关</string>
+    <string name="hint_host">网关地址</string>
+    <string name="hint_port">端口</string>
+    <string name="connect">连接</string>
+    <string name="connecting">连接中…</string>
+    <string name="probing">正在探测网关…</string>
+
+    <string name="err_no_host">请填写网关地址</string>
+    <string name="err_bad_port">端口需为数字</string>
+    <string name="err_unreachable">无法连接网关（%1$s）。请确认平板与机器狗在同一网段，且 x30-gateway 服务已启动。</string>
+
+    <string name="connect_help">地址为 RK3588 在机器狗内网中的 IP，默认端口 8080。\n可在 RK3588 上执行 systemctl status x30-gateway 确认服务状态。</string>
+
+    <string name="loading">正在加载遥控台…</string>
+    <string name="load_failed">加载失败：%1$s\n\n请检查网关服务是否运行，以及平板是否连在机器狗的网络上。</string>
+
+    <string name="exit_title">退出遥控</string>
+    <string name="exit_message">退出后将失去对机器狗的控制，它会在指令超时后自动停下。确定退出？</string>
+    <string name="exit_confirm">退出</string>
+    <string name="cancel">取消</string>
+</resources>

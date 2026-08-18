@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>X30 遥控台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">X30 遥控台</div>
+
+  <div class="chips">
+    <span class="chip" id="chip-link"><i class="dot"></i><span id="link-text">连接中</span></span>
+    <span class="chip" id="chip-state">—</span>
+    <span class="chip" id="chip-gait">—</span>
+    <span class="chip" id="chip-batt">—</span>
+  </div>
+
+  <div class="bar-right">
+    <button class="btn btn-ghost" id="btn-control">申请控制权</button>
+    <button class="btn btn-estop" id="btn-estop">急停</button>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<main class="layout">
+
+  <!-- 视野区：视频与点云。两路数据链尚未接入，先占位并说明依赖项。 -->
+  <section class="view">
+    <div class="panel view-panel">
+      <div class="panel-head">
+        <span>实时视频</span>
+        <span class="tag" id="media-budget">—</span>
+      </div>
+
+      <video id="media-video" class="media-video" autoplay playsinline muted></video>
+
+      <div class="media-ctl">
+        <div id="media-list" class="media-list">
+          <div class="placeholder sm">
+            <p>未配置视频源</p>
+            <small>需在 <code>media.json</code> 中登记相机，并启动 <code>x30-media</code> 服务。</small>
+          </div>
+        </div>
+        <div class="media-foot">
+          <button class="btn sm" id="btn-talk">按住说话</button>
+          <span class="hint" id="codec-note">正在探测解码能力…</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel view-panel">
+      <div class="panel-head">
+        <span>激光点云</span>
+        <span class="tag" id="cloud-tag">未订阅</span>
+      </div>
+
+      <div class="cloud-wrap">
+        <canvas id="cloud-canvas" class="cloud-canvas"></canvas>
+        <div class="placeholder cloud-idle" id="cloud-idle">
+          <div class="ph-icon">⁘</div>
+          <p>点云未订阅</p>
+          <small>订阅后才会去连感知主机，<br>不看时不占 MESH 带宽。</small>
+        </div>
+      </div>
+
+      <div class="cloud-ctl">
+        <button class="btn sm" id="btn-cloud">订阅点云</button>
+        <span class="hint" id="cloud-note">拖动旋转，滚轮缩放</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 遥测盘 -->
+  <section class="panel telemetry">
+    <div class="panel-head"><span>遥测</span><span class="tag" id="tag-holder">观察者</span></div>
+    <div class="grid">
+      <div class="cell"><label>机体速度 X</label><b id="t-vx">0.00</b><em>m/s</em></div>
+      <div class="cell"><label>机体速度 Y</label><b id="t-vy">0.00</b><em>m/s</em></div>
+      <div class="cell"><label>转向角速度</label><b id="t-wz">0.00</b><em>rad/s</em></div>
+      <div class="cell"><label>里程计 X</label><b id="t-ox">0.00</b><em>m</em></div>
+      <div class="cell"><label>里程计 Y</label><b id="t-oy">0.00</b><em>m</em></div>
+      <div class="cell"><label>航向</label><b id="t-yaw">0.0</b><em>°</em></div>
+      <div class="cell"><label>横滚 / 俯仰</label><b id="t-rp">0.0 / 0.0</b><em>°</em></div>
+      <div class="cell"><label>电池</label><b id="t-batt">—</b><em>%</em></div>
+      <div class="cell"><label>CPU 温度</label><b id="t-cpu">—</b><em>℃</em></div>
+      <div class="cell"><label>电机最高温</label><b id="t-motor">—</b><em>℃</em></div>
+      <div class="cell"><label>本次里程</label><b id="t-mile">—</b><em>m</em></div>
+      <div class="cell"><label>速度上限</label><b id="t-limit">—</b><em>m/s</em></div>
+    </div>
+    <div class="errors" id="t-errors"></div>
+  </section>
+
+  <!-- 操作区 -->
+  <section class="controls">
+
+    <div class="panel actions">
+      <div class="panel-head"><span>状态机</span></div>
+      <div class="row">
+        <button class="btn" data-cmd="stand">坐 / 站</button>
+        <button class="btn" data-cmd="torque">力控站立</button>
+        <button class="btn" data-cmd="step">起步 / 停步</button>
+      </div>
+      <div class="panel-head"><span>步态</span></div>
+      <div class="row wrap" id="gait-row">
+        <button class="btn sm" data-gait="walk">常规</button>
+        <button class="btn sm" data-gait="slope">爬坡</button>
+        <button class="btn sm" data-gait="offroad">越野</button>
+        <button class="btn sm" data-gait="lwalk">低姿</button>
+        <button class="btn sm" data-gait="mountain">山地</button>
+        <button class="btn sm" data-gait="silent">静音</button>
+      </div>
+
+      <div class="panel-head">
+        <span>上下楼</span>
+        <span class="hint" id="stair-hint">需感知主机地形图配合</span>
+      </div>
+      <div class="row">
+        <label class="sel-label" for="stair-style">踏面</label>
+        <select id="stair-style" class="sel">
+          <option value="solid">实心（常见混凝土楼梯）</option>
+          <option value="grating">格栅</option>
+          <option value="noriser">无踢面</option>
+        </select>
+      </div>
+      <div class="row wrap" id="stair-row">
+        <button class="btn sm" data-gait="stair">楼梯</button>
+        <button class="btn sm" data-gait="stairmulti">楼梯(多帧)</button>
+        <button class="btn sm" data-gait="stair45">45°楼梯</button>
+      </div>
+      <div class="panel-head"><span>身高</span></div>
+      <div class="row">
+        <button class="btn sm" data-height="normal">正常</button>
+        <button class="btn sm" data-height="crawl">匍匐</button>
+      </div>
+    </div>
+
+    <div class="panel sticks">
+      <div class="stick-wrap">
+        <div class="stick" id="stick-left"><div class="knob"></div><span class="stick-hint">前后 / 平移</span></div>
+      </div>
+      <div class="stick-wrap">
+        <div class="stick" id="stick-right"><div class="knob"></div><span class="stick-hint">转向 / 俯仰</span></div>
+      </div>
+      <div class="gp-bar">
+        <div class="gp-line">
+          <span>物理手柄</span>
+          <span class="tag" id="gp-status">未连接</span>
+        </div>
+        <div class="gp-note" id="gp-note">插上手柄后拨动摇杆即可识别。</div>
+        <label class="gp-check">
+          <input type="checkbox" id="gp-deadman">
+          <span>死人开关：按住指定键才能推动，松手立即停</span>
+        </label>
+        <div class="row">
+          <a class="btn sm" href="gamepad.html" target="_blank" rel="noopener">诊断 / 映射</a>
+          <button class="btn sm" id="gp-paste">粘贴映射</button>
+          <button class="btn sm" id="gp-clear">清除</button>
+        </div>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<script src="media.js"></script>
+<script src="cloud.js"></script>
+<script src="gamepad.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

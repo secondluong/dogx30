@@ -1,0 +1,508 @@
+// 物理手柄输入。映射由 gamepad.html 生成，本模块只负责读取与整形。
+//
+// 语法刻意保守（不用可选链、不用 ??）：工业手持地面站的 WebView 往往很旧，
+// 而这个文件恰恰是只有在那台设备上才跑得起来的那个。
+//
+// ---------------------------------------------------------------------------
+// 摇杆通道的统一约定
+// ---------------------------------------------------------------------------
+// 触摸摇杆、物理手柄两种输入，速度、姿态两种输出，两两组合就是四套符号约定。
+// 各自为政的结果是符号错得悄无声息 —— 现场表现为"平移方向反了"，
+// 而且只在某一种状态下反，很难查。
+//
+// 所以中间统一到四个通道，**推杆方向为正**：
+//
+//   fwd    左摇杆上下   前进为正
+//   lat    左摇杆左右   左移为正
+//   turn   右摇杆左右   左转为正
+//   tilt   右摇杆上下   向上为正
+//
+// 输入侧负责转换到这套约定，输出侧负责从这套约定转出去。
+// 新增输入源（比如厂家 SDK 的摇杆）只要产出这四个值即可。
+
+(function (root, factory) {
+  var api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else root.X30Gamepad = api;
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  var STORE_KEY = 'x30.gamepad.map';
+
+  // 死人开关的开关另存一个键：它是操作策略，不该被"重新跑一遍映射向导"冲掉。
+  var DEADMAN_KEY = 'x30.gamepad.deadman';
+
+  // 摇杆通道 -> gamepad.html 里的目标名。历史原因那边用的是速度语义的名字，
+  // 但它们其实就是四个物理通道，在姿态模式下含义不同。
+  var CHANNEL_TARGET = {
+    fwd: 'vx',
+    lat: 'vy',
+    turn: 'wz',
+    tilt: 'pitch',
+  };
+
+  // 成对的通道属于同一根摇杆，死区要按半径算而不是按轴各算。
+  // 按轴各算会切出一个十字形的死区，斜推时先被吃掉一个分量，
+  // 手感上就是"斜着推会先直着走一下"。
+  var PAIRS = [['lat', 'fwd'], ['turn', 'tilt']];
+
+  // 会派发成指令的按键。
+  var ACTION_BUTTONS = ['stand', 'torque', 'step', 'gait_up', 'gait_dn', 'estop'];
+
+  // 映射里合法的按键，比上面多一个死人开关 —— 它不派发指令，只做闸门。
+  var BUTTON_TARGETS = ACTION_BUTTONS.concat(['deadman']);
+
+  // 手柄肩键循环步态时只在这些之间转。三种楼梯步态被有意排除：
+  // 它们要和感知主机的地形图配合、切换要几秒，误触一下代价太大。
+  // 楼梯仍然从屏幕上切。
+  var GAIT_CYCLE = ['walk', 'slope', 'offroad', 'lwalk', 'mountain', 'silent'];
+
+  var DEFAULT_TUNING = { deadzone: 0.12, expo: 0.4 };
+
+  // 标准布局手柄（Xbox 手柄以及绝大多数 USB 手柄）的兜底映射，
+  // 省得在办公桌上拿普通手柄联调时还要先跑一遍向导。
+  // 标准布局里摇杆向下、向右为正，而本模块约定向上、向左为正，所以全都反向。
+  //
+  // 急停**故意不给默认值**：在一个不认识的手柄上瞎猜急停键，
+  // 按错的代价比没有更大。屏幕上的急停按钮始终可用。
+  var STANDARD_MAP = {
+    vx: { type: 'axis', index: 1, invert: true },
+    vy: { type: 'axis', index: 0, invert: true },
+    wz: { type: 'axis', index: 2, invert: true },
+    pitch: { type: 'axis', index: 3, invert: true },
+    stand: { type: 'button', index: 0 },
+    step: { type: 'button', index: 1 },
+    torque: { type: 'button', index: 2 },
+    gait_dn: { type: 'button', index: 4 },
+    gait_up: { type: 'button', index: 5 },
+  };
+
+  // --- 纯函数部分（可在 node 里直接测） -----------------------------------
+
+  function clamp(v, lo, hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+  }
+
+  // 三次曲线。中心附近变化慢，便于在狭窄空间里微调；末端仍能到满量程。
+  function expoCurve(v, e) {
+    return e * v * v * v + (1 - e) * v;
+  }
+
+  // 圆形死区 + 曲线整形。方向保持不变，只改变模长 ——
+  // 逐分量做曲线会把斜推的方向掰歪。
+  function shapeStick(x, y, deadzone, expo) {
+    var m = Math.sqrt(x * x + y * y);
+    if (m <= deadzone || m === 0) return { x: 0, y: 0 };
+    var norm = clamp((m - deadzone) / (1 - deadzone), 0, 1);
+    var shaped = expoCurve(norm, expo);
+    return { x: (x / m) * shaped, y: (y / m) * shaped };
+  }
+
+  function readAxis(snapshot, m) {
+    if (!m || m.type !== 'axis') return 0;
+    var v = snapshot.axes[m.index];
+    if (typeof v !== 'number' || v !== v) return 0;   // NaN 也挡掉
+    v = clamp(v, -1, 1);
+    return m.invert ? -v : v;
+  }
+
+  function isPressed(snapshot, m) {
+    if (!m || m.type !== 'button') return false;
+    var b = snapshot.buttons[m.index];
+    if (b === undefined || b === null) return false;
+    if (typeof b === 'object') return !!b.pressed;
+    return b > 0.5;    // 有些实现直接给数值
+  }
+
+  // 把一帧手柄快照整形成四个通道值 + 本帧按下的按键（上升沿）。
+  function makeCore(config) {
+    var cfg = config || {};
+    var map = cfg.map || {};
+    var tuning = {
+      deadzone: typeof cfg.deadzone === 'number' ? cfg.deadzone : DEFAULT_TUNING.deadzone,
+      expo: typeof cfg.expo === 'number' ? cfg.expo : DEFAULT_TUNING.expo,
+    };
+    var prev = {};
+    var deadmanRequired = !!cfg.deadmanRequired;
+    var hasDeadmanKey = !!(cfg.map && cfg.map.deadman);
+
+    function update(snapshot) {
+      var channels = { fwd: 0, lat: 0, turn: 0, tilt: 0 };
+
+      // 死人开关只闸摇杆，不闸按键。急停必须任何时候都发得出去；
+      // 坐站、起步这些是有意识的单次按键，本来就不是"松手就该停"的东西。
+      var deadmanHeld = snapshot ? isPressed(snapshot, map.deadman) : false;
+      // 开了死人开关却没映射按键时，摇杆一律不放行。这看着别扭，
+      // 但另一条路是"以为开着其实没开"，那才真危险。状态栏会说清楚原因。
+      var gated = deadmanRequired && !deadmanHeld;
+
+      if (snapshot && !gated) {
+        for (var p = 0; p < PAIRS.length; p++) {
+          var xKey = PAIRS[p][0], yKey = PAIRS[p][1];
+          var rawX = readAxis(snapshot, map[CHANNEL_TARGET[xKey]]);
+          var rawY = readAxis(snapshot, map[CHANNEL_TARGET[yKey]]);
+          var s = shapeStick(rawX, rawY, tuning.deadzone, tuning.expo);
+          channels[xKey] = s.x;
+          channels[yKey] = s.y;
+        }
+      }
+
+      var pressed = [];
+      for (var i = 0; i < ACTION_BUTTONS.length; i++) {
+        var key = ACTION_BUTTONS[i];
+        var now = snapshot ? isPressed(snapshot, map[key]) : false;
+        // 只认上升沿。按住不放不该被当成连续触发 ——
+        // 60 Hz 轮询下按一下会变成刷屏式的几十条指令。
+        if (now && !prev[key]) pressed.push(key);
+        prev[key] = now;
+      }
+
+      var engaged = channels.fwd !== 0 || channels.lat !== 0 ||
+                    channels.turn !== 0 || channels.tilt !== 0;
+
+      return {
+        channels: channels, pressed: pressed, engaged: engaged,
+        deadmanHeld: deadmanHeld,
+        // 开着死人开关却没映射按键 —— 手柄推不动，UI 要能解释清楚
+        deadmanMisconfigured: deadmanRequired && !hasDeadmanKey,
+        gated: gated,
+      };
+    }
+
+    function reset() {
+      prev = {};
+    }
+
+    return { update: update, reset: reset, tuning: tuning, map: map };
+  }
+
+  function nextGait(current, delta) {
+    var i = GAIT_CYCLE.indexOf(current);
+    // 当前步态不在循环里（多半正处于楼梯态）时，从头开始而不是原地不动。
+    if (i < 0) return GAIT_CYCLE[delta > 0 ? 0 : GAIT_CYCLE.length - 1];
+    var n = GAIT_CYCLE.length;
+    return GAIT_CYCLE[((i + delta) % n + n) % n];
+  }
+
+  // 校验从诊断页粘回来的映射。宁可在这里报错，也不要拿一个半截的映射上狗。
+  function validateConfig(obj) {
+    if (!obj || typeof obj !== 'object') return { ok: false, error: '不是合法的 JSON 对象' };
+    var map = obj.map;
+    if (!map || typeof map !== 'object') return { ok: false, error: '缺少 map 字段' };
+
+    var known = {};
+    var k;
+    for (k in CHANNEL_TARGET) known[CHANNEL_TARGET[k]] = 'axis';
+    for (var i = 0; i < BUTTON_TARGETS.length; i++) known[BUTTON_TARGETS[i]] = 'button';
+
+    var axes = 0;
+    for (k in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+      if (!known[k]) continue;                 // 多余的键忽略，不算错
+      var m = map[k];
+      if (!m || typeof m !== 'object') return { ok: false, error: k + ' 的值不是对象' };
+      if (m.type !== 'axis' && m.type !== 'button') {
+        return { ok: false, error: k + ' 的 type 只能是 axis 或 button' };
+      }
+      if (typeof m.index !== 'number' || m.index < 0 || m.index !== Math.floor(m.index)) {
+        return { ok: false, error: k + ' 的 index 不是非负整数' };
+      }
+      if (known[k] !== m.type) {
+        return { ok: false, error: k + ' 应该是 ' + known[k] + '，映射里却是 ' + m.type };
+      }
+      if (m.type === 'axis') axes++;
+    }
+    if (axes === 0) return { ok: false, error: '一个摇杆轴都没映射，这样手柄推不动狗' };
+
+    var dz = obj.suggested_deadzone;
+    if (dz !== undefined && dz !== null &&
+        (typeof dz !== 'number' || dz < 0 || dz >= 1)) {
+      return { ok: false, error: 'suggested_deadzone 要在 0 和 1 之间' };
+    }
+    return { ok: true };
+  }
+
+  var api = {
+    STORE_KEY: STORE_KEY,
+    DEADMAN_KEY: DEADMAN_KEY,
+    CHANNEL_TARGET: CHANNEL_TARGET,
+    ACTION_BUTTONS: ACTION_BUTTONS,
+    BUTTON_TARGETS: BUTTON_TARGETS,
+    GAIT_CYCLE: GAIT_CYCLE,
+    STANDARD_MAP: STANDARD_MAP,
+    DEFAULT_TUNING: DEFAULT_TUNING,
+    expoCurve: expoCurve,
+    shapeStick: shapeStick,
+    readAxis: readAxis,
+    isPressed: isPressed,
+    makeCore: makeCore,
+    nextGait: nextGait,
+    validateConfig: validateConfig,
+  };
+
+  // --- 浏览器侧 -------------------------------------------------------------
+
+  if (typeof document === 'undefined') return api;
+
+  var state = {
+    core: null,
+    source: 'none',        // none | standard | custom
+    padId: '',
+    padMapping: null,
+    connected: false,
+    channels: { fwd: 0, lat: 0, turn: 0, tilt: 0 },
+    engaged: false,
+    hasEstop: false,
+    hasDeadman: false,
+    deadmanOn: false,
+    deadmanHeld: false,
+    warned: false,
+  };
+
+  function loadStored() {
+    try {
+      var raw = window.localStorage.getItem(STORE_KEY);
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      var v = validateConfig(obj);
+      if (!v.ok) return null;
+      return obj;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function buildCore(stored, pad) {
+    if (stored) {
+      state.source = 'custom';
+      state.hasEstop = !!stored.map.estop;
+      state.hasDeadman = !!stored.map.deadman;
+      return makeCore({
+        map: stored.map,
+        deadzone: stored.suggested_deadzone,
+        expo: stored.expo,
+        deadmanRequired: state.deadmanOn,
+      });
+    }
+    if (pad && pad.mapping === 'standard') {
+      state.source = 'standard';
+      state.hasEstop = false;
+      state.hasDeadman = false;
+      return makeCore({ map: STANDARD_MAP, deadmanRequired: state.deadmanOn });
+    }
+    state.source = 'none';
+    state.hasEstop = false;
+    state.hasDeadman = false;
+    return null;
+  }
+
+  function firstPad() {
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (var i = 0; i < pads.length; i++) {
+      if (pads[i] && pads[i].connected) return pads[i];
+    }
+    return null;
+  }
+
+  function zero() {
+    state.channels = { fwd: 0, lat: 0, turn: 0, tilt: 0 };
+    state.engaged = false;
+  }
+
+  function initGamepad(send, showBanner, getApp) {
+    var stored = loadStored();
+    var statusEl = document.getElementById('gp-status');
+    var noteEl = document.getElementById('gp-note');
+    var deadmanEl = document.getElementById('gp-deadman');
+
+    try {
+      state.deadmanOn = window.localStorage.getItem(DEADMAN_KEY) === '1';
+    } catch (e) {
+      state.deadmanOn = false;
+    }
+    if (deadmanEl) deadmanEl.checked = state.deadmanOn;
+
+    function setStatus() {
+      if (!statusEl) return;
+      if (!state.connected) {
+        statusEl.textContent = '未连接';
+        statusEl.className = 'tag';
+      } else if (state.deadmanOn && !state.hasDeadman) {
+        statusEl.textContent = '死人开关未映射，摇杆已锁';
+        statusEl.className = 'tag tag-warn';
+      } else if (state.deadmanOn) {
+        statusEl.textContent = state.deadmanHeld ? '已握持，可推动' : '松开中，摇杆已锁';
+        statusEl.className = state.deadmanHeld ? 'tag tag-ok' : 'tag';
+      } else if (state.source === 'custom') {
+        statusEl.textContent = '已连接（自定义映射）';
+        statusEl.className = 'tag tag-ok';
+      } else if (state.source === 'standard') {
+        statusEl.textContent = '已连接（标准布局）';
+        statusEl.className = 'tag tag-ok';
+      } else {
+        statusEl.textContent = '已连接，但无可用映射';
+        statusEl.className = 'tag tag-warn';
+      }
+      if (noteEl) {
+        if (!state.connected) {
+          noteEl.textContent = '插上手柄后拨动摇杆即可识别。没有映射时请先打开诊断页。';
+        } else if (state.source === 'none') {
+          noteEl.textContent = state.padId + ' —— 非标准布局，需要在诊断页里生成映射。';
+        } else if (state.deadmanOn && !state.hasDeadman) {
+          // 这条要排在急停提示前面：它意味着手柄此刻完全推不动，
+          // 不说清楚的话现场会以为手柄坏了。
+          noteEl.textContent = '死人开关已开启，但没有映射对应按键，' +
+            '手柄暂时推不动狗。请到诊断页设定该键，或关掉这个选项。';
+        } else if (!state.hasEstop) {
+          noteEl.textContent = state.padId + ' —— 急停未映射，请用屏幕上的急停按钮。';
+        } else {
+          noteEl.textContent = state.padId;
+        }
+      }
+    }
+
+    function dispatch(key) {
+      var app = getApp();
+      if (key === 'estop') {
+        // 和屏幕按钮一致：急停不检查控制权，任何时候都能按。
+        send({ t: 'cmd', name: 'estop' });
+        showBanner('已发送软急停（手柄）');
+        return;
+      }
+      if (!app.hasControl) {
+        showBanner('请先申请控制权');
+        return;
+      }
+      if (key === 'stand' || key === 'torque' || key === 'step') {
+        send({ t: 'cmd', name: key });
+        return;
+      }
+      if (key === 'gait_up' || key === 'gait_dn') {
+        if (app.gaitPending) return;
+        var target = nextGait(app.gait, key === 'gait_up' ? 1 : -1);
+        send({ t: 'cmd', name: 'gait', value: target });
+      }
+    }
+
+    function poll() {
+      var pad = firstPad();
+
+      if (!pad) {
+        if (state.connected) {
+          // 手柄掉线必须立刻归零。留着最后一次摇杆量，狗会继续走到看门狗超时。
+          state.connected = false;
+          zero();
+          if (state.core) state.core.reset();
+          setStatus();
+          showBanner('手柄已断开，运动量已归零');
+        }
+        window.requestAnimationFrame(poll);
+        return;
+      }
+
+      // 换了手柄就要重建。布局字段也纳入判断：同名手柄换了布局虽然罕见，
+      // 但漏判的后果是继续用错的映射推狗，代价远大于多重建一次。
+      if (!state.connected || state.padId !== pad.id ||
+          state.padMapping !== pad.mapping) {
+        state.connected = true;
+        state.padId = pad.id;
+        state.padMapping = pad.mapping;
+        state.core = buildCore(stored, pad);
+        setStatus();
+        if (state.source === 'none' && !state.warned) {
+          state.warned = true;
+          showBanner('手柄已连接但布局不认识，请打开诊断页生成映射', 8000);
+        }
+      }
+
+      if (!state.core) {
+        zero();
+        window.requestAnimationFrame(poll);
+        return;
+      }
+
+      var out = state.core.update({ axes: pad.axes, buttons: pad.buttons });
+      state.channels = out.channels;
+      state.engaged = out.engaged;
+      if (state.deadmanHeld !== out.deadmanHeld) {
+        state.deadmanHeld = out.deadmanHeld;
+        setStatus();
+      }
+      for (var i = 0; i < out.pressed.length; i++) dispatch(out.pressed[i]);
+
+      window.requestAnimationFrame(poll);
+    }
+
+    // 切后台时归零。app.js 里已经会释放控制权，这里补一刀是因为
+    // requestAnimationFrame 在后台会被暂停，回前台的第一帧可能带着旧值。
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        zero();
+        if (state.core) state.core.reset();
+      }
+    });
+
+    var pasteBtn = document.getElementById('gp-paste');
+    if (pasteBtn) {
+      pasteBtn.addEventListener('click', function () {
+        var text = window.prompt('粘贴诊断页生成的 JSON：');
+        if (!text) return;
+        var obj;
+        try {
+          obj = JSON.parse(text);
+        } catch (e) {
+          showBanner('不是合法的 JSON');
+          return;
+        }
+        var v = validateConfig(obj);
+        if (!v.ok) {
+          showBanner('映射不可用：' + v.error, 8000);
+          return;
+        }
+        window.localStorage.setItem(STORE_KEY, JSON.stringify(obj));
+        stored = obj;
+        state.core = buildCore(stored, firstPad());
+        setStatus();
+        showBanner('映射已保存');
+      });
+    }
+
+    if (deadmanEl) {
+      deadmanEl.addEventListener('change', function () {
+        state.deadmanOn = !!deadmanEl.checked;
+        try {
+          window.localStorage.setItem(DEADMAN_KEY, state.deadmanOn ? '1' : '0');
+        } catch (e) { /* 隐私模式下存不了，本次会话内仍然生效 */ }
+        state.core = buildCore(stored, firstPad());
+        setStatus();
+        if (state.deadmanOn && !state.hasDeadman) {
+          showBanner('死人开关已开启，但还没映射按键 —— 手柄现在推不动，请先去诊断页设定', 9000);
+        } else {
+          showBanner(state.deadmanOn ? '死人开关已开启：按住才能推动' : '死人开关已关闭');
+        }
+      });
+    }
+
+    var clearBtn = document.getElementById('gp-clear');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function () {
+        window.localStorage.removeItem(STORE_KEY);
+        stored = null;
+        state.core = buildCore(null, firstPad());
+        setStatus();
+        showBanner('已清除映射');
+      });
+    }
+
+    setStatus();
+    poll();
+  }
+
+  api.initGamepad = initGamepad;
+  api.channels = function () {
+    return { fwd: state.channels.fwd, lat: state.channels.lat,
+             turn: state.channels.turn, tilt: state.channels.tilt,
+             engaged: state.engaged };
+  };
+  return api;
+});

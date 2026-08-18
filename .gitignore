@@ -1,0 +1,15 @@
+build/
+build-wsl/
+cmake-build-*/
+
+# 发布产物：只收自解压安装包，不收打包过程中的中间目录和临时文件。
+dist/*
+!dist/*.run
+*.o
+*.a
+*.so
+*.pyc
+__pycache__/
+.vscode/
+.idea/
+compile_commands.json

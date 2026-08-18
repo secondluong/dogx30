@@ -1,0 +1,43 @@
+[Unit]
+Description=X30 遥控网关（运动控制 + 平板 WebSocket 服务）
+Documentation=file:/opt/x30/docs/app-protocol.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/x30/bin/x30_gateway \
+    --robot-ip 192.168.1.103 \
+    --local-port 43897 \
+    --perception-ip 192.168.1.105 \
+    --serve --port 8080 --bind 0.0.0.0 \
+    --web /opt/x30/web \
+    --media /opt/x30/media.json \
+    --ros-master http://192.168.1.105:11311 --ros-host 192.168.1.120
+WorkingDirectory=/opt/x30
+
+# 网关掉线时机器狗会按 overtime.toml 自行降级停下，所以自动重启是安全的，
+# 而且必须尽快 —— 每多停一秒操作员就多失控一秒。
+Restart=always
+RestartSec=1
+
+# 50 Hz 轴指令的抖动直接体现为机身晃动，给一档实时优先级。
+# 不用 SCHED_FIFO：网关里有阻塞的网络 IO，真跑实时调度反而容易饿死其他进程。
+Nice=-10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=2
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=x30-gateway
+
+# 只需要网络，其余一律收紧。
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/x30/log
+
+[Install]
+WantedBy=multi-user.target

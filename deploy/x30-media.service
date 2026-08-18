@@ -1,0 +1,36 @@
+[Unit]
+Description=X30 媒体路由（MediaMTX：相机 RTSP → 遥控端 WebRTC）
+Documentation=file:/opt/x30/docs/media-architecture.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/x30/bin/mediamtx /opt/x30/mediamtx.yml
+WorkingDirectory=/opt/x30
+
+# 这是与 x30-gateway 分开的进程，故意的：网关承载急停和 50 Hz 轴指令，
+# 绝对不能崩；而媒体那套要处理来自摄像机的不可信输入，崩溃概率高得多。
+# 分开之后媒体崩了自动重启，控制链路完全不受影响。
+Restart=always
+RestartSec=2
+
+# 媒体的优先级**低于**网关。链路或 CPU 紧张时，宁可视频卡也不能让控制卡 ——
+# 控制报文延迟一上去，租约超时，狗就自己停下了。
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=x30-media
+
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/x30/log
+
+[Install]
+WantedBy=multi-user.target

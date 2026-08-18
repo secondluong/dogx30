@@ -1,0 +1,49 @@
+{
+  "_说明": [
+    "媒体源清单。网关据此给遥控端下发『媒体计划』，视频本身由 MediaMTX 直接",
+    "发给遥控端，不经过网关。设计依据见 docs/media-architecture.md。",
+    "",
+    "各路码流的分辨率/帧率/码率/编码要在**相机自己的界面上**配成下面这样，",
+    "配好之后 RK3588 只做转封装不转码，CPU 几乎不占、也不引入二次编码损失。",
+    "",
+    "webrtc_base 必须填**遥控端能访问到的地址**，不能填 127.0.0.1，",
+    "因为这个串会原样下发给遥控端浏览器去拉流。"
+  ],
+
+  "webrtc_base": "http://192.168.10.2:8889",
+  "budget_kbps": 3800,
+
+  "sources": [
+    {
+      "id": "ptz_vis",
+      "name": "布控球可见光",
+      "audio": true,
+      "ptz": true,
+      "main": { "path": "ptz_vis_main", "codec": "h265", "kbps": 3000, "label": "1080p25" },
+      "sub":  { "path": "ptz_vis_sub",  "codec": "h264", "kbps": 400,  "label": "480p10" }
+    },
+    {
+      "id": "ptz_ir",
+      "name": "布控球热成像",
+      "audio": false,
+      "ptz": true,
+      "main": { "path": "ptz_ir_main", "codec": "h265", "kbps": 2000, "label": "720p25" },
+      "sub":  { "path": "ptz_ir_sub",  "codec": "h264", "kbps": 400,  "label": "480p10" }
+    },
+    {
+      "_注": [
+        "机身相机走 rtsp://192.168.1.105:8554/test（现场确认）。",
+        "它只有一路码流，所以这里没有 sub —— 不选为主视图时它不可观看，",
+        "这是有意的：拿一路 2 Mbps 的流当缩略图会击穿带宽预算。",
+        "",
+        "codec 与 kbps 是按 H.264 720p 估的，装机时用 tools/rtsp_probe.sh",
+        "实测一下再改。填错不会黑屏，但会让带宽仲裁算错账。"
+      ],
+      "id": "dog_cam",
+      "name": "机身相机",
+      "audio": false,
+      "ptz": false,
+      "main": { "path": "dog_cam_main", "codec": "h264", "kbps": 2000, "label": "720p25" }
+    }
+  ]
+}

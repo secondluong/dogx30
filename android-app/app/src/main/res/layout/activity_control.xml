@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D1117">
+
+    <WebView
+        android:id="@+id/web"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <TextView
+        android:id="@+id/overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#0D1117"
+        android:gravity="center"
+        android:padding="32dp"
+        android:textColor="#8B98A9"
+        android:textSize="15sp"
+        android:lineSpacingMultiplier="1.5"
+        android:visibility="gone" />
+
+</FrameLayout>

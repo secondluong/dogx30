@@ -1,0 +1,78 @@
+# MediaMTX 配置：从相机拉 RTSP，转封装后以 WebRTC 发给遥控端。
+#
+# 设计依据见 docs/media-architecture.md。要点：不转码，相机上直接配好码流参数，
+# 这里只做转封装，CPU 几乎不占也没有二次编码损失。
+#
+# 安全：MediaMTX 默认监听全部网卡并开五种协议。本机装有 4G，这是不可接受的
+# 暴露面，所以下面把监听地址全部限定在 eth1（192.168.10.2），
+# 并关掉用不到的协议。改这些地址前先想清楚 4G 那侧能不能够到。
+
+logLevel: info
+logDestinations: [stdout]
+
+# --- 协议开关 ---------------------------------------------------------------
+# 只留 WebRTC。RTSP 服务端留着是为了本机调试和日后转码回推，同样绑到本地。
+
+rtmp: no
+hls: no
+srt: no
+
+rtsp: yes
+rtspTransports: [tcp]
+rtspAddress: 127.0.0.1:8554        # 仅本机，遥控端不经 RTSP
+
+webrtc: yes
+webrtcAddress: 192.168.10.2:8889   # 只在 eth1 上听，4G 够不到
+webrtcEncryption: no               # 内网链路，且 MESH 本身有加密
+webrtcLocalUDPAddress: 192.168.10.2:8189
+
+# ICE 只用本地候选。这是个封闭内网，没有 NAT 要穿，
+# 配 STUN 服务器反而会在没有外网时拖慢建连。
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: [192.168.10.2]
+webrtcICEServers2: []
+
+api: yes
+apiAddress: 127.0.0.1:9997         # 仅本机，供网关探活
+
+# --- 媒体路径 ---------------------------------------------------------------
+# path 名字要与 deploy/media.json 里的 path 一一对应，改一处就要改两处。
+#
+# sourceOnDemand: yes 表示没人看时不去拉流。这条很重要 ——
+# 三路相机常年拉着会白白占用 eth1 带宽和 CPU，而实际同时只看一路。
+
+pathDefaults:
+  sourceOnDemand: yes
+  sourceOnDemandCloseAfter: 10s
+
+paths:
+  ptz_vis_main:
+    source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/101
+  ptz_vis_sub:
+    source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/102
+
+  ptz_ir_main:
+    source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/201
+  ptz_ir_sub:
+    source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/202
+
+  # 机身相机。现场确认走 RTSP，直接转封装，不需要 ROS 桥接也不需要编码。
+  #
+  # 注意它在**狗那侧的网段**（eth0，192.168.1.x），不是载荷网段。
+  # 拉流走 eth0、发流走 eth1，两条路互不干扰。
+  #
+  # 路径名 /test 像是出厂默认，换固件或改配置后可能变。取不到流时
+  # 先用 tools/rtsp_probe.sh 重新探一遍，别急着怀疑网络。
+  dog_cam_main:
+    source: rtsp://192.168.1.105:8554/test
+
+  # 机身相机只有这一路，没有子码流，所以 media.json 里也不给它配 sub。
+  # 后果是它不被选为主视图时不可观看 —— 这是有意的：
+  # 让一路 2 Mbps 的流去充当"缩略图"会当场击穿 MESH 的带宽预算。
+  # 真要缩略图，得在这里用 runOnDemand 起一路 ffmpeg 转码，见
+  # docs/media-architecture.md「转码兜底」。
+
+  # 对讲上行：遥控端浏览器 WebRTC publish 到这个路径，
+  # 再由 RK3588 上的 ffmpeg 拉出来写声卡。见 docs/media-architecture.md 第七节。
+  talkback:
+    source: publisher
