@@ -225,8 +225,17 @@
     shot: { ch: 7, press: 1050 },
     talk: { ch: 5, press: 1050 },
     rec: { ch: 11, press: 1050 },
+    estop: { ch: 12, press: 1050 },
     telem: { ch: 14, press: 1050 },
+    gas: { ch: 15, press: 1050 },
   };
+
+  function ch5Band(v) {
+    if (typeof v !== 'number' || v !== v) return '';
+    if (v <= 1300) return 'manual';
+    if (v >= 1700) return 'auto';
+    return 'assist';
+  }
 
   function nextGait(current, delta) {
     var i = GAIT_CYCLE.indexOf(current);
@@ -305,6 +314,7 @@
     pwmAxis: pwmAxis,
     pwmPressed: pwmPressed,
     g20Channels: g20Channels,
+    ch5Band: ch5Band,
   };
 
   // --- 浏览器侧 -------------------------------------------------------------
@@ -327,6 +337,7 @@
     g20Seq: -1,
     g20Prev: {},
     g20Talk: false,
+    g20Wheel: null,
   };
 
   function loadStored() {
@@ -458,6 +469,26 @@
         if (telemBtn && telemBtn.click) telemBtn.click();
         return;
       }
+      if (key === 'gas') {
+        if (app.toggleGas) app.toggleGas();
+        return;
+      }
+      if (key === 'mode_assist') {
+        app.modePick = 'assist';
+        if (app.paintModes) app.paintModes();
+        showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
+        return;
+      }
+      if (key === 'mode_manual' || key === 'mode_auto') {
+        if (!app.hasControl) {
+          showBanner('请先申请控制权');
+          return;
+        }
+        app.modePick = key === 'mode_manual' ? 'manual' : 'auto';
+        send({ t: 'cmd', name: 'mode', value: app.modePick });
+        if (app.paintModes) app.paintModes();
+        return;
+      }
       if (!app.hasControl) {
         showBanner('请先申请控制权');
         return;
@@ -511,6 +542,24 @@
           dispatch(name);
         }
         state.g20Prev[name] = down;
+      }
+      if (ev.ch.length > 4) {
+        var band = ch5Band(ev.ch[4]);
+        if (state.g20Prev.mode === undefined) {
+          state.g20Prev.mode = band;
+        } else if (band && band !== state.g20Prev.mode) {
+          state.g20Prev.mode = band;
+          dispatch('mode_' + band);
+        }
+      }
+      if (ev.ch.length > 13) {
+        var wheel = ev.ch[13];
+        if (state.g20Wheel !== null && Math.abs(wheel - state.g20Wheel) > 12) {
+          if (window.X30Cloud && window.X30Cloud.nudgeZoom) {
+            window.X30Cloud.nudgeZoom((state.g20Wheel - wheel) / 80);
+          }
+        }
+        state.g20Wheel = wheel;
       }
       return true;
     }

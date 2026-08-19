@@ -64,6 +64,9 @@ var turnCh = [1000, 1500, 1500, 1500];
 var turn = G.g20Channels(turnCh, 0.12, 0.4);
 check('CH1 到 1000 是左转', turn.turn > 0.9 && turn.tilt === 0,
       JSON.stringify(turn));
+check('CH5 低位是手动', G.ch5Band(1050) === 'manual');
+check('CH5 中位是辅助', G.ch5Band(1500) === 'assist');
+check('CH5 高位是导航', G.ch5Band(1950) === 'auto');
 
 // 圆形死区：斜推时方向不能被掰歪，否则"想斜着走却先直着走"
 s = G.shapeStick(0.6, 0.6, 0.12, 0.4);

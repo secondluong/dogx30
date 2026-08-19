@@ -30,7 +30,8 @@ const app = {
   controlMode: 0,
   gait: 'walk',
   gaitPending: false,
-  walkMode: null,         // 'torque' | 'step'，RL 起立后遥测常仍报 0
+  walkMode: null,         // 由遥测推断：'torque' | 'step'
+  modePick: null,         // G20 三挡或点按：manual | assist | auto
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
 };
@@ -205,7 +206,7 @@ function setLink(online) {
 function renderControl() {
   const btn = $('btn-control');
   btn.classList.toggle('held', app.hasControl);
-  btn.textContent = app.hasControl ? '释放控制权' : '申请控制权';
+  btn.textContent = '控制权';
 
   const tag = $('tag-holder');
   tag.classList.toggle('held', app.hasControl);
@@ -302,12 +303,7 @@ function renderState(s) {
   paintWalkButtons();
   if (!standing) closeAccordions();
 
-  document.querySelectorAll('[data-mode]').forEach((b) => {
-    const manual = app.controlMode === 0;
-    b.classList.toggle('active',
-      (manual && b.dataset.mode === 'manual') ||
-      (!manual && b.dataset.mode === 'auto'));
-  });
+  paintModes();
 
   updateStickAvailability();
 }
@@ -319,6 +315,26 @@ function showBanner(text, holdMs) {
   el.classList.remove('hidden');
   clearTimeout(bannerTimer);
   bannerTimer = setTimeout(() => el.classList.add('hidden'), holdMs || 4000);
+}
+
+app.paintModes = paintModes;
+app.toggleGas = toggleGas;
+
+function paintModes() {
+  const pick = app.modePick;
+  const manual = app.controlMode === 0;
+  document.querySelectorAll('[data-mode]').forEach((b) => {
+    const fromTelem = (manual && b.dataset.mode === 'manual') ||
+                      (!manual && b.dataset.mode === 'auto');
+    const on = pick ? pick === b.dataset.mode : fromTelem;
+    b.classList.toggle('active', on);
+  });
+}
+
+function toggleGas() {
+  const el = $('gas-panel');
+  if (!el) return;
+  el.classList.toggle('hidden');
 }
 
 function updateStickAvailability() {
@@ -498,14 +514,21 @@ document.querySelectorAll('[data-height]').forEach((b) => {
   }));
 });
 document.querySelectorAll('[data-mode]').forEach((b) => {
-  b.addEventListener('click', guarded(() => {
-    send({ t: 'cmd', name: 'mode', value: b.dataset.mode });
-    markPending(b);
-  }));
-});
-
-$('btn-assist').addEventListener('click', () => {
-  showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
+  b.addEventListener('click', (ev) => {
+    const mode = b.dataset.mode;
+    if (mode === 'assist') {
+      app.modePick = 'assist';
+      paintModes();
+      showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
+      return;
+    }
+    guarded(() => {
+      app.modePick = mode;
+      send({ t: 'cmd', name: 'mode', value: mode });
+      markPending(b);
+      paintModes();
+    })(ev);
+  });
 });
 
 $('btn-telem').addEventListener('click', () => {

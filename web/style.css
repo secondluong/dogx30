@@ -89,7 +89,7 @@ body {
 .btn:active { transform: scale(.97); }
 .btn.sm { padding: 7px 11px; font-size: 13px; }
 .btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-/* 力控/起步/起立：点下去先 pending，遥测对上了再保持绿色 */
+/* 起立等：点下去先 pending，遥测对上了再保持绿色 */
 .btn.pending { box-shadow: 0 0 0 2px var(--ok); }
 .btn.on {
   background: var(--ok);
@@ -182,7 +182,7 @@ body {
 }
 .stage.layout-1x1 .pane.is-main .pane-actions {
   top: 10px;
-  right: 88px; /* 给右侧遥测/手柄留空 */
+  right: 88px; /* 给右侧手柄/摇杆留空 */
 }
 .stage.layout-2x2 .pane .pane-actions {
   top: auto;
@@ -508,19 +508,19 @@ body {
   font-weight: 600;
 }
 
-/* ---------- 遥测 ---------- */
+/* ---------- 指标 ---------- */
 
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
 
 .cell {
   background: var(--panel-2);
   border-radius: 8px;
-  padding: 7px 10px;
+  padding: 6px 8px;
   display: flex;
   flex-direction: column;
 }
 .cell label { font-size: 11px; color: var(--muted); }
-.cell b { font-size: 16px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.cell b { font-size: 15px; font-variant-numeric: tabular-nums; font-weight: 600; }
 .cell em { font-size: 10px; color: var(--muted); font-style: normal; }
 
 /* 失联时整块置灰，避免把最后一次已知值误读成实时值。 */
@@ -771,22 +771,27 @@ body {
   overflow-y: auto;
 }
 
-.hud-telem-btn, .hud-gp-btn, .hud-sticks-btn {
+.hud-gp-btn, .hud-sticks-btn {
   position: absolute;
   right: 16px;
 }
-.hud-telem-btn { top: 10px; }
-.hud-gp-btn { top: 50px; }
-.hud-sticks-btn { top: 90px; }
+.hud-gp-btn { top: 10px; }
+.hud-sticks-btn { top: 50px; }
 
 /* 网页默认不出现。只有安卓壳（html.shell-app）才在顶栏露出背景切换。 */
 .hud-view-pop { display: none; }
-html.shell-app .hud-layout-bar,
+html.shell-app #btn-swap,
+html.shell-app #btn-media,
 html.shell-app #hud-layout,
 html.shell-app .hud-gp-btn,
 html.shell-app .hud-sticks-btn,
 html.shell-app .hud-gp,
 html.shell-app .hud-sticks { display: none !important; }
+html.shell-app .hud-layout-bar {
+  top: 10px;
+  left: 16px;
+  transform: none;
+}
 html.shell-app .bar-view { display: block; }
 html.shell-app .hud-view-pop {
   position: absolute;
@@ -808,16 +813,32 @@ html.shell-app .hud-view-pop .btn:last-child { border-radius: 0 0 8px 8px; }
 html.shell-app .hud-view-pop .btn + .btn { border-top: 0; }
 html.shell-app .stage .pane:not(.is-main) { display: none !important; }
 html.shell-app .pip-hint { display: none !important; }
+html.shell-app .stage.layout-1x1 .pane.is-main .pane-actions { right: 16px; }
 
-#telemetry.telemetry {
+/* 指标和气体：左侧一列，不跟右侧对讲/模式抢位。 */
+.hud-info {
   position: absolute;
-  top: 10px;
-  right: 88px;
-  width: min(320px, calc(100% - 110px));
-  max-height: calc(100% - 20px);
-  overflow-y: auto;
   z-index: 14;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  top: 50px;
+  width: min(460px, calc(100% - 120px));
+  max-height: calc(100% - 88px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  pointer-events: none;
+}
+.stage-wrap:has(.layout-1x1) .hud-info {
+  left: calc(10px + min(220px, 28vw) + 8px);
+}
+.stage-wrap:has(.layout-2x2) .hud-info {
+  left: 16px;
+}
+html.shell-app .hud-info { left: 16px; }
+.hud-info > .panel {
+  pointer-events: auto;
+  margin: 0;
   background: rgba(22, 27, 34, .92);
   backdrop-filter: blur(8px);
 }
@@ -928,7 +949,17 @@ html.shell-app .pip-hint { display: none !important; }
   color: var(--muted);
 }
 
-/* 趴下：只留左下起立和右侧模式。站立才出步态/踏面/身高、力控起步、摇杆。 */
+.gas-panel { z-index: 15; }
+.gas-empty {
+  margin: 0;
+  padding: 4px 2px 2px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.hud-modes .btn.hud-assist.active { opacity: 1; }
+
+/* 趴下：只留左下起立和右侧模式。站立才出步态/踏面/身高和摇杆。 */
 .dog-prone .hud-menus,
 .dog-prone .hud-sticks { display: none !important; }
 
@@ -948,5 +979,7 @@ html.shell-app .pip-hint { display: none !important; }
   .hud-sticks .knob { width: 44px; height: 44px; }
   .hud-menus { left: auto; right: 100px; transform: none; bottom: 16px; flex-wrap: wrap; max-width: 46vw; }
   .acc-pop { left: auto; right: 0; transform: none; }
-  #telemetry.telemetry, .hud-gp { right: 16px; top: 88px; }
+  .grid { grid-template-columns: 1fr 1fr; }
+  .hud-info { width: min(360px, calc(100% - 108px)); }
+  .hud-gp { right: 16px; top: 88px; }
 }

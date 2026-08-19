@@ -32,7 +32,7 @@
     </div>
     <!-- 网关以 --config 启动时才显示，由 hello 的 config 能力位控制 -->
     <button class="btn btn-ghost hidden" id="btn-settings">设置</button>
-    <button class="btn btn-ghost" id="btn-control">申请控制权</button>
+    <button class="btn btn-ghost" id="btn-control">控制权</button>
     <button class="btn btn-estop" id="btn-estop">急停</button>
   </div>
 </header>
@@ -185,6 +185,7 @@
   <div class="hud-layout-bar">
     <button type="button" class="btn sm hud-swap" id="btn-swap" title="在一主三小和四宫格之间切换">2×2</button>
     <button type="button" class="btn sm" id="btn-media">画面</button>
+    <button type="button" class="btn sm hud-telem-btn" id="btn-telem">指标</button>
   </div>
   <div id="hud-layout" class="hud-layout hidden">
     <span class="tag" id="media-budget">—</span>
@@ -192,10 +193,10 @@
     <div id="media-list" class="media-list hud-media-list"></div>
   </div>
 
-  <!-- 遥测默认收起，再点收回。 -->
-  <button type="button" class="btn sm hud-telem-btn" id="btn-telem">遥测</button>
-  <section id="telemetry" class="panel telemetry hidden">
-    <div class="panel-head"><span>遥测</span><span class="tag" id="tag-holder">观察者</span></div>
+  <!-- 指标/气体叠在左侧，避开右侧对讲和模式。默认收起。 -->
+  <div class="hud-info" id="hud-info">
+    <section id="telemetry" class="panel telemetry hidden">
+      <div class="panel-head"><span>指标</span><span class="tag" id="tag-holder">观察者</span></div>
     <div class="grid">
       <div class="cell"><label>机体速度 X</label><b id="t-vx">0.00</b><em>m/s</em></div>
       <div class="cell"><label>机体速度 Y</label><b id="t-vy">0.00</b><em>m/s</em></div>
@@ -211,7 +212,12 @@
       <div class="cell"><label>速度上限</label><b id="t-limit">—</b><em>m/s</em></div>
     </div>
     <div class="errors" id="t-errors"></div>
-  </section>
+    </section>
+    <section id="gas-panel" class="panel gas-panel hidden">
+      <div class="panel-head"><span>气体信息</span></div>
+      <p class="gas-empty">气体传感器尚未接入。G20 的 R2（CH16）已预留作显隐。</p>
+    </section>
+  </div>
 
   <button type="button" class="btn sm hud-gp-btn" id="btn-gp">手柄</button>
   <button type="button" class="btn sm hud-sticks-btn active" id="btn-sticks">摇杆</button>
@@ -239,7 +245,7 @@
     <button type="button" class="btn hud-talk btn-talk" id="btn-talk">按住说话</button>
     <div class="hud-modes">
       <button type="button" class="btn" data-mode="manual">手动</button>
-      <button type="button" class="btn hud-assist" id="btn-assist">辅助</button>
+      <button type="button" class="btn hud-assist" id="btn-assist" data-mode="assist">辅助</button>
       <button type="button" class="btn" data-mode="auto">导航</button>
     </div>
   </div>
@@ -249,9 +255,6 @@
   </div>
 
   <div id="hud-standing" class="hud-menus">
-    <!-- 原厂 RL 起立后直接能走；本网关仍要力控→起步，所以站立时放在中间，不压左摇杆。 -->
-    <button type="button" class="btn" data-cmd="torque">力控</button>
-    <button type="button" class="btn" data-cmd="step">起步</button>
     <div class="acc">
       <button type="button" class="btn acc-btn" data-acc="gait">步态</button>
       <div class="acc-pop hidden" id="acc-gait">

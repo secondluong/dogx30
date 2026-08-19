@@ -803,8 +803,15 @@
     sendFn({ t: 'cloud_sub' });
   }
 
+  function nudgeZoom(steps) {
+    if (!steps) return;
+    cam.dist *= Math.pow(0.89, steps);
+    cam.dist = Math.max(2, Math.min(60, cam.dist));
+    if (gl) draw();
+  }
+
   window.X30Cloud = {
     initCloud, onCloudFrame, onCloudStatus, onPose, stop, resize, resubscribe,
-    setWanted,
+    setWanted, nudgeZoom,
   };
 })();
