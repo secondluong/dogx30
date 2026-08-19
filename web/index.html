@@ -10,7 +10,7 @@
 <body>
 
 <header class="bar">
-  <div class="brand">X30 遥控台</div>
+  <button type="button" class="brand" id="btn-settings">X30 遥控台</button>
 
   <div class="chips">
     <span class="chip" id="chip-link"><i class="dot"></i><span id="link-text">连接中</span></span>
@@ -37,8 +37,6 @@
         <button type="button" class="btn" data-view-pick="cloud">激光点云</button>
       </div>
     </div>
-    <!-- 网关以 --config 启动时才显示，由 hello 的 config 能力位控制 -->
-    <button class="btn btn-ghost hidden" id="btn-settings">设置</button>
     <button class="btn btn-ghost" id="btn-control">控制权</button>
     <button class="btn btn-estop" id="btn-estop">急停</button>
   </div>
@@ -199,9 +197,9 @@
     <div id="media-list" class="media-list hud-media-list"></div>
   </div>
 
-  <!-- 指标常显在左上，气体仍默认收起。 -->
+  <!-- 指标和气体默认隐藏，由 G20 的 R1 / R2 显隐。 -->
   <div class="hud-info" id="hud-info">
-    <section id="telemetry" class="panel telemetry">
+    <section id="telemetry" class="panel telemetry hidden">
       <div class="panel-head"><span>指标</span><span class="tag" id="tag-holder">观察者</span></div>
     <div class="grid">
       <div class="cell"><label>机体速度 X</label><b id="t-vx">0.00</b><em>m/s</em></div>
@@ -244,10 +242,6 @@
         <button class="btn sm" id="gp-clear">清除</button>
       </div>
     </div>
-  </div>
-
-  <div class="hud-right">
-    <button type="button" class="btn hud-talk btn-talk" id="btn-talk">按住说话</button>
   </div>
 
   <div class="hud-stand">

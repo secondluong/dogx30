@@ -369,7 +369,10 @@
   function onHello(msg) {
     state.available = !!msg.config;
     const btn = $('btn-settings');
-    if (btn) btn.classList.toggle('hidden', !state.available);
+    if (btn) {
+      btn.classList.toggle('can-config', state.available);
+      btn.title = state.available ? '打开网关设置' : '';
+    }
     if (!state.available) {
       if (state.open) {
         setNote('本机未启用在线改配置（网关需要以 --config 启动）。', 'warn');

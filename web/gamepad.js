@@ -224,9 +224,9 @@
     sit_down: { ch: 6, press: 1050 },
     shot: { ch: 7, press: 1050 },
     talk: { ch: 5, press: 1050 },
-    rec: { ch: 11, press: 1050 },
+    view_next: { ch: 11, press: 1050 },
     estop: { ch: 12, press: 1050 },
-    view_next: { ch: 8, press: 1950 },
+    telem: { ch: 14, press: 1050 },
     gas: { ch: 15, press: 1050 },
   };
 
@@ -347,6 +347,7 @@
     g20Prev: {},
     g20Talk: false,
     g20Wheel: null,
+    g20Primed: false,
   };
 
   function loadStored() {
@@ -473,6 +474,10 @@
         }
         return;
       }
+      if (key === 'telem') {
+        if (app.toggleTelem) app.toggleTelem();
+        return;
+      }
       if (key === 'gas') {
         if (app.toggleGas) app.toggleGas();
         return;
@@ -532,17 +537,22 @@
       state.channels = ch;
       state.engaged = ch.fwd !== 0 || ch.lat !== 0 || ch.turn !== 0;
       var name;
+      var primed = state.g20Primed;
       for (name in G20_BTN) {
         if (!Object.prototype.hasOwnProperty.call(G20_BTN, name)) continue;
         var spec = G20_BTN[name];
         var down = ev.ch.length > spec.ch && pwmPressed(ev.ch[spec.ch], spec.press);
-        if (name === 'talk') {
-          setTalk(down);
-        } else if (down && !state.g20Prev[name]) {
-          dispatch(name);
+        // 首帧只记档：上电时通道常是 0/1050，会把 R1/R2 当成按下，指标和气体就被打开。
+        if (primed) {
+          if (name === 'talk') {
+            setTalk(down);
+          } else if (down && !state.g20Prev[name]) {
+            dispatch(name);
+          }
         }
         state.g20Prev[name] = down;
       }
+      state.g20Primed = true;
       if (ev.ch.length > 4) {
         var tog = ch5Toggle(ev.ch[4]);
         if (state.g20Prev.toggle === undefined) {
@@ -595,6 +605,9 @@
         if (!g20 || g20.connected === false) {
           state.source = 'none';
           state.connected = false;
+          state.g20Primed = false;
+          state.g20Prev = {};
+          state.g20Wheel = null;
           zero();
           setTalk(false);
         }

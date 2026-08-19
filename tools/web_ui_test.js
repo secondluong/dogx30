@@ -219,8 +219,8 @@ js.forEach(function (f) {
         missing.length ? '找不到：' + missing.join(', ') : '');
 });
 
-check('顶栏有背景按钮且在设置前面',
-      /id="btn-view">背景<\/button>[\s\S]*id="btn-settings"/.test(html));
+check('顶栏有背景按钮', /id="btn-view">背景<\/button>/.test(html));
+check('点标题打开设置', /id="btn-settings"[^>]*>\s*X30 遥控台/.test(html));
 check('没有单独的订阅点云按钮', html.indexOf('订阅点云') === -1 && !htmlIds['btn-cloud']);
 check('点云画面有设置按钮', !!htmlIds['btn-cloud-settings']);
 check('点云菜单初始收着',

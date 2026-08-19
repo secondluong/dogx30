@@ -318,6 +318,7 @@ function showBanner(text, holdMs) {
 
 app.paintModes = paintModes;
 app.toggleGas = toggleGas;
+app.toggleTelem = toggleTelem;
 app.cycleView = cycleView;
 
 function paintModes() {
@@ -335,6 +336,11 @@ function toggleGas() {
   const el = $('gas-panel');
   if (!el) return;
   el.classList.toggle('hidden');
+}
+
+function toggleTelem() {
+  if (!$('telemetry')) return;
+  $('telemetry').classList.toggle('hidden');
 }
 
 function updateStickAvailability() {
@@ -732,6 +738,9 @@ document.addEventListener('visibilitychange', () => {
   // 点云订阅不要跟着显隐走：切标签、缩窗口、平板分屏都会把
   // document.hidden 置上，退订后再回来要重新点，操作员会以为订不住。
 });
+
+if ($('telemetry')) $('telemetry').classList.add('hidden');
+if ($('gas-panel')) $('gas-panel').classList.add('hidden');
 
 connect();
 
