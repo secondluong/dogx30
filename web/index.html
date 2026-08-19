@@ -176,6 +176,14 @@
     <button type="button" class="btn sm hud-swap" id="btn-swap" title="在一主三小和四宫格之间切换">2×2</button>
     <button type="button" class="btn sm" id="btn-media">画面</button>
   </div>
+  <!-- 仅安卓壳（?shell=app）显示：小屏用这一张底图切换，网页里由 CSS 藏掉。 -->
+  <button type="button" class="btn sm hud-view-btn" id="btn-view">底图</button>
+  <div id="hud-view-pop" class="hud-view-pop hidden">
+    <button type="button" class="btn" data-view-pick="dog_cam">机身相机</button>
+    <button type="button" class="btn" data-view-pick="ptz_vis">布控球 白光</button>
+    <button type="button" class="btn" data-view-pick="ptz_ir">布控球 热成像</button>
+    <button type="button" class="btn" data-view-pick="cloud">激光点云</button>
+  </div>
   <div id="hud-layout" class="hud-layout hidden">
     <span class="tag" id="media-budget">—</span>
     <span class="hint" id="codec-note">正在探测解码能力…</span>

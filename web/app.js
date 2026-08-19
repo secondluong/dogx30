@@ -11,6 +11,10 @@ const RECONNECT_MS = 1000;
 
 const $ = (id) => document.getElementById(id);
 
+// 安卓壳用 ?shell=app 打开。网页不加这个参数，布局完全不动。
+const isAppShell = new URLSearchParams(location.search).get('shell') === 'app';
+if (isAppShell) document.documentElement.classList.add('shell-app');
+
 // ---------------------------------------------------------------------------
 // 状态
 // ---------------------------------------------------------------------------
@@ -537,19 +541,28 @@ const viewLayout = { mode: '1x1', main: 'dog_cam' };
 
 function applyLayout() {
   const stage = $('stage');
+  if (isAppShell) viewLayout.mode = '1x1';
   stage.classList.toggle('layout-1x1', viewLayout.mode === '1x1');
   stage.classList.toggle('layout-2x2', viewLayout.mode === '2x2');
   let pip = 0;
   stage.querySelectorAll('.pane').forEach((p) => {
     const isMain = viewLayout.mode === '1x1' && p.dataset.view === viewLayout.main;
     p.classList.toggle('is-main', isMain);
-    p.classList.toggle('is-pip', viewLayout.mode === '1x1' && !isMain);
-    if (viewLayout.mode === '1x1' && !isMain) p.dataset.pip = String(pip++);
-    else p.removeAttribute('data-pip');
+    // 平板壳只要一张底图，不要一主三小。
+    p.classList.toggle('is-pip', !isAppShell && viewLayout.mode === '1x1' && !isMain);
+    if (!isAppShell && viewLayout.mode === '1x1' && !isMain) {
+      p.dataset.pip = String(pip++);
+    } else {
+      p.removeAttribute('data-pip');
+    }
   });
   $('btn-swap').textContent = viewLayout.mode === '1x1' ? '2×2' : '1×1';
   // 四宫格格子太小，点云工具条会盖住画面。1×1 放大后再露出来。
-  if ($('cloud-ctl')) $('cloud-ctl').classList.toggle('hidden', viewLayout.mode === '2x2');
+  if ($('cloud-ctl')) {
+    $('cloud-ctl').classList.toggle('hidden',
+      isAppShell ? viewLayout.main !== 'cloud' : viewLayout.mode === '2x2');
+  }
+  syncViewPick();
   requestAnimationFrame(() => {
     if (window.X30Cloud && window.X30Cloud.resize) window.X30Cloud.resize();
     if (window.X30Media && window.X30Media.onLayout) window.X30Media.onLayout(viewLayout);
@@ -558,8 +571,33 @@ function applyLayout() {
 
 $('btn-swap').addEventListener('click', (e) => {
   e.stopPropagation();
+  if (isAppShell) return;
   viewLayout.mode = viewLayout.mode === '1x1' ? '2x2' : '1x1';
   applyLayout();
+});
+
+function syncViewPick() {
+  const main = viewLayout.main;
+  document.querySelectorAll('[data-view-pick]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.viewPick === main);
+  });
+}
+
+$('btn-view').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('hud-view-pop').classList.toggle('hidden');
+  $('btn-view').classList.toggle('active', !$('hud-view-pop').classList.contains('hidden'));
+  syncViewPick();
+});
+document.querySelectorAll('[data-view-pick]').forEach((b) => {
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    viewLayout.main = b.dataset.viewPick;
+    viewLayout.mode = '1x1';
+    $('hud-view-pop').classList.add('hidden');
+    $('btn-view').classList.remove('active');
+    applyLayout();
+  });
 });
 
 document.querySelectorAll('#stage .pane').forEach((pane) => {
@@ -601,6 +639,10 @@ document.querySelectorAll('.acc-btn').forEach((btn) => {
 
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.acc')) closeAccordions();
+  if ($('hud-view-pop') && !e.target.closest('#btn-view, #hud-view-pop')) {
+    $('hud-view-pop').classList.add('hidden');
+    $('btn-view').classList.remove('active');
+  }
 });
 
 document.querySelectorAll('[data-stair]').forEach((b) => {
