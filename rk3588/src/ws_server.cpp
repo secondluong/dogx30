@@ -390,9 +390,13 @@ bool WsServer::ServeHttp(Connection& conn, const std::string& method,
     return false;
   }
 
-  std::string rel = path == "/" ? "index.html" : path.substr(1);
-  const auto query = rel.find('?');
-  if (query != std::string::npos) rel = rel.substr(0, query);
+  // 必须先去掉查询串。App 打开 /?shell=app 时，请求行里的 path 不是 "/"，
+  // 若先按整段判断，会落到空文件名，登录后就是一张白屏。
+  std::string clean = path;
+  const auto query = clean.find('?');
+  if (query != std::string::npos) clean = clean.substr(0, query);
+  if (clean.empty() || clean == "/") clean = "/index.html";
+  std::string rel = clean.front() == '/' ? clean.substr(1) : clean;
   if (!IsSafeRelativePath(rel)) {
     respond("403 Forbidden", "text/plain; charset=utf-8", "非法路径");
     return false;

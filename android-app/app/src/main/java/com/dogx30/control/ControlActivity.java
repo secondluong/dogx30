@@ -41,7 +41,7 @@ public class ControlActivity extends AppCompatActivity {
         int port = getIntent().getIntExtra(ConnectActivity.KEY_PORT, 8080);
         // shell=app：控制台走平板小屏布局（单底图切换，不要虚拟摇杆）。
         // 网页直接打开 / 时不受影响。
-        url = "http://" + host + ":" + port + "/?shell=app";
+        url = "http://" + host + ":" + port + "/index.html?shell=app";
 
         // 遥控过程中息屏等于失去控制，必须常亮。
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
