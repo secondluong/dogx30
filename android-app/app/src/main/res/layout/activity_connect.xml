@@ -71,6 +71,20 @@
         android:textSize="13sp" />
 
     <TextView
+        android:id="@+id/key_strip"
+        android:layout_width="372dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:padding="14dp"
+        android:background="#1F6FEB"
+        android:text="@string/key_strip_idle"
+        android:textColor="#FFFFFF"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:focusable="true"
+        android:focusableInTouchMode="true" />
+
+    <TextView
         android:layout_width="372dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="28dp"

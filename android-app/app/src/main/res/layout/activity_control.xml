@@ -21,4 +21,17 @@
         android:lineSpacingMultiplier="1.5"
         android:visibility="gone" />
 
+    <!-- 原生按键条：不经过网页。音量键能亮就说明 App 是新包；原厂 2.4G 手柄到不了这里。 -->
+    <TextView
+        android:id="@+id/key_strip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#CC161B22"
+        android:padding="10dp"
+        android:text="@string/key_strip_idle"
+        android:textColor="#E6EDF3"
+        android:textSize="13sp"
+        android:fontFamily="monospace" />
+
 </FrameLayout>

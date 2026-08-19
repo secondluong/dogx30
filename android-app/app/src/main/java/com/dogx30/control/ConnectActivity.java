@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.view.KeyEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -26,6 +27,7 @@ public class ConnectActivity extends AppCompatActivity {
     private EditText portInput;
     private Button connectButton;
     private TextView hint;
+    private TextView keyStrip;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -36,12 +38,37 @@ public class ConnectActivity extends AppCompatActivity {
         portInput = findViewById(R.id.input_port);
         connectButton = findViewById(R.id.btn_connect);
         hint = findViewById(R.id.hint);
+        keyStrip = findViewById(R.id.key_strip);
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         hostInput.setText(prefs.getString(KEY_HOST, "192.168.1.120"));
         portInput.setText(String.valueOf(prefs.getInt(KEY_PORT, 8080)));
 
         connectButton.setOnClickListener(v -> attemptConnect());
+        if (keyStrip != null) keyStrip.requestFocus();
+    }
+
+    private void showKey(KeyEvent event) {
+        if (keyStrip == null) return;
+        if (event.getAction() != KeyEvent.ACTION_DOWN) return;
+        if (event.getRepeatCount() > 0) return;
+        keyStrip.setBackgroundColor(0xFF3FB950);
+        keyStrip.setText(getString(R.string.key_strip_event,
+                KeyEvent.keyCodeToString(event.getKeyCode()),
+                event.getKeyCode(),
+                event.getScanCode()));
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        showKey(event);
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        showKey(event);
+        return super.onKeyDown(keyCode, event);
     }
 
     private void attemptConnect() {

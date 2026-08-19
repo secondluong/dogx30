@@ -33,6 +33,7 @@ public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
     private TextView overlay;
+    private TextView keyStrip;
     private String url;
     private final NativeBridge nativeBridge = new NativeBridge();
 
@@ -53,6 +54,7 @@ public class ControlActivity extends AppCompatActivity {
         goImmersive();
 
         overlay = findViewById(R.id.overlay);
+        keyStrip = findViewById(R.id.key_strip);
         web = findViewById(R.id.web);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
@@ -203,6 +205,13 @@ public class ControlActivity extends AppCompatActivity {
 
     private void injectKey(KeyEvent event) {
         nativeBridge.rememberKey(event);
+        if (keyStrip != null && event.getAction() == KeyEvent.ACTION_DOWN
+                && event.getRepeatCount() == 0) {
+            keyStrip.setText(getString(R.string.key_strip_event,
+                    KeyEvent.keyCodeToString(event.getKeyCode()),
+                    event.getKeyCode(),
+                    event.getScanCode()));
+        }
         if (web == null) return;
         String name = KeyEvent.keyCodeToString(event.getKeyCode());
         if (name == null) name = "UNKNOWN";
