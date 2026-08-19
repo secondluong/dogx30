@@ -64,9 +64,12 @@ var turnCh = [1000, 1500, 1500, 1500];
 var turn = G.g20Channels(turnCh, 0.12, 0.4);
 check('CH1 到 1000 是左转', turn.turn > 0.9 && turn.tilt === 0,
       JSON.stringify(turn));
-check('CH5 低位是手动', G.ch5Band(1050) === 'manual');
-check('CH5 中位是辅助', G.ch5Band(1500) === 'assist');
-check('CH5 高位是导航', G.ch5Band(1950) === 'auto');
+check('CH5 低位是释放控制权', G.ch5Toggle(1050) === 'yield');
+check('CH5 中位不动作', G.ch5Toggle(1500) === '');
+check('CH5 高位是申请控制权', G.ch5Toggle(1950) === 'claim');
+check('滚轮下是增加', G.wheelDetent(1050) === 'down');
+check('滚轮中位回弹不算动作', G.wheelDetent(1500) === 'mid');
+check('滚轮上是减少', G.wheelDetent(1950) === 'up');
 
 // 圆形死区：斜推时方向不能被掰歪，否则"想斜着走却先直着走"
 s = G.shapeStick(0.6, 0.6, 0.12, 0.4);

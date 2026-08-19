@@ -70,7 +70,8 @@ body {
 .chip.online { color: var(--text); }
 
 .bar-right { display: flex; align-items: center; gap: 10px; }
-.bar-view { display: none; position: relative; }
+.bar-mode, .bar-view { position: relative; }
+.bar-view { display: none; }
 
 /* ---------- 按钮 ---------- */
 
@@ -510,17 +511,18 @@ body {
 
 /* ---------- 指标 ---------- */
 
-.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 
 .cell {
   background: var(--panel-2);
-  border-radius: 8px;
-  padding: 6px 8px;
+  border-radius: 6px;
+  padding: 4px 6px;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
-.cell label { font-size: 11px; color: var(--muted); }
-.cell b { font-size: 15px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.cell label { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell b { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1.25; }
 .cell em { font-size: 10px; color: var(--muted); font-style: normal; }
 
 /* 失联时整块置灰，避免把最后一次已知值误读成实时值。 */
@@ -778,70 +780,71 @@ body {
 .hud-gp-btn { top: 10px; }
 .hud-sticks-btn { top: 50px; }
 
-/* 网页默认不出现。只有安卓壳（html.shell-app）才在顶栏露出背景切换。 */
-.hud-view-pop { display: none; }
-html.shell-app #btn-swap,
-html.shell-app #btn-media,
-html.shell-app #hud-layout,
-html.shell-app .hud-gp-btn,
-html.shell-app .hud-sticks-btn,
-html.shell-app .hud-gp,
-html.shell-app .hud-sticks { display: none !important; }
-html.shell-app .hud-layout-bar {
-  top: 10px;
-  left: 16px;
-  transform: none;
-}
-html.shell-app .bar-view { display: block; }
-html.shell-app .hud-view-pop {
+/* 网页默认不出现背景切换。模式菜单网页和 App 都有。 */
+.bar-pop {
+  display: none;
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   z-index: 30;
   flex-direction: column;
-  min-width: 168px;
+  min-width: 148px;
   padding: 6px;
   border-radius: 10px;
   background: rgba(13, 17, 23, .96);
   border: 1px solid var(--line);
   box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
 }
-html.shell-app .hud-view-pop:not(.hidden) { display: flex; }
-html.shell-app .hud-view-pop .btn { border-radius: 0; text-align: left; }
-html.shell-app .hud-view-pop .btn:first-child { border-radius: 8px 8px 0 0; }
-html.shell-app .hud-view-pop .btn:last-child { border-radius: 0 0 8px 8px; }
-html.shell-app .hud-view-pop .btn + .btn { border-top: 0; }
+.bar-pop:not(.hidden) { display: flex; }
+.bar-pop .btn { border-radius: 0; text-align: left; }
+.bar-pop .btn:first-child { border-radius: 8px 8px 0 0; }
+.bar-pop .btn:last-child { border-radius: 0 0 8px 8px; }
+.bar-pop .btn + .btn { border-top: 0; }
+html.shell-app .hud-layout-bar,
+html.shell-app #hud-layout,
+html.shell-app .hud-gp-btn,
+html.shell-app .hud-sticks-btn,
+html.shell-app .hud-gp,
+html.shell-app .hud-sticks { display: none !important; }
+html.shell-app .bar-view { display: block; }
 html.shell-app .stage .pane:not(.is-main) { display: none !important; }
 html.shell-app .pip-hint { display: none !important; }
 html.shell-app .stage.layout-1x1 .pane.is-main .pane-actions { right: 16px; }
 
-/* 指标和气体：左侧一列，不跟右侧对讲/模式抢位。 */
+/* 指标常显左上：四列压矮，避免被裁掉。 */
 .hud-info {
   position: absolute;
   z-index: 14;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  top: 50px;
-  width: min(460px, calc(100% - 120px));
-  max-height: calc(100% - 88px);
-  overflow-x: hidden;
-  overflow-y: auto;
+  top: 10px;
+  width: min(560px, calc(100% - 108px));
+  max-height: calc(100% - 24px);
+  overflow: visible;
   pointer-events: none;
 }
 .stage-wrap:has(.layout-1x1) .hud-info {
   left: calc(10px + min(220px, 28vw) + 8px);
+  top: 50px;
 }
 .stage-wrap:has(.layout-2x2) .hud-info {
   left: 16px;
+  top: 50px;
 }
-html.shell-app .hud-info { left: 16px; }
+html.shell-app .hud-info {
+  left: 10px;
+  top: 10px;
+  width: min(640px, calc(100% - 20px));
+}
 .hud-info > .panel {
   pointer-events: auto;
   margin: 0;
-  background: rgba(22, 27, 34, .92);
+  padding: 8px 10px;
+  background: rgba(22, 27, 34, .88);
   backdrop-filter: blur(8px);
 }
+.telemetry .panel-head { margin: 0 0 6px; }
 
 .hud-gp {
   position: absolute;
@@ -957,9 +960,10 @@ html.shell-app .hud-info { left: 16px; }
   color: var(--muted);
   line-height: 1.6;
 }
+.bar-pop .btn.hud-assist.active,
 .hud-modes .btn.hud-assist.active { opacity: 1; }
 
-/* 趴下：只留左下起立和右侧模式。站立才出步态/踏面/身高和摇杆。 */
+/* 趴下：只留左下起立和右侧对讲。站立才出步态/踏面/身高和摇杆。 */
 .dog-prone .hud-menus,
 .dog-prone .hud-sticks { display: none !important; }
 
@@ -979,7 +983,7 @@ html.shell-app .hud-info { left: 16px; }
   .hud-sticks .knob { width: 44px; height: 44px; }
   .hud-menus { left: auto; right: 100px; transform: none; bottom: 16px; flex-wrap: wrap; max-width: 46vw; }
   .acc-pop { left: auto; right: 0; transform: none; }
-  .grid { grid-template-columns: 1fr 1fr; }
-  .hud-info { width: min(360px, calc(100% - 108px)); }
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .hud-info { width: min(520px, calc(100% - 20px)); }
   .hud-gp { right: 16px; top: 88px; }
 }

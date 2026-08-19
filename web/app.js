@@ -235,7 +235,6 @@ function renderState(s) {
   chipState.textContent = s.basic_state_text || '—';
   chipState.classList.toggle('online', s.alive);
 
-  $('chip-gait').textContent = s.gait_text || '—';
   $('chip-batt').textContent = `${s.battery.level}% · ${fmt(s.battery.voltage, 1)}V`;
 
   $('t-vx').textContent = fmt(s.vel.x);
@@ -319,6 +318,7 @@ function showBanner(text, holdMs) {
 
 app.paintModes = paintModes;
 app.toggleGas = toggleGas;
+app.cycleView = cycleView;
 
 function paintModes() {
   const pick = app.modePick;
@@ -519,6 +519,7 @@ document.querySelectorAll('[data-mode]').forEach((b) => {
     if (mode === 'assist') {
       app.modePick = 'assist';
       paintModes();
+      closeBarPops();
       showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
       return;
     }
@@ -527,13 +528,9 @@ document.querySelectorAll('[data-mode]').forEach((b) => {
       send({ t: 'cmd', name: 'mode', value: mode });
       markPending(b);
       paintModes();
+      closeBarPops();
     })(ev);
   });
-});
-
-$('btn-telem').addEventListener('click', () => {
-  $('telemetry').classList.toggle('hidden');
-  $('btn-telem').classList.toggle('active', !$('telemetry').classList.contains('hidden'));
 });
 
 $('btn-media').addEventListener('click', () => {
@@ -605,6 +602,8 @@ $('btn-swap').addEventListener('click', (e) => {
   applyLayout();
 });
 
+const VIEW_CYCLE = ['dog_cam', 'ptz_vis', 'ptz_ir', 'cloud'];
+
 function syncViewPick() {
   const main = viewLayout.main;
   document.querySelectorAll('[data-view-pick]').forEach((b) => {
@@ -612,19 +611,53 @@ function syncViewPick() {
   });
 }
 
+function closeBarPops() {
+  if ($('hud-mode-pop')) {
+    $('hud-mode-pop').classList.add('hidden');
+    if ($('btn-mode')) $('btn-mode').classList.remove('active');
+  }
+  if ($('hud-view-pop')) {
+    $('hud-view-pop').classList.add('hidden');
+    if ($('btn-view')) $('btn-view').classList.remove('active');
+  }
+}
+
+function cycleView() {
+  const i = VIEW_CYCLE.indexOf(viewLayout.main);
+  viewLayout.main = VIEW_CYCLE[(i < 0 ? 0 : i + 1) % VIEW_CYCLE.length];
+  viewLayout.mode = '1x1';
+  applyLayout();
+}
+
+$('btn-mode').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const pop = $('hud-mode-pop');
+  const open = pop.classList.contains('hidden');
+  closeBarPops();
+  if (open) {
+    pop.classList.remove('hidden');
+    $('btn-mode').classList.add('active');
+    paintModes();
+  }
+});
+
 $('btn-view').addEventListener('click', (e) => {
   e.stopPropagation();
-  $('hud-view-pop').classList.toggle('hidden');
-  $('btn-view').classList.toggle('active', !$('hud-view-pop').classList.contains('hidden'));
-  syncViewPick();
+  const pop = $('hud-view-pop');
+  const open = pop.classList.contains('hidden');
+  closeBarPops();
+  if (open) {
+    pop.classList.remove('hidden');
+    $('btn-view').classList.add('active');
+    syncViewPick();
+  }
 });
 document.querySelectorAll('[data-view-pick]').forEach((b) => {
   b.addEventListener('click', (e) => {
     e.stopPropagation();
     viewLayout.main = b.dataset.viewPick;
     viewLayout.mode = '1x1';
-    $('hud-view-pop').classList.add('hidden');
-    $('btn-view').classList.remove('active');
+    closeBarPops();
     applyLayout();
   });
 });
@@ -676,10 +709,7 @@ document.querySelectorAll('.acc-btn').forEach((btn) => {
 
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.acc')) closeAccordions();
-  if ($('hud-view-pop') && !e.target.closest('#bar-view, #btn-view, #hud-view-pop')) {
-    $('hud-view-pop').classList.add('hidden');
-    $('btn-view').classList.remove('active');
-  }
+  if (!e.target.closest('#bar-mode, #bar-view, .bar-pop')) closeBarPops();
 });
 
 document.querySelectorAll('[data-stair]').forEach((b) => {

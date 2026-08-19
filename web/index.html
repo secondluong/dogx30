@@ -15,15 +15,22 @@
   <div class="chips">
     <span class="chip" id="chip-link"><i class="dot"></i><span id="link-text">连接中</span></span>
     <span class="chip" id="chip-state">—</span>
-    <span class="chip" id="chip-gait">—</span>
     <span class="chip" id="chip-batt">—</span>
   </div>
 
   <div class="bar-right">
+    <div class="bar-mode" id="bar-mode">
+      <button type="button" class="btn btn-ghost" id="btn-mode">模式</button>
+      <div id="hud-mode-pop" class="bar-pop hidden">
+        <button type="button" class="btn" data-mode="manual">手动</button>
+        <button type="button" class="btn hud-assist" id="btn-assist" data-mode="assist">辅助</button>
+        <button type="button" class="btn" data-mode="auto">导航</button>
+      </div>
+    </div>
     <!-- 仅安卓壳显示：顶栏切背景。网页直接打开时由 CSS 藏掉。 -->
     <div class="bar-view" id="bar-view">
       <button type="button" class="btn btn-ghost" id="btn-view">背景</button>
-      <div id="hud-view-pop" class="hud-view-pop hidden">
+      <div id="hud-view-pop" class="bar-pop hidden">
         <button type="button" class="btn" data-view-pick="dog_cam">机身相机</button>
         <button type="button" class="btn" data-view-pick="ptz_vis">布控球 白光</button>
         <button type="button" class="btn" data-view-pick="ptz_ir">布控球 热成像</button>
@@ -185,7 +192,6 @@
   <div class="hud-layout-bar">
     <button type="button" class="btn sm hud-swap" id="btn-swap" title="在一主三小和四宫格之间切换">2×2</button>
     <button type="button" class="btn sm" id="btn-media">画面</button>
-    <button type="button" class="btn sm hud-telem-btn" id="btn-telem">指标</button>
   </div>
   <div id="hud-layout" class="hud-layout hidden">
     <span class="tag" id="media-budget">—</span>
@@ -193,9 +199,9 @@
     <div id="media-list" class="media-list hud-media-list"></div>
   </div>
 
-  <!-- 指标/气体叠在左侧，避开右侧对讲和模式。默认收起。 -->
+  <!-- 指标常显在左上，气体仍默认收起。 -->
   <div class="hud-info" id="hud-info">
-    <section id="telemetry" class="panel telemetry hidden">
+    <section id="telemetry" class="panel telemetry">
       <div class="panel-head"><span>指标</span><span class="tag" id="tag-holder">观察者</span></div>
     <div class="grid">
       <div class="cell"><label>机体速度 X</label><b id="t-vx">0.00</b><em>m/s</em></div>
@@ -240,14 +246,8 @@
     </div>
   </div>
 
-  <!-- 对讲单独一列，不跟手动/辅助/导航编成一组。 -->
   <div class="hud-right">
     <button type="button" class="btn hud-talk btn-talk" id="btn-talk">按住说话</button>
-    <div class="hud-modes">
-      <button type="button" class="btn" data-mode="manual">手动</button>
-      <button type="button" class="btn hud-assist" id="btn-assist" data-mode="assist">辅助</button>
-      <button type="button" class="btn" data-mode="auto">导航</button>
-    </div>
   </div>
 
   <div class="hud-stand">

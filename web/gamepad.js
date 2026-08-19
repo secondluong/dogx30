@@ -226,15 +226,23 @@
     talk: { ch: 5, press: 1050 },
     rec: { ch: 11, press: 1050 },
     estop: { ch: 12, press: 1050 },
-    telem: { ch: 14, press: 1050 },
+    view_next: { ch: 8, press: 1950 },
     gas: { ch: 15, press: 1050 },
   };
 
-  function ch5Band(v) {
+  // 三段拨动：高位向上、低位向下、中位空挡。首次采样只记档，不动作。
+  function ch5Toggle(v) {
     if (typeof v !== 'number' || v !== v) return '';
-    if (v <= 1300) return 'manual';
-    if (v >= 1700) return 'auto';
-    return 'assist';
+    if (v <= 1300) return 'yield';
+    if (v >= 1700) return 'claim';
+    return '';
+  }
+
+  function wheelDetent(v) {
+    if (typeof v !== 'number' || v !== v) return 'mid';
+    if (v <= 1300) return 'down';
+    if (v >= 1700) return 'up';
+    return 'mid';
   }
 
   function nextGait(current, delta) {
@@ -314,7 +322,8 @@
     pwmAxis: pwmAxis,
     pwmPressed: pwmPressed,
     g20Channels: g20Channels,
-    ch5Band: ch5Band,
+    ch5Toggle: ch5Toggle,
+    wheelDetent: wheelDetent,
   };
 
   // --- 浏览器侧 -------------------------------------------------------------
@@ -464,29 +473,20 @@
         }
         return;
       }
-      if (key === 'telem') {
-        var telemBtn = document.getElementById('btn-telem');
-        if (telemBtn && telemBtn.click) telemBtn.click();
-        return;
-      }
       if (key === 'gas') {
         if (app.toggleGas) app.toggleGas();
         return;
       }
-      if (key === 'mode_assist') {
-        app.modePick = 'assist';
-        if (app.paintModes) app.paintModes();
-        showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
+      if (key === 'view_next') {
+        if (app.cycleView) app.cycleView();
         return;
       }
-      if (key === 'mode_manual' || key === 'mode_auto') {
-        if (!app.hasControl) {
-          showBanner('请先申请控制权');
-          return;
-        }
-        app.modePick = key === 'mode_manual' ? 'manual' : 'auto';
-        send({ t: 'cmd', name: 'mode', value: app.modePick });
-        if (app.paintModes) app.paintModes();
+      if (key === 'claim') {
+        if (!app.hasControl) send({ t: 'claim' });
+        return;
+      }
+      if (key === 'yield') {
+        if (app.hasControl) send({ t: 'yield' });
         return;
       }
       if (!app.hasControl) {
@@ -544,22 +544,27 @@
         state.g20Prev[name] = down;
       }
       if (ev.ch.length > 4) {
-        var band = ch5Band(ev.ch[4]);
-        if (state.g20Prev.mode === undefined) {
-          state.g20Prev.mode = band;
-        } else if (band && band !== state.g20Prev.mode) {
-          state.g20Prev.mode = band;
-          dispatch('mode_' + band);
+        var tog = ch5Toggle(ev.ch[4]);
+        if (state.g20Prev.toggle === undefined) {
+          state.g20Prev.toggle = tog;
+        } else if (tog && tog !== state.g20Prev.toggle) {
+          state.g20Prev.toggle = tog;
+          dispatch(tog);
+        } else if (!tog) {
+          state.g20Prev.toggle = '';
         }
       }
       if (ev.ch.length > 13) {
-        var wheel = ev.ch[13];
-        if (state.g20Wheel !== null && Math.abs(wheel - state.g20Wheel) > 12) {
-          if (window.X30Cloud && window.X30Cloud.nudgeZoom) {
-            window.X30Cloud.nudgeZoom((state.g20Wheel - wheel) / 80);
+        var detent = wheelDetent(ev.ch[13]);
+        if (state.g20Wheel === null) {
+          state.g20Wheel = detent;
+        } else if (detent !== state.g20Wheel) {
+          if (state.g20Wheel === 'mid' && window.X30Cloud && window.X30Cloud.nudgeZoom) {
+            if (detent === 'down') window.X30Cloud.nudgeZoom(1);
+            if (detent === 'up') window.X30Cloud.nudgeZoom(-1);
           }
+          state.g20Wheel = detent;
         }
-        state.g20Wheel = wheel;
       }
       return true;
     }
