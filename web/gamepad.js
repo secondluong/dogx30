@@ -285,6 +285,9 @@
     probePrev: [],
     probeLog: [],
     probeBuilt: '',
+    probeNativeKeySeq: -1,
+    probeNativeAxisSeq: -1,
+    probeWarnedNoApi: false,
   };
 
   function loadStored() {
@@ -487,7 +490,19 @@
           if (mask.focus) mask.focus();
         }
         paintProbe(firstPad());
-        setProbeStatus('正在听按键。请按手柄，不要点屏幕。');
+        refreshProbeBridge();
+        var apk = document.getElementById('gp-probe-apk');
+        var hasBridge = !!(window.X30Native && window.X30Native.pollKey);
+        if (apk) apk.classList.toggle('hidden', hasBridge);
+        if (hasBridge) {
+          setProbeStatus('系统键通道已接通。请按手柄。');
+          try {
+            var dev = window.X30Native.devices ? window.X30Native.devices() : '';
+            if (dev) setProbeStatus('系统键通道已接通。设备：' + dev);
+          } catch (e2) { /* 旧桥没有 devices */ }
+        } else {
+          setProbeStatus('只有网页通道。若按键没反应，需要重装最新 APK。');
+        }
       }
     }
 
@@ -539,7 +554,10 @@
       var nowEl = document.getElementById('gp-probe-now');
       if (!state.probeOpen) return;
       if (!pad) {
-        if (nowEl) nowEl.textContent = '未检测到手柄。插上后先按任意键唤醒。';
+        // 不要每帧把系统键/键盘刚写下的字盖掉。
+        if (nowEl && !state.probeLog.length) {
+          nowEl.textContent = '按下手柄任意键。这里会显示 keyCode 或 b 编号。';
+        }
         return;
       }
       ensureProbeSkeleton(pad);
@@ -595,8 +613,8 @@
           showBanner('手柄已断开，运动量已归零');
         }
         if (state.probeOpen) {
+          pollNativeProbe();
           paintProbe(null);
-          setProbeStatus('浏览器没拿到 Gamepad。继续按实体键，系统键值通道仍在听。');
         }
         window.requestAnimationFrame(poll);
         return;
@@ -618,6 +636,7 @@
       }
 
       if (state.probeOpen) {
+        pollNativeProbe();
         paintProbe(pad);
         zero();
         if (state.core) state.core.reset();
@@ -702,6 +721,41 @@
         setStatus();
         showBanner('已清除映射');
       });
+    }
+
+    function refreshProbeBridge() {
+      state.probeNativeKeySeq = -1;
+      state.probeNativeAxisSeq = -1;
+    }
+
+    function pollNativeProbe() {
+      if (!state.probeOpen || !window.X30Native) return;
+      try {
+        if (window.X30Native.pollKey) {
+          var raw = window.X30Native.pollKey();
+          if (raw) {
+            var ev = JSON.parse(raw);
+            if (ev.seq !== state.probeNativeKeySeq) {
+              state.probeNativeKeySeq = ev.seq;
+              if (ev.down && !ev.repeat) {
+                noteProbeInput((ev.name || 'KEY') + '  keyCode=' + ev.keyCode +
+                  '  scan=' + ev.scanCode + '  device=' + ev.deviceId);
+                setProbeStatus('系统按键通道已收到。这就是安卓层的键值。');
+              }
+            }
+          }
+        }
+        if (window.X30Native.pollAxis) {
+          var axRaw = window.X30Native.pollAxis();
+          if (axRaw) {
+            var ax = JSON.parse(axRaw);
+            if (ax.seq !== state.probeNativeAxisSeq) {
+              state.probeNativeAxisSeq = ax.seq;
+              api._onNativeAxis(ax);
+            }
+          }
+        }
+      } catch (e) { /* 桥还没就绪或返回空串 */ }
     }
 
     function noteProbeInput(line) {

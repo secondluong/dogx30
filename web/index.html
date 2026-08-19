@@ -48,9 +48,11 @@
       <button type="button" class="btn sm" id="gp-probe-close">关闭</button>
     </div>
     <p class="gp-probe-hint">
-      打开后请直接按手柄实体键。平板上很多手柄不走浏览器 Gamepad，而走系统键值，这里两种都听。
-      探测期间按键不会点到页面上的按钮，也不会起立或起步。
+      打开后直接按手柄实体键。探测期间不会起立或起步。
     </p>
+    <div id="gp-probe-apk" class="gp-probe-warn hidden">
+      当前 App 还是旧包，系统按键进不来。只刷新网页不够，请用电脑打开 android-app 重装 APK。
+    </div>
     <div id="gp-probe-status" class="gp-probe-ref">正在听按键……</div>
     <div id="gp-probe-now" class="gp-probe-now">按下手柄任意键</div>
     <div id="gp-probe-btns" class="gp-probe-btns"></div>

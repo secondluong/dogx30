@@ -133,10 +133,66 @@ public class ControlActivity extends AppCompatActivity {
 
     public static class NativeBridge {
         volatile boolean probeOpen;
+        volatile String lastKey = "";
+        volatile String lastAxis = "";
+        private int keySeq;
+        private int axisSeq;
 
         @JavascriptInterface
         public void setProbeOpen(boolean open) {
             probeOpen = open;
+        }
+
+        @JavascriptInterface
+        public String pollKey() {
+            return lastKey;
+        }
+
+        @JavascriptInterface
+        public String pollAxis() {
+            return lastAxis;
+        }
+
+        @JavascriptInterface
+        public String devices() {
+            StringBuilder sb = new StringBuilder();
+            int[] ids = InputDevice.getDeviceIds();
+            for (int id : ids) {
+                InputDevice d = InputDevice.getDevice(id);
+                if (d == null) continue;
+                int src = d.getSources();
+                if ((src & (InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_JOYSTICK
+                        | InputDevice.SOURCE_DPAD)) == 0) {
+                    continue;
+                }
+                if (sb.length() > 0) sb.append(" | ");
+                sb.append(d.getName()).append(" #").append(id);
+            }
+            return sb.toString();
+        }
+
+        synchronized void rememberKey(KeyEvent event) {
+            keySeq++;
+            lastKey = "{\"seq\":" + keySeq
+                    + ",\"down\":" + (event.getAction() == KeyEvent.ACTION_DOWN)
+                    + ",\"repeat\":" + event.getRepeatCount()
+                    + ",\"keyCode\":" + event.getKeyCode()
+                    + ",\"scanCode\":" + event.getScanCode()
+                    + ",\"deviceId\":" + event.getDeviceId()
+                    + ",\"name\":\"" + KeyEvent.keyCodeToString(event.getKeyCode()) + "\"}";
+        }
+
+        synchronized void rememberAxis(MotionEvent event) {
+            axisSeq++;
+            lastAxis = "{\"seq\":" + axisSeq
+                    + ",\"lx\":" + event.getAxisValue(MotionEvent.AXIS_X)
+                    + ",\"ly\":" + event.getAxisValue(MotionEvent.AXIS_Y)
+                    + ",\"rx\":" + event.getAxisValue(MotionEvent.AXIS_Z)
+                    + ",\"ry\":" + event.getAxisValue(MotionEvent.AXIS_RZ)
+                    + ",\"lt\":" + event.getAxisValue(MotionEvent.AXIS_LTRIGGER)
+                    + ",\"rt\":" + event.getAxisValue(MotionEvent.AXIS_RTRIGGER)
+                    + ",\"hatx\":" + event.getAxisValue(MotionEvent.AXIS_HAT_X)
+                    + ",\"haty\":" + event.getAxisValue(MotionEvent.AXIS_HAT_Y) + "}";
         }
     }
 
@@ -146,6 +202,7 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     private void injectKey(KeyEvent event) {
+        nativeBridge.rememberKey(event);
         if (web == null) return;
         String name = KeyEvent.keyCodeToString(event.getKeyCode());
         if (name == null) name = "UNKNOWN";
@@ -161,6 +218,7 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     private void injectAxes(MotionEvent event) {
+        nativeBridge.rememberAxis(event);
         if (web == null) return;
         String js = "window.X30Gamepad&&X30Gamepad.onNativeAxis&&X30Gamepad.onNativeAxis({"
                 + "lx:" + event.getAxisValue(MotionEvent.AXIS_X) + ","
