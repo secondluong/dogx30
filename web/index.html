@@ -20,7 +20,6 @@
   </div>
 
   <div class="bar-right">
-    <button type="button" class="btn btn-ghost" id="btn-probe">键值</button>
     <!-- 仅安卓壳显示：顶栏切背景。网页直接打开时由 CSS 藏掉。 -->
     <div class="bar-view" id="bar-view">
       <button type="button" class="btn btn-ghost" id="btn-view">背景</button>
@@ -39,33 +38,6 @@
 </header>
 
 <div id="banner" class="banner hidden"></div>
-
-<!-- 打开期间手柄按键不发运动指令，只用来记键值。 -->
-<div id="gp-probe" class="gp-probe-mask hidden">
-  <div class="gp-probe-panel">
-    <div class="gp-probe-head">
-      <span>手柄键值探测</span>
-      <button type="button" class="btn sm" id="gp-probe-close">关闭</button>
-    </div>
-    <p class="gp-probe-hint">
-      这台平板是云卓 G20。L1/L2/R1/R2/B1/B2、拍照键和滚轮走 RCSDK 通道，不是安卓 keyCode。
-      先关掉云卓助手，装 App 0.3.0。连接页或这里会显示 CH1–CH16 的 PWM 值。
-      原厂 2.4G 无线电手柄仍直连运动主机，这里不会亮。
-    </p>
-    <div id="gp-probe-apk" class="gp-probe-warn hidden">
-      当前 App 还没有 RCSDK。只刷新网页不够，请重装 android-app 的 0.3.0 APK。
-    </div>
-    <div id="gp-probe-status" class="gp-probe-ref">正在听按键……</div>
-    <div id="gp-probe-now" class="gp-probe-now">按下手柄任意键</div>
-    <div id="gp-probe-rc" class="gp-probe-rc"></div>
-    <div id="gp-probe-btns" class="gp-probe-btns"></div>
-    <div id="gp-probe-axes" class="gp-probe-axes"></div>
-    <ol id="gp-probe-log" class="gp-probe-log"></ol>
-    <p class="gp-probe-ref">
-      标准布局默认：b0 坐/站 · b1 起步 · b2 力控 · b4 步态下 · b5 步态上。急停没有默认，避免按错。
-    </p>
-  </div>
-</div>
 
 <!-- 网关设置。改完要重启网关，所以既要令牌，也要求当前没人持有控制权。 -->
 <div id="settings" class="set-mask hidden">

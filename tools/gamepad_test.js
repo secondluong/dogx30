@@ -37,6 +37,34 @@ check('推到底仍能到满量程', near(s.x, 1), 'x=' + s.x);
 s = G.shapeStick(-1, 0, 0.12, 0.4);
 check('反向推到底为 -1', near(s.x, -1), 'x=' + s.x);
 
+console.log('\n== G20 通道表 ==');
+check('中位 PWM 为零', G.pwmAxis(1500, false) === 0);
+check('2000 为满量程', near(G.pwmAxis(2000, false), 1));
+check('取反后左转为正', near(G.pwmAxis(1000, true), 1));
+check('1050 算按下', G.pwmPressed(1050, 1050));
+check('1500 不算按下', !G.pwmPressed(1500, 1050));
+
+var rest = [1500, 1500, 1500, 1500];
+var idle = G.g20Channels(rest, 0.12, 0.4);
+check('G20 中位不产生运动',
+      idle.fwd === 0 && idle.lat === 0 && idle.turn === 0 && idle.tilt === 0,
+      JSON.stringify(idle));
+
+var fwdCh = [1500, 1500, 2000, 1500];
+var fwd = G.g20Channels(fwdCh, 0.12, 0.4);
+check('CH3 推到 2000 是前进', fwd.fwd > 0.9 && Math.abs(fwd.lat) < 0.05,
+      JSON.stringify(fwd));
+
+var leftCh = [1500, 1500, 1500, 1000];
+var left = G.g20Channels(leftCh, 0.12, 0.4);
+check('CH4 到 1000 是左移', left.lat > 0.9 && Math.abs(left.fwd) < 0.05,
+      JSON.stringify(left));
+
+var turnCh = [1000, 1500, 1500, 1500];
+var turn = G.g20Channels(turnCh, 0.12, 0.4);
+check('CH1 到 1000 是左转', turn.turn > 0.9 && turn.tilt === 0,
+      JSON.stringify(turn));
+
 // 圆形死区：斜推时方向不能被掰歪，否则"想斜着走却先直着走"
 s = G.shapeStick(0.6, 0.6, 0.12, 0.4);
 check('斜推时方向保持 45 度', near(s.x, s.y), s.x + ' vs ' + s.y);

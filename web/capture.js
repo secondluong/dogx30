@@ -162,6 +162,31 @@ function toggleRec(view, btn, showBanner) {
   startRec(view, btn, showBanner);
 }
 
+function currentView() {
+  const main = document.querySelector('.pane.is-main');
+  return (main && main.dataset.view) || 'dog_cam';
+}
+
+function dummyRecBtn() {
+  return { classList: { add: function () {}, remove: function () {} }, textContent: '' };
+}
+
+function recBtnOf(view) {
+  const pane = document.querySelector('.pane[data-view="' + view + '"]');
+  return (pane && pane.querySelector('[data-capture="rec"]')) || dummyRecBtn();
+}
+
+function shotCurrent(showBanner) {
+  const view = currentView();
+  if (view === 'cloud') shotCloud(showBanner);
+  else shotVideo(view, showBanner);
+}
+
+function toggleRecCurrent(showBanner) {
+  const view = currentView();
+  toggleRec(view, recBtnOf(view), showBanner);
+}
+
 function initCapture(showBanner) {
   document.querySelectorAll('[data-capture]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
@@ -185,4 +210,4 @@ function initCapture(showBanner) {
   });
 }
 
-window.X30Capture = { initCapture };
+window.X30Capture = { initCapture, shotCurrent, toggleRecCurrent };

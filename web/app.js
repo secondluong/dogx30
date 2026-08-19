@@ -50,6 +50,7 @@ function isStandingUi() {
   return s === STATE_INITIAL_STAND || s === STATE_TORQUE_STANDING ||
          s === STATE_STEPPING || s === STATE_STAND_TO_SIT;
 }
+app.isStandingUi = isStandingUi;
 
 function controlChannel() {
   if (app.basicState === STATE_STEPPING) return 'vel';
@@ -408,7 +409,7 @@ function activeChannels() {
   // 不需要显式切换 —— 现场戴手套点屏幕本来就不方便。
   if (window.X30Gamepad) {
     const gp = window.X30Gamepad.channels();
-    if (gp.engaged) return gp;
+    if (gp.source === 'g20' || gp.engaged) return gp;
   }
   return touchChannels();
 }

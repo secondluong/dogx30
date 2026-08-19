@@ -191,6 +191,43 @@
     return { update: update, reset: reset, tuning: tuning, map: map };
   }
 
+  // 现场量过的 G20 通道。数组下标 = CH号 - 1。中位 1500，按键按下约 1050。
+  // 右摇杆 CH1/CH2 只用来转向：CH2 参与死区，不进俯仰，避免上下推变成抬头。
+  // PWM 增大按「右 / 前」理解；通道约定左移、左转为正，所以 lat/turn 取反。
+  function pwmAxis(v, invert) {
+    if (typeof v !== 'number' || v !== v) return 0;
+    var n = clamp((v - 1500) / 500, -1, 1);
+    return invert ? -n : n;
+  }
+
+  function pwmPressed(v, press) {
+    if (typeof v !== 'number' || v !== v) return false;
+    var mid = (press + 1500) / 2;
+    return press < 1500 ? v <= mid : v >= mid;
+  }
+
+  function g20Channels(ch, deadzone, expo) {
+    var dz = typeof deadzone === 'number' ? deadzone : DEFAULT_TUNING.deadzone;
+    var ex = typeof expo === 'number' ? expo : DEFAULT_TUNING.expo;
+    var left = shapeStick(pwmAxis(ch[3], true), pwmAxis(ch[2], false), dz, ex);
+    var right = shapeStick(pwmAxis(ch[0], true), pwmAxis(ch[1], false), dz, ex);
+    return {
+      fwd: left.y,
+      lat: left.x,
+      turn: right.x,
+      tilt: 0,
+    };
+  }
+
+  var G20_BTN = {
+    stand_up: { ch: 10, press: 1050 },
+    sit_down: { ch: 6, press: 1050 },
+    shot: { ch: 7, press: 1050 },
+    talk: { ch: 5, press: 1050 },
+    rec: { ch: 11, press: 1050 },
+    telem: { ch: 14, press: 1050 },
+  };
+
   function nextGait(current, delta) {
     var i = GAIT_CYCLE.indexOf(current);
     // 当前步态不在循环里（多半正处于楼梯态）时，从头开始而不是原地不动。
@@ -265,6 +302,9 @@
     onRcChannels: function (ev) {
       if (api._onRcChannels) api._onRcChannels(ev);
     },
+    pwmAxis: pwmAxis,
+    pwmPressed: pwmPressed,
+    g20Channels: g20Channels,
   };
 
   // --- 浏览器侧 -------------------------------------------------------------
@@ -284,15 +324,9 @@
     deadmanOn: false,
     deadmanHeld: false,
     warned: false,
-    probeOpen: false,
-    probePrev: [],
-    probeLog: [],
-    probeBuilt: '',
-    probeNativeKeySeq: -1,
-    probeNativeAxisSeq: -1,
-    probeRcSeq: -1,
-    probeRcLogKey: '',
-    probeWarnedNoApi: false,
+    g20Seq: -1,
+    g20Prev: {},
+    g20Talk: false,
   };
 
   function loadStored() {
@@ -372,6 +406,9 @@
       } else if (state.source === 'custom') {
         statusEl.textContent = '已连接（自定义映射）';
         statusEl.className = 'tag tag-ok';
+      } else if (state.source === 'g20') {
+        statusEl.textContent = '已连接（云卓 G20）';
+        statusEl.className = 'tag tag-ok';
       } else if (state.source === 'standard') {
         statusEl.textContent = '已连接（标准布局）';
         statusEl.className = 'tag tag-ok';
@@ -400,13 +437,39 @@
     function dispatch(key) {
       var app = getApp();
       if (key === 'estop') {
-        // 和屏幕按钮一致：急停不检查控制权，任何时候都能按。
         send({ t: 'cmd', name: 'estop' });
         showBanner('已发送软急停（手柄）');
         return;
       }
+      if (key === 'shot') {
+        if (window.X30Capture && window.X30Capture.shotCurrent) {
+          window.X30Capture.shotCurrent(showBanner);
+        }
+        return;
+      }
+      if (key === 'rec') {
+        if (window.X30Capture && window.X30Capture.toggleRecCurrent) {
+          window.X30Capture.toggleRecCurrent(showBanner);
+        }
+        return;
+      }
+      if (key === 'telem') {
+        var telemBtn = document.getElementById('btn-telem');
+        if (telemBtn && telemBtn.click) telemBtn.click();
+        return;
+      }
       if (!app.hasControl) {
         showBanner('请先申请控制权');
+        return;
+      }
+      if (key === 'stand_up') {
+        if (app.isStandingUi && app.isStandingUi()) return;
+        send({ t: 'cmd', name: 'stand' });
+        return;
+      }
+      if (key === 'sit_down') {
+        if (app.isStandingUi && !app.isStandingUi()) return;
+        send({ t: 'cmd', name: 'stand' });
         return;
       }
       if (key === 'stand' || key === 'torque' || key === 'step') {
@@ -420,216 +483,86 @@
       }
     }
 
-    function currentMap() {
-      if (stored && stored.map) return stored.map;
-      if (state.source === 'standard') return STANDARD_MAP;
-      return {};
+    function setTalk(on) {
+      if (state.g20Talk === on) return;
+      state.g20Talk = on;
+      if (window.X30Media && window.X30Media.setTalk) {
+        window.X30Media.setTalk(on, showBanner);
+      }
     }
 
-    function mappedLabels(kind, index) {
-      var map = currentMap();
-      var hits = [];
-      Object.keys(map).forEach(function (k) {
-        if (map[k] && map[k].type === kind && map[k].index === index) {
-          hits.push(FUNC_LABEL[k] || k);
+    function applyG20(ev) {
+      if (!ev || !ev.ch || !ev.ch.length) return false;
+      if (ev.connected === false) return false;
+      state.connected = true;
+      state.source = 'g20';
+      state.padId = ev.device || 'G20';
+      var ch = g20Channels(ev.ch);
+      state.channels = ch;
+      state.engaged = ch.fwd !== 0 || ch.lat !== 0 || ch.turn !== 0;
+      var name;
+      for (name in G20_BTN) {
+        if (!Object.prototype.hasOwnProperty.call(G20_BTN, name)) continue;
+        var spec = G20_BTN[name];
+        var down = ev.ch.length > spec.ch && pwmPressed(ev.ch[spec.ch], spec.press);
+        if (name === 'talk') {
+          setTalk(down);
+        } else if (down && !state.g20Prev[name]) {
+          dispatch(name);
         }
-      });
-      return hits;
+        state.g20Prev[name] = down;
+      }
+      return true;
     }
 
-    function buttonLabel(pad, i) {
-      var name = (pad && pad.mapping === 'standard' && STANDARD_BTN[i])
-        ? STANDARD_BTN[i] : '';
-      return name ? ('b' + i + ' ' + name) : ('b' + i);
-    }
-
-    function tellNativeProbe(open) {
+    function readNativeG20() {
+      if (!window.X30Native || !window.X30Native.pollRc) return null;
       try {
-        if (window.X30Native && window.X30Native.setProbeOpen) {
-          window.X30Native.setProbeOpen(!!open);
-        }
-      } catch (e) { /* 浏览器里没有这个桥 */ }
-    }
-
-    function buttonDown(b) {
-      if (b === undefined || b === null) return false;
-      if (typeof b === 'object') {
-        if (b.pressed) return true;
-        return typeof b.value === 'number' && b.value > 0.5;
-      }
-      return b > 0.5;
-    }
-
-    function buttonValue(b) {
-      if (b === undefined || b === null) return 0;
-      if (typeof b === 'object') {
-        if (typeof b.value === 'number') return b.value;
-        return b.pressed ? 1 : 0;
-      }
-      return +b;
-    }
-
-    function setProbeStatus(text) {
-      var el = document.getElementById('gp-probe-status');
-      if (el) el.textContent = text;
-    }
-
-    function setProbeOpen(open) {
-      state.probeOpen = !!open;
-      var mask = document.getElementById('gp-probe');
-      var btn = document.getElementById('btn-probe');
-      if (mask) mask.classList.toggle('hidden', !state.probeOpen);
-      if (btn) {
-        btn.classList.toggle('active', state.probeOpen);
-        btn.blur();
-      }
-      if (document.activeElement && document.activeElement.blur) {
-        document.activeElement.blur();
-      }
-      tellNativeProbe(state.probeOpen);
-      if (state.probeOpen) {
-        zero();
-        if (state.core) state.core.reset();
-        if (mask) {
-          mask.setAttribute('tabindex', '-1');
-          if (mask.focus) mask.focus();
-        }
-        paintProbe(firstPad());
-        refreshProbeBridge();
-        var apk = document.getElementById('gp-probe-apk');
-        var hasRc = !!(window.X30Native && window.X30Native.pollRc);
-        var hasBridge = !!(window.X30Native && window.X30Native.pollKey);
-        if (apk) apk.classList.toggle('hidden', hasRc || hasBridge);
-        if (hasRc) {
-          setProbeStatus('云卓 RCSDK 通道已接通。按 L1/L2 等，看哪路 CH 变绿。');
-        } else if (hasBridge) {
-          setProbeStatus('系统键通道已接通。G20 实体键还要 App 0.3.0。');
-          try {
-            var dev = window.X30Native.devices ? window.X30Native.devices() : '';
-            if (dev) setProbeStatus('系统键通道已接通。设备：' + dev);
-          } catch (e2) { /* 旧桥没有 devices */ }
-        } else {
-          setProbeStatus('只有网页通道。G20 请重装 App 0.3.0。');
-        }
+        var raw = window.X30Native.pollRc();
+        if (!raw) return null;
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      } catch (e) {
+        return null;
       }
     }
 
-    function ensureProbeSkeleton(pad) {
-      var key = pad.id + '|' + pad.buttons.length + '|' + pad.axes.length;
-      if (state.probeBuilt === key) return;
-      state.probeBuilt = key;
-      state.probePrev = [];
-      setProbeStatus('Gamepad API：' + pad.id + ' · ' + pad.buttons.length + ' 键 / ' + pad.axes.length + ' 轴');
-      var bBox = document.getElementById('gp-probe-btns');
-      var aBox = document.getElementById('gp-probe-axes');
-      if (bBox) {
-        bBox.innerHTML = '';
-        for (var i = 0; i < pad.buttons.length; i++) {
-          var el = document.createElement('span');
-          el.className = 'gp-bchip';
-          el.id = 'gp-b' + i;
-          el.textContent = buttonLabel(pad, i);
-          bBox.appendChild(el);
-        }
-      }
-      if (aBox) {
-        aBox.innerHTML = '';
-        for (var j = 0; j < pad.axes.length; j++) {
-          var ax = document.createElement('div');
-          ax.className = 'gp-ax';
-          ax.id = 'gp-a' + j;
-          ax.textContent = 'a' + j + '  0.00';
-          aBox.appendChild(ax);
-        }
-      }
-    }
-
-    function pushProbeLog(text) {
-      if (state.probeLog.length && state.probeLog[0] === text) return;
-      state.probeLog.unshift(text);
-      if (state.probeLog.length > 16) state.probeLog.length = 16;
-      var list = document.getElementById('gp-probe-log');
-      if (!list) return;
-      list.innerHTML = '';
-      for (var i = 0; i < state.probeLog.length; i++) {
-        var li = document.createElement('li');
-        li.textContent = state.probeLog[i];
-        list.appendChild(li);
-      }
-    }
-
-    function paintProbe(pad) {
-      var nowEl = document.getElementById('gp-probe-now');
-      if (!state.probeOpen) return;
-      if (!pad) {
-        // 不要每帧把系统键/键盘刚写下的字盖掉。
-        if (nowEl && !state.probeLog.length) {
-          nowEl.textContent = '按下手柄任意键。这里会显示 keyCode 或 b 编号。';
-        }
-        return;
-      }
-      ensureProbeSkeleton(pad);
-      var down = [];
-      var i;
-      for (i = 0; i < pad.buttons.length; i++) {
-        var b = pad.buttons[i];
-        var pressed = buttonDown(b);
-        var value = buttonValue(b);
-        var chip = document.getElementById('gp-b' + i);
-        if (chip) {
-          chip.classList.toggle('on', pressed);
-          chip.textContent = buttonLabel(pad, i) +
-            (value > 0 && value < 1 ? ' ' + value.toFixed(2) : '');
-        }
-        if (pressed && !state.probePrev[i]) {
-          var extra = mappedLabels('button', i);
-          var line = buttonLabel(pad, i) +
-            (value > 0 && value < 1 ? '  value=' + value.toFixed(2) : '') +
-            (extra.length ? '  当前映射：' + extra.join('、') : '  未映射功能');
-          down.push(line);
-          pushProbeLog(line);
-        }
-        state.probePrev[i] = pressed;
-      }
-      for (i = 0; i < pad.axes.length; i++) {
-        var v = pad.axes[i];
-        var ax = document.getElementById('gp-a' + i);
-        var aname = (pad.mapping === 'standard' && STANDARD_AXIS[i])
-          ? STANDARD_AXIS[i] : ('a' + i);
-        if (ax) {
-          ax.classList.toggle('moved', Math.abs(v) > 0.15);
-          ax.textContent = aname + '  ' + (typeof v === 'number' ? v.toFixed(3) : '—');
-        }
-      }
-      if (nowEl) {
-        nowEl.textContent = down.length
-          ? '刚才按下：' + down.join('  |  ')
-          : (state.probeLog[0] ? '刚才按下：' + state.probeLog[0] : '按任意键，这里显示 b 编号');
-      }
-    }
+    api._onRcChannels = function (ev) {
+      applyG20(ev);
+    };
 
     function poll() {
-      var pad = firstPad();
-
-      if (!pad) {
-        if (state.connected) {
-          // 手柄掉线必须立刻归零。留着最后一次摇杆量，狗会继续走到看门狗超时。
+      var g20 = readNativeG20();
+      if (g20 && g20.connected && g20.ch && g20.ch.length) {
+        applyG20(g20);
+        window.requestAnimationFrame(poll);
+        return;
+      }
+      if (state.source === 'g20') {
+        if (!g20 || g20.connected === false) {
+          state.source = 'none';
           state.connected = false;
           zero();
-          if (state.core) state.core.reset();
-          setStatus();
-          showBanner('手柄已断开，运动量已归零');
-        }
-        if (state.probeOpen) {
-          pollNativeProbe();
-          paintProbe(null);
+          setTalk(false);
         }
         window.requestAnimationFrame(poll);
         return;
       }
 
-      // 换了手柄就要重建。布局字段也纳入判断：同名手柄换了布局虽然罕见，
-      // 但漏判的后果是继续用错的映射推狗，代价远大于多重建一次。
+      var pad = firstPad();
+      if (!pad) {
+        if (state.connected) {
+          state.connected = false;
+          state.source = 'none';
+          zero();
+          if (state.core) state.core.reset();
+          setTalk(false);
+          setStatus();
+          showBanner('手柄已断开，运动量已归零');
+        }
+        window.requestAnimationFrame(poll);
+        return;
+      }
+
       if (!state.connected || state.padId !== pad.id ||
           state.padMapping !== pad.mapping) {
         state.connected = true;
@@ -641,15 +574,6 @@
           state.warned = true;
           showBanner('手柄已连接但布局不认识，请打开诊断页生成映射', 8000);
         }
-      }
-
-      if (state.probeOpen) {
-        pollNativeProbe();
-        paintProbe(pad);
-        zero();
-        if (state.core) state.core.reset();
-        window.requestAnimationFrame(poll);
-        return;
       }
 
       if (!state.core) {
@@ -666,15 +590,13 @@
         setStatus();
       }
       for (var i = 0; i < out.pressed.length; i++) dispatch(out.pressed[i]);
-
       window.requestAnimationFrame(poll);
     }
 
-    // 切后台时归零。app.js 里已经会释放控制权，这里补一刀是因为
-    // requestAnimationFrame 在后台会被暂停，回前台的第一帧可能带着旧值。
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         zero();
+        setTalk(false);
         if (state.core) state.core.reset();
       }
     });
@@ -709,7 +631,7 @@
         state.deadmanOn = !!deadmanEl.checked;
         try {
           window.localStorage.setItem(DEADMAN_KEY, state.deadmanOn ? '1' : '0');
-        } catch (e) { /* 隐私模式下存不了，本次会话内仍然生效 */ }
+        } catch (e) { /* 隐私模式下存不了 */ }
         state.core = buildCore(stored, firstPad());
         setStatus();
         if (state.deadmanOn && !state.hasDeadman) {
@@ -731,160 +653,6 @@
       });
     }
 
-    function refreshProbeBridge() {
-      state.probeNativeKeySeq = -1;
-      state.probeNativeAxisSeq = -1;
-      state.probeRcSeq = -1;
-    }
-
-    var RC_LABEL = {
-      L1: 'L1', L2: 'L2', R1: 'R1', R2: 'R2', B1: 'B1', B2: 'B2',
-      PHOTO: '拍照', WHEEL: '滚轮', H: 'H', PAUSE: '暂停', MODE: '三段'
-    };
-
-    function paintRcProbe(ev) {
-      var box = document.getElementById('gp-probe-rc');
-      if (!box || !ev || !ev.ch) return;
-      if (box.childNodes.length !== ev.ch.length) {
-        box.innerHTML = '';
-        for (var i = 0; i < ev.ch.length; i++) {
-          var cell = document.createElement('div');
-          cell.className = 'gp-rc-ch';
-          cell.id = 'gp-rc-' + i;
-          box.appendChild(cell);
-        }
-      }
-      var binds = ev.binds || {};
-      var nameOf = {};
-      Object.keys(binds).forEach(function (n) { nameOf[binds[n]] = n; });
-      for (var j = 0; j < ev.ch.length; j++) {
-        var el = document.getElementById('gp-rc-' + j);
-        if (!el) continue;
-        var nm = nameOf[j] ? ' ' + (RC_LABEL[nameOf[j]] || nameOf[j]) : '';
-        el.textContent = 'CH' + (j + 1) + '\n' + ev.ch[j] + nm;
-        el.classList.toggle('hit', ev.last === j);
-        el.classList.toggle('moved', Math.abs(ev.ch[j] - 1500) > 80);
-      }
-      if (ev.connected) {
-        var extra = ev.down && ev.down.length
-          ? '  按下：' + ev.down.map(function (n) { return RC_LABEL[n] || n; }).join(' ')
-          : '';
-        setProbeStatus('云卓 ' + (ev.device || 'G20') + ' · ' + ev.ch.length + ' 通道' + extra);
-      } else if (ev.error) {
-        setProbeStatus(ev.error);
-      }
-      if (ev.last >= 0) {
-        var lastName = ev.lastName ? (RC_LABEL[ev.lastName] || ev.lastName) : '';
-        var logKey = ev.last + ':' + ev.lastName + ':' + (ev.down || []).join(',');
-        if (state.probeRcLogKey !== logKey) {
-          state.probeRcLogKey = logKey;
-          noteProbeInput('CH' + (ev.last + 1) + (lastName ? ' ' + lastName : '') +
-            ' = ' + ev.ch[ev.last]);
-        }
-      }
-    }
-
-    function pollNativeProbe() {
-      if (!state.probeOpen || !window.X30Native) return;
-      try {
-        if (window.X30Native.pollRc) {
-          var rcRaw = window.X30Native.pollRc();
-          if (rcRaw) {
-            var rc = typeof rcRaw === 'string' ? JSON.parse(rcRaw) : rcRaw;
-            if (rc && rc.seq !== state.probeRcSeq) {
-              state.probeRcSeq = rc.seq;
-              paintRcProbe(rc);
-            }
-          }
-        }
-        if (window.X30Native.pollKey) {
-          var raw = window.X30Native.pollKey();
-          if (raw) {
-            var ev = JSON.parse(raw);
-            if (ev.seq !== state.probeNativeKeySeq) {
-              state.probeNativeKeySeq = ev.seq;
-              if (ev.down && !ev.repeat) {
-                noteProbeInput((ev.name || 'KEY') + '  keyCode=' + ev.keyCode +
-                  '  scan=' + ev.scanCode + '  device=' + ev.deviceId);
-                setProbeStatus('系统按键通道已收到。这就是安卓层的键值。');
-              }
-            }
-          }
-        }
-        if (window.X30Native.pollAxis) {
-          var axRaw = window.X30Native.pollAxis();
-          if (axRaw) {
-            var ax = JSON.parse(axRaw);
-            if (ax.seq !== state.probeNativeAxisSeq) {
-              state.probeNativeAxisSeq = ax.seq;
-              api._onNativeAxis(ax);
-            }
-          }
-        }
-      } catch (e) { /* 桥还没就绪或返回空串 */ }
-    }
-
-    function noteProbeInput(line) {
-      var nowEl = document.getElementById('gp-probe-now');
-      if (nowEl) nowEl.textContent = '刚才按下：' + line;
-      pushProbeLog(line);
-    }
-
-    api._onRcChannels = function (ev) {
-      if (!state.probeOpen || !ev) return;
-      if (ev.seq === state.probeRcSeq) return;
-      state.probeRcSeq = ev.seq;
-      paintRcProbe(ev);
-    };
-
-    api._onNativeKey = function (ev) {
-      if (!state.probeOpen || !ev || ev.repeat) return;
-      if (!ev.down) return;
-      var line = (ev.name || 'KEY') + '  keyCode=' + ev.keyCode +
-        '  scan=' + ev.scanCode + '  device=' + ev.deviceId;
-      noteProbeInput(line);
-      setProbeStatus('系统按键通道已收到。这就是安卓层的键值。');
-    };
-
-    api._onNativeAxis = function (ev) {
-      if (!state.probeOpen || !ev) return;
-      var parts = [];
-      var names = ['lx', 'ly', 'rx', 'ry', 'lt', 'rt', 'hatx', 'haty'];
-      for (var i = 0; i < names.length; i++) {
-        var n = names[i];
-        if (typeof ev[n] === 'number' && Math.abs(ev[n]) > 0.12) {
-          parts.push(n + '=' + ev[n].toFixed(2));
-        }
-      }
-      var box = document.getElementById('gp-probe-axes');
-      if (box && parts.length) {
-        box.textContent = '轴  ' + parts.join('  ');
-      }
-    };
-
-    document.addEventListener('keydown', function (e) {
-      if (!state.probeOpen) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.repeat) return;
-      noteProbeInput(
-        'key ' + (e.code || '') + '  keyCode=' + e.keyCode + '  key=' + e.key);
-      setProbeStatus('网页键盘通道已收到。若这是手柄，就用上面这组数。');
-    }, true);
-
-    var probeBtn = document.getElementById('btn-probe');
-    if (probeBtn) {
-      probeBtn.addEventListener('click', function () {
-        setProbeOpen(!state.probeOpen);
-      });
-    }
-    var probeClose = document.getElementById('gp-probe-close');
-    if (probeClose) {
-      probeClose.addEventListener('click', function () {
-        setProbeOpen(false);
-      });
-    }
-
     setStatus();
     poll();
   }
@@ -893,7 +661,7 @@
   api.channels = function () {
     return { fwd: state.channels.fwd, lat: state.channels.lat,
              turn: state.channels.turn, tilt: state.channels.tilt,
-             engaged: state.engaged };
+             engaged: state.engaged, source: state.source };
   };
   return api;
 });

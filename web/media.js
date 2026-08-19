@@ -309,25 +309,30 @@ function talkStop() {
 // 接线
 // ---------------------------------------------------------------------------
 
+let talkBanner = null;
+
+function setTalk(on, showBanner) {
+  const talkBtns = document.querySelectorAll('.btn-talk');
+  talkBtns.forEach((b) => b.classList.toggle('active', on));
+  if (on) talkStart(showBanner || talkBanner);
+  else talkStop();
+}
+
 function initMedia(sendFn, showBanner) {
   sendRef = sendFn;
+  talkBanner = showBanner;
   reportCaps(sendFn);
 
   const talkBtns = document.querySelectorAll('.btn-talk');
-  const setTalk = (on) => {
-    talkBtns.forEach((b) => b.classList.toggle('active', on));
-  };
   talkBtns.forEach((talkBtn) => {
     const down = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      setTalk(true);
-      talkStart(showBanner);
+      setTalk(true, showBanner);
     };
     const up = (e) => {
       e.preventDefault();
-      setTalk(false);
-      talkStop();
+      setTalk(false, showBanner);
     };
     talkBtn.addEventListener('pointerdown', down);
     talkBtn.addEventListener('pointerup', up);
@@ -346,4 +351,4 @@ function initMedia(sendFn, showBanner) {
   });
 }
 
-window.X30Media = { initMedia, onMediaPlan, stopAll, onLayout };
+window.X30Media = { initMedia, onMediaPlan, stopAll, onLayout, setTalk };

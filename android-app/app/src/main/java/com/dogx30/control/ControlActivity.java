@@ -16,11 +16,9 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 /**
@@ -34,7 +32,6 @@ public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
     private TextView overlay;
-    private RcHud rcHud;
     private String url;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
@@ -56,8 +53,6 @@ public class ControlActivity extends AppCompatActivity {
         goImmersive();
 
         overlay = findViewById(R.id.overlay);
-        FrameLayout rcHost = findViewById(R.id.rc_host);
-        rcHud = new RcHud(rcHost, RcHud.Mode.COMPACT);
         web = findViewById(R.id.web);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
@@ -137,16 +132,10 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     public static class NativeBridge {
-        volatile boolean probeOpen;
         volatile String lastKey = "";
         volatile String lastAxis = "";
         private int keySeq;
         private int axisSeq;
-
-        @JavascriptInterface
-        public void setProbeOpen(boolean open) {
-            probeOpen = open;
-        }
 
         @JavascriptInterface
         public String pollKey() {
@@ -206,11 +195,6 @@ public class ControlActivity extends AppCompatActivity {
         }
     }
 
-    private static boolean isProbeKey(int code) {
-        return KeyEvent.isGamepadButton(code)
-                || (code >= KeyEvent.KEYCODE_DPAD_UP && code <= KeyEvent.KEYCODE_DPAD_CENTER);
-    }
-
     private void injectRc(G20Rc.Snapshot snap) {
         if (web == null) return;
         web.evaluateJavascript(
@@ -254,9 +238,6 @@ public class ControlActivity extends AppCompatActivity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         injectKey(event);
-        if (nativeBridge.probeOpen && isProbeKey(event.getKeyCode())) {
-            return true;
-        }
         return super.dispatchKeyEvent(event);
     }
 
@@ -266,7 +247,6 @@ public class ControlActivity extends AppCompatActivity {
         if ((sources & InputDevice.SOURCE_CLASS_JOYSTICK) != 0
                 && event.getAction() == MotionEvent.ACTION_MOVE) {
             injectAxes(event);
-            if (nativeBridge.probeOpen) return true;
         }
         return super.dispatchGenericMotionEvent(event);
     }
@@ -279,7 +259,6 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
-        if (rcHud != null) rcHud.detach();
         G20Rc.get().removeListener(rcToJs);
         super.onPause();
         // 切后台时页面里的 visibilitychange 会发 release 停车，
@@ -290,7 +269,6 @@ public class ControlActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (rcHud != null) rcHud.attach();
         G20Rc.get().addListener(rcToJs);
         web.onResume();
     }

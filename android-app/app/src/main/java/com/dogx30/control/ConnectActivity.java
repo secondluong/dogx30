@@ -7,7 +7,6 @@ import android.os.Bundle;
 import android.text.TextUtils;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -15,7 +14,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-/** 连接页：填写 RK3588 地址，并现场看 G20 通道是否在跳。 */
+/** 连接页：填写 RK3588 地址并校验可达性。 */
 public class ConnectActivity extends AppCompatActivity {
 
     static final String PREFS = "x30";
@@ -26,7 +25,6 @@ public class ConnectActivity extends AppCompatActivity {
     private EditText portInput;
     private Button connectButton;
     private TextView hint;
-    private RcHud rcHud;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,21 +41,6 @@ public class ConnectActivity extends AppCompatActivity {
         portInput.setText(String.valueOf(prefs.getInt(KEY_PORT, 8080)));
 
         connectButton.setOnClickListener(v -> attemptConnect());
-
-        FrameLayout host = findViewById(R.id.rc_host);
-        rcHud = new RcHud(host, RcHud.Mode.FULL);
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (rcHud != null) rcHud.attach();
-    }
-
-    @Override
-    protected void onPause() {
-        if (rcHud != null) rcHud.detach();
-        super.onPause();
     }
 
     private void attemptConnect() {

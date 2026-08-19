@@ -20,12 +20,4 @@
         android:textSize="15sp"
         android:lineSpacingMultiplier="1.5"
         android:visibility="gone" />
-
-    <FrameLayout
-        android:id="@+id/rc_host"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:background="#CC161B22" />
-
 </FrameLayout>
