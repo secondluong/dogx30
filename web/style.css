@@ -773,6 +773,25 @@ body {
   margin-bottom: 10px;
   user-select: text;
 }
+.gp-probe-rc {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.gp-rc-ch {
+  text-align: center;
+  padding: 6px 4px;
+  border-radius: 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.gp-rc-ch.hit { background: var(--ok, #3fb950); border-color: var(--ok, #3fb950); color: #fff; }
+.gp-rc-ch.moved { color: var(--text); }
 .gp-probe-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .gp-bchip {
   min-width: 52px;

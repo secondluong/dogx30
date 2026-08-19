@@ -16,6 +16,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
@@ -33,9 +34,10 @@ public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
     private TextView overlay;
-    private TextView keyStrip;
+    private RcHud rcHud;
     private String url;
     private final NativeBridge nativeBridge = new NativeBridge();
+    private final G20Rc.Listener rcToJs = this::injectRc;
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
@@ -54,7 +56,8 @@ public class ControlActivity extends AppCompatActivity {
         goImmersive();
 
         overlay = findViewById(R.id.overlay);
-        keyStrip = findViewById(R.id.key_strip);
+        FrameLayout rcHost = findViewById(R.id.rc_host);
+        rcHud = new RcHud(rcHost, RcHud.Mode.COMPACT);
         web = findViewById(R.id.web);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
@@ -156,6 +159,11 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public String pollRc() {
+            return G20Rc.get().pollJson();
+        }
+
+        @JavascriptInterface
         public String devices() {
             StringBuilder sb = new StringBuilder();
             int[] ids = InputDevice.getDeviceIds();
@@ -203,15 +211,16 @@ public class ControlActivity extends AppCompatActivity {
                 || (code >= KeyEvent.KEYCODE_DPAD_UP && code <= KeyEvent.KEYCODE_DPAD_CENTER);
     }
 
+    private void injectRc(G20Rc.Snapshot snap) {
+        if (web == null) return;
+        web.evaluateJavascript(
+                "window.X30Gamepad&&X30Gamepad.onRcChannels&&X30Gamepad.onRcChannels("
+                        + snap.toJson() + ")",
+                null);
+    }
+
     private void injectKey(KeyEvent event) {
         nativeBridge.rememberKey(event);
-        if (keyStrip != null && event.getAction() == KeyEvent.ACTION_DOWN
-                && event.getRepeatCount() == 0) {
-            keyStrip.setText(getString(R.string.key_strip_event,
-                    KeyEvent.keyCodeToString(event.getKeyCode()),
-                    event.getKeyCode(),
-                    event.getScanCode()));
-        }
         if (web == null) return;
         String name = KeyEvent.keyCodeToString(event.getKeyCode());
         if (name == null) name = "UNKNOWN";
@@ -270,6 +279,8 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        if (rcHud != null) rcHud.detach();
+        G20Rc.get().removeListener(rcToJs);
         super.onPause();
         // 切后台时页面里的 visibilitychange 会发 release 停车，
         // 这里再显式停一次 JS 定时器，避免系统节流下指令断续送达。
@@ -279,6 +290,8 @@ public class ControlActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (rcHud != null) rcHud.attach();
+        G20Rc.get().addListener(rcToJs);
         web.onResume();
     }
 

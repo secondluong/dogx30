@@ -5,10 +5,9 @@ import android.content.SharedPreferences;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.TextUtils;
-import android.view.KeyEvent;
-import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -16,7 +15,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
-/** 连接页：填写 RK3588 地址并校验可达性。 */
+/** 连接页：填写 RK3588 地址，并现场看 G20 通道是否在跳。 */
 public class ConnectActivity extends AppCompatActivity {
 
     static final String PREFS = "x30";
@@ -27,7 +26,7 @@ public class ConnectActivity extends AppCompatActivity {
     private EditText portInput;
     private Button connectButton;
     private TextView hint;
-    private TextView keyStrip;
+    private RcHud rcHud;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,43 +37,27 @@ public class ConnectActivity extends AppCompatActivity {
         portInput = findViewById(R.id.input_port);
         connectButton = findViewById(R.id.btn_connect);
         hint = findViewById(R.id.hint);
-        keyStrip = findViewById(R.id.key_strip);
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         hostInput.setText(prefs.getString(KEY_HOST, "192.168.1.120"));
         portInput.setText(String.valueOf(prefs.getInt(KEY_PORT, 8080)));
 
         connectButton.setOnClickListener(v -> attemptConnect());
-        if (keyStrip != null) {
-            keyStrip.setOnClickListener(v -> {
-                keyStrip.setBackgroundColor(0xFF3FB950);
-                keyStrip.setText(R.string.key_strip_tap);
-            });
-            keyStrip.requestFocus();
-        }
-    }
 
-    private void showKey(KeyEvent event) {
-        if (keyStrip == null) return;
-        if (event.getAction() != KeyEvent.ACTION_DOWN) return;
-        if (event.getRepeatCount() > 0) return;
-        keyStrip.setBackgroundColor(0xFF3FB950);
-        keyStrip.setText(getString(R.string.key_strip_event,
-                KeyEvent.keyCodeToString(event.getKeyCode()),
-                event.getKeyCode(),
-                event.getScanCode()));
+        FrameLayout host = findViewById(R.id.rc_host);
+        rcHud = new RcHud(host, RcHud.Mode.FULL);
     }
 
     @Override
-    public boolean dispatchKeyEvent(KeyEvent event) {
-        showKey(event);
-        return super.dispatchKeyEvent(event);
+    protected void onResume() {
+        super.onResume();
+        if (rcHud != null) rcHud.attach();
     }
 
     @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        showKey(event);
-        return super.onKeyDown(keyCode, event);
+    protected void onPause() {
+        if (rcHud != null) rcHud.detach();
+        super.onPause();
     }
 
     private void attemptConnect() {
@@ -93,8 +76,6 @@ public class ConnectActivity extends AppCompatActivity {
         }
 
         setBusy(true);
-        // 先探一次 HTTP 再进遥控页。直接跳过去的话，地址填错只会看到一片白屏，
-        // 现场根本判断不出是网关没起、网段不通还是地址打错。
         new ProbeTask(this, host, port).execute();
     }
 
@@ -121,7 +102,6 @@ public class ConnectActivity extends AppCompatActivity {
         startActivity(intent);
     }
 
-    /** 静态内部类 + 弱引用不必要：任务只有 4 秒，且 Activity 不会在期间被回收。 */
     private static class ProbeTask extends AsyncTask<Void, Void, String> {
         private final ConnectActivity activity;
         private final String host;

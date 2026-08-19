@@ -48,14 +48,16 @@
       <button type="button" class="btn sm" id="gp-probe-close">关闭</button>
     </div>
     <p class="gp-probe-hint">
-      原厂 2.4G 手柄是无线电直连运动主机的，平板收不到，这里不会亮。
-      请先按平板自己的音量键：底栏变字说明 App 是新包。再按 USB / 蓝牙手柄。
+      这台平板是云卓 G20。L1/L2/R1/R2/B1/B2、拍照键和滚轮走 RCSDK 通道，不是安卓 keyCode。
+      先关掉云卓助手，装 App 0.3.0。连接页或这里会显示 CH1–CH16 的 PWM 值。
+      原厂 2.4G 无线电手柄仍直连运动主机，这里不会亮。
     </p>
     <div id="gp-probe-apk" class="gp-probe-warn hidden">
-      当前 App 还是旧包，系统按键进不来。只刷新网页不够，请用电脑打开 android-app 重装 APK。
+      当前 App 还没有 RCSDK。只刷新网页不够，请重装 android-app 的 0.3.0 APK。
     </div>
     <div id="gp-probe-status" class="gp-probe-ref">正在听按键……</div>
     <div id="gp-probe-now" class="gp-probe-now">按下手柄任意键</div>
+    <div id="gp-probe-rc" class="gp-probe-rc"></div>
     <div id="gp-probe-btns" class="gp-probe-btns"></div>
     <div id="gp-probe-axes" class="gp-probe-axes"></div>
     <ol id="gp-probe-log" class="gp-probe-log"></ol>

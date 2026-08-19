@@ -1,0 +1,2 @@
+-keep class com.skydroid.** { *; }
+-dontwarn com.skydroid.**

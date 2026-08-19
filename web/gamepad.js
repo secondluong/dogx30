@@ -262,6 +262,9 @@
     onNativeAxis: function (ev) {
       if (api._onNativeAxis) api._onNativeAxis(ev);
     },
+    onRcChannels: function (ev) {
+      if (api._onRcChannels) api._onRcChannels(ev);
+    },
   };
 
   // --- 浏览器侧 -------------------------------------------------------------
@@ -287,6 +290,8 @@
     probeBuilt: '',
     probeNativeKeySeq: -1,
     probeNativeAxisSeq: -1,
+    probeRcSeq: -1,
+    probeRcLogKey: '',
     probeWarnedNoApi: false,
   };
 
@@ -492,16 +497,19 @@
         paintProbe(firstPad());
         refreshProbeBridge();
         var apk = document.getElementById('gp-probe-apk');
+        var hasRc = !!(window.X30Native && window.X30Native.pollRc);
         var hasBridge = !!(window.X30Native && window.X30Native.pollKey);
-        if (apk) apk.classList.toggle('hidden', hasBridge);
-        if (hasBridge) {
-          setProbeStatus('系统键通道已接通。请按手柄。');
+        if (apk) apk.classList.toggle('hidden', hasRc || hasBridge);
+        if (hasRc) {
+          setProbeStatus('云卓 RCSDK 通道已接通。按 L1/L2 等，看哪路 CH 变绿。');
+        } else if (hasBridge) {
+          setProbeStatus('系统键通道已接通。G20 实体键还要 App 0.3.0。');
           try {
             var dev = window.X30Native.devices ? window.X30Native.devices() : '';
             if (dev) setProbeStatus('系统键通道已接通。设备：' + dev);
           } catch (e2) { /* 旧桥没有 devices */ }
         } else {
-          setProbeStatus('只有网页通道。若按键没反应，需要重装最新 APK。');
+          setProbeStatus('只有网页通道。G20 请重装 App 0.3.0。');
         }
       }
     }
@@ -726,11 +734,69 @@
     function refreshProbeBridge() {
       state.probeNativeKeySeq = -1;
       state.probeNativeAxisSeq = -1;
+      state.probeRcSeq = -1;
+    }
+
+    var RC_LABEL = {
+      L1: 'L1', L2: 'L2', R1: 'R1', R2: 'R2', B1: 'B1', B2: 'B2',
+      PHOTO: '拍照', WHEEL: '滚轮', H: 'H', PAUSE: '暂停', MODE: '三段'
+    };
+
+    function paintRcProbe(ev) {
+      var box = document.getElementById('gp-probe-rc');
+      if (!box || !ev || !ev.ch) return;
+      if (box.childNodes.length !== ev.ch.length) {
+        box.innerHTML = '';
+        for (var i = 0; i < ev.ch.length; i++) {
+          var cell = document.createElement('div');
+          cell.className = 'gp-rc-ch';
+          cell.id = 'gp-rc-' + i;
+          box.appendChild(cell);
+        }
+      }
+      var binds = ev.binds || {};
+      var nameOf = {};
+      Object.keys(binds).forEach(function (n) { nameOf[binds[n]] = n; });
+      for (var j = 0; j < ev.ch.length; j++) {
+        var el = document.getElementById('gp-rc-' + j);
+        if (!el) continue;
+        var nm = nameOf[j] ? ' ' + (RC_LABEL[nameOf[j]] || nameOf[j]) : '';
+        el.textContent = 'CH' + (j + 1) + '\n' + ev.ch[j] + nm;
+        el.classList.toggle('hit', ev.last === j);
+        el.classList.toggle('moved', Math.abs(ev.ch[j] - 1500) > 80);
+      }
+      if (ev.connected) {
+        var extra = ev.down && ev.down.length
+          ? '  按下：' + ev.down.map(function (n) { return RC_LABEL[n] || n; }).join(' ')
+          : '';
+        setProbeStatus('云卓 ' + (ev.device || 'G20') + ' · ' + ev.ch.length + ' 通道' + extra);
+      } else if (ev.error) {
+        setProbeStatus(ev.error);
+      }
+      if (ev.last >= 0) {
+        var lastName = ev.lastName ? (RC_LABEL[ev.lastName] || ev.lastName) : '';
+        var logKey = ev.last + ':' + ev.lastName + ':' + (ev.down || []).join(',');
+        if (state.probeRcLogKey !== logKey) {
+          state.probeRcLogKey = logKey;
+          noteProbeInput('CH' + (ev.last + 1) + (lastName ? ' ' + lastName : '') +
+            ' = ' + ev.ch[ev.last]);
+        }
+      }
     }
 
     function pollNativeProbe() {
       if (!state.probeOpen || !window.X30Native) return;
       try {
+        if (window.X30Native.pollRc) {
+          var rcRaw = window.X30Native.pollRc();
+          if (rcRaw) {
+            var rc = typeof rcRaw === 'string' ? JSON.parse(rcRaw) : rcRaw;
+            if (rc && rc.seq !== state.probeRcSeq) {
+              state.probeRcSeq = rc.seq;
+              paintRcProbe(rc);
+            }
+          }
+        }
         if (window.X30Native.pollKey) {
           var raw = window.X30Native.pollKey();
           if (raw) {
@@ -763,6 +829,13 @@
       if (nowEl) nowEl.textContent = '刚才按下：' + line;
       pushProbeLog(line);
     }
+
+    api._onRcChannels = function (ev) {
+      if (!state.probeOpen || !ev) return;
+      if (ev.seq === state.probeRcSeq) return;
+      state.probeRcSeq = ev.seq;
+      paintRcProbe(ev);
+    };
 
     api._onNativeKey = function (ev) {
       if (!state.probeOpen || !ev || ev.repeat) return;
