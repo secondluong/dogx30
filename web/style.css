@@ -69,7 +69,8 @@ body {
 .chip.online .dot { background: var(--ok); }
 .chip.online { color: var(--text); }
 
-.bar-right { display: flex; gap: 10px; }
+.bar-right { display: flex; align-items: center; gap: 10px; }
+.bar-view { display: none; position: relative; }
 
 /* ---------- 按钮 ---------- */
 
@@ -200,23 +201,40 @@ body {
   border-color: var(--danger);
   color: #fff;
 }
-.pane-cloud-ctl {
+.hud-cloud-settings {
+  display: none;
   position: absolute;
   top: 10px;
   left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+}
+.stage.layout-1x1 .pane.is-main .hud-cloud-settings { display: block; }
+
+/* 从顶部按钮往下展开。横排换行，不要再竖着挤，分段字会被裁成色块。 */
+.pane-cloud-ctl {
+  position: absolute;
+  top: 50px;
+  left: 50%;
   bottom: auto;
   transform: translateX(-50%);
-  z-index: 6;
+  z-index: 8;
   display: flex;
+  flex-direction: row;
   align-items: center;
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px 8px;
   margin-top: 0;
-  max-width: min(980px, calc(100% - 240px));
-  padding: 5px 10px;
+  max-width: min(920px, calc(100% - 32px));
+  max-height: none;
+  overflow: visible;
+  padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(13, 17, 23, .78);
+  background: rgba(13, 17, 23, .92);
+  border: 1px solid var(--line);
   backdrop-filter: blur(6px);
   pointer-events: auto;
 }
@@ -249,7 +267,8 @@ body {
 .stage.layout-1x1 .pane.is-pip .cloud-idle,
 .stage.layout-1x1 .pane.is-pip .media-idle { border-radius: 9px; }
 .stage.layout-1x1 .pane.is-pip .pip-hint { display: block; }
-.stage.layout-1x1 .pane.is-pip .pane-cloud-ctl { display: none; }
+.stage.layout-1x1 .pane.is-pip .pane-cloud-ctl,
+.stage.layout-1x1 .pane.is-pip .hud-cloud-settings { display: none; }
 
 /* 2×2：四块均分 */
 .stage.layout-2x2 {
@@ -266,7 +285,8 @@ body {
   cursor: pointer;
 }
 .stage.layout-2x2 .pip-hint { display: none; }
-.stage.layout-2x2 .pane-cloud-ctl { display: none !important; }
+.stage.layout-2x2 .pane-cloud-ctl,
+.stage.layout-2x2 .hud-cloud-settings { display: none !important; }
 
 .pip-hint {
   display: none;
@@ -420,7 +440,7 @@ body {
 }
 .media-idle { background: rgba(13, 18, 24, .82); }
 
-.cloud-ctl { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+/* 点云菜单的排版在 .pane-cloud-ctl，这里不再设 display，避免盖掉 .hidden。 */
 
 .cloud-seg {
   display: inline-flex;
@@ -436,6 +456,8 @@ body {
   padding: 5px 9px;
   font-size: 12px;
   background: transparent;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .cloud-seg .btn + .btn { border-left: 1px solid var(--line); }
 .cloud-seg .btn.active {
@@ -476,11 +498,7 @@ body {
   color: #fff;
 }
 
-#btn-cloud.active {
-  background: var(--ok);
-  color: #06210d;
-  font-weight: 600;
-}
+.pane-cloud-ctl .cloud-seg { flex: 0 0 auto; }
 
 /* 按住说话时给个明确的按下态 —— 操作员必须一眼看出麦克风开着没有。 */
 #btn-talk.active,
@@ -702,6 +720,83 @@ body {
   user-select: text;
 }
 
+.gp-probe-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 56px 16px 16px;
+  background: rgba(0, 0, 0, .55);
+}
+.gp-probe-panel {
+  width: min(760px, 100%);
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+}
+.gp-probe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.gp-probe-hint, .gp-probe-ref {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin: 0 0 10px;
+}
+.gp-probe-now {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 15px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  margin-bottom: 10px;
+  user-select: text;
+}
+.gp-probe-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.gp-bchip {
+  min-width: 52px;
+  text-align: center;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+.gp-bchip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gp-probe-axes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+.gp-ax { padding: 4px 0; }
+.gp-ax.moved { color: var(--accent); }
+.gp-probe-log {
+  margin: 0;
+  padding-left: 18px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.7;
+  user-select: text;
+}
+
 /* ---------- HUD 叠加（按原厂手柄：键浮在底图上） ---------- */
 
 .hud-swap, .hud-telem-btn, .hud-gp-btn, .hud-sticks-btn {
@@ -761,8 +856,7 @@ body {
 .hud-gp-btn { top: 50px; }
 .hud-sticks-btn { top: 90px; }
 
-/* 网页默认不出现。只有安卓壳（html.shell-app）才显示底图切换。 */
-.hud-view-btn,
+/* 网页默认不出现。只有安卓壳（html.shell-app）才在顶栏露出背景切换。 */
 .hud-view-pop { display: none; }
 html.shell-app .hud-layout-bar,
 html.shell-app #hud-layout,
@@ -770,26 +864,19 @@ html.shell-app .hud-gp-btn,
 html.shell-app .hud-sticks-btn,
 html.shell-app .hud-gp,
 html.shell-app .hud-sticks { display: none !important; }
-html.shell-app .hud-view-btn {
-  display: block;
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 13;
-  background: rgba(28, 34, 48, .78);
-  backdrop-filter: blur(6px);
-}
+html.shell-app .bar-view { display: block; }
 html.shell-app .hud-view-pop {
   position: absolute;
-  top: 48px;
-  left: 10px;
-  z-index: 13;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
   flex-direction: column;
   min-width: 168px;
   padding: 6px;
   border-radius: 10px;
-  background: rgba(13, 17, 23, .92);
+  background: rgba(13, 17, 23, .96);
   border: 1px solid var(--line);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
 }
 html.shell-app .hud-view-pop:not(.hidden) { display: flex; }
 html.shell-app .hud-view-pop .btn { border-radius: 0; text-align: left; }

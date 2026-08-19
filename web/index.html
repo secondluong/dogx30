@@ -20,6 +20,17 @@
   </div>
 
   <div class="bar-right">
+    <button type="button" class="btn btn-ghost" id="btn-probe">键值</button>
+    <!-- 仅安卓壳显示：顶栏切背景。网页直接打开时由 CSS 藏掉。 -->
+    <div class="bar-view" id="bar-view">
+      <button type="button" class="btn btn-ghost" id="btn-view">背景</button>
+      <div id="hud-view-pop" class="hud-view-pop hidden">
+        <button type="button" class="btn" data-view-pick="dog_cam">机身相机</button>
+        <button type="button" class="btn" data-view-pick="ptz_vis">布控球 白光</button>
+        <button type="button" class="btn" data-view-pick="ptz_ir">布控球 热成像</button>
+        <button type="button" class="btn" data-view-pick="cloud">激光点云</button>
+      </div>
+    </div>
     <!-- 网关以 --config 启动时才显示，由 hello 的 config 能力位控制 -->
     <button class="btn btn-ghost hidden" id="btn-settings">设置</button>
     <button class="btn btn-ghost" id="btn-control">申请控制权</button>
@@ -28,6 +39,28 @@
 </header>
 
 <div id="banner" class="banner hidden"></div>
+
+<!-- 打开期间手柄按键不发运动指令，只用来记键值。 -->
+<div id="gp-probe" class="gp-probe-mask hidden">
+  <div class="gp-probe-panel">
+    <div class="gp-probe-head">
+      <span>手柄键值探测</span>
+      <button type="button" class="btn sm" id="gp-probe-close">关闭</button>
+    </div>
+    <p class="gp-probe-hint">
+      打开后请直接按手柄实体键。平板上很多手柄不走浏览器 Gamepad，而走系统键值，这里两种都听。
+      探测期间按键不会点到页面上的按钮，也不会起立或起步。
+    </p>
+    <div id="gp-probe-status" class="gp-probe-ref">正在听按键……</div>
+    <div id="gp-probe-now" class="gp-probe-now">按下手柄任意键</div>
+    <div id="gp-probe-btns" class="gp-probe-btns"></div>
+    <div id="gp-probe-axes" class="gp-probe-axes"></div>
+    <ol id="gp-probe-log" class="gp-probe-log"></ol>
+    <p class="gp-probe-ref">
+      标准布局默认：b0 坐/站 · b1 起步 · b2 力控 · b4 步态下 · b5 步态上。急停没有默认，避免按错。
+    </p>
+  </div>
+</div>
 
 <!-- 网关设置。改完要重启网关，所以既要令牌，也要求当前没人持有控制权。 -->
 <div id="settings" class="set-mask hidden">
@@ -119,7 +152,7 @@
         <div class="placeholder cloud-idle" id="cloud-idle">
           <div class="ph-icon">⁘</div>
           <p>点云未订阅</p>
-          <small>点顶部订阅后才连感知主机。累积和轨迹在本机用里程计对齐，不额外占带宽。</small>
+          <small>进入点云画面后自动向感知主机订阅。累积和轨迹在本机用里程计对齐，不额外占带宽。</small>
         </div>
       </div>
       <div class="pane-label">
@@ -130,8 +163,8 @@
         <button type="button" class="btn sm" data-capture="shot">截图</button>
         <button type="button" class="btn sm btn-rec" data-capture="rec">录屏</button>
       </div>
-      <div class="cloud-ctl pane-cloud-ctl" id="cloud-ctl">
-        <button class="btn sm" id="btn-cloud">订阅点云</button>
+      <button type="button" class="btn sm hud-cloud-settings" id="btn-cloud-settings">点云设置</button>
+      <div class="cloud-ctl pane-cloud-ctl hidden" id="cloud-ctl">
         <div class="cloud-seg" id="cloud-mode">
           <button type="button" class="btn sm active" data-cloud-mode="live">实时</button>
           <button type="button" class="btn sm" data-cloud-mode="persist">持久地图</button>
@@ -175,14 +208,6 @@
   <div class="hud-layout-bar">
     <button type="button" class="btn sm hud-swap" id="btn-swap" title="在一主三小和四宫格之间切换">2×2</button>
     <button type="button" class="btn sm" id="btn-media">画面</button>
-  </div>
-  <!-- 仅安卓壳（?shell=app）显示：小屏用这一张底图切换，网页里由 CSS 藏掉。 -->
-  <button type="button" class="btn sm hud-view-btn" id="btn-view">底图</button>
-  <div id="hud-view-pop" class="hud-view-pop hidden">
-    <button type="button" class="btn" data-view-pick="dog_cam">机身相机</button>
-    <button type="button" class="btn" data-view-pick="ptz_vis">布控球 白光</button>
-    <button type="button" class="btn" data-view-pick="ptz_ir">布控球 热成像</button>
-    <button type="button" class="btn" data-view-pick="cloud">激光点云</button>
   </div>
   <div id="hud-layout" class="hud-layout hidden">
     <span class="tag" id="media-budget">—</span>

@@ -5,8 +5,12 @@ import android.app.AlertDialog;
 import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -30,6 +34,7 @@ public class ControlActivity extends AppCompatActivity {
     private WebView web;
     private TextView overlay;
     private String url;
+    private final NativeBridge nativeBridge = new NativeBridge();
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
@@ -39,7 +44,7 @@ public class ControlActivity extends AppCompatActivity {
 
         String host = getIntent().getStringExtra(ConnectActivity.KEY_HOST);
         int port = getIntent().getIntExtra(ConnectActivity.KEY_PORT, 8080);
-        // shell=app：控制台走平板小屏布局（单底图切换，不要虚拟摇杆）。
+        // shell=app：控制台走平板小屏布局（单背景切换，不要虚拟摇杆）。
         // 网页直接打开 / 时不受影响。
         url = "http://" + host + ":" + port + "/index.html?shell=app";
 
@@ -49,6 +54,9 @@ public class ControlActivity extends AppCompatActivity {
 
         overlay = findViewById(R.id.overlay);
         web = findViewById(R.id.web);
+        web.setFocusable(true);
+        web.setFocusableInTouchMode(true);
+        web.requestFocus();
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -59,6 +67,9 @@ public class ControlActivity extends AppCompatActivity {
             s.setSafeBrowsingEnabled(false);  // 内网地址，联网校验只会拖慢加载
         }
 
+        // 工业平板上的手柄常常只走系统 KeyEvent，不进浏览器 Gamepad API。
+        web.addJavascriptInterface(nativeBridge, "X30Native");
+
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String u, Bitmap favicon) {
@@ -68,6 +79,7 @@ public class ControlActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String u) {
                 hideOverlay();
+                view.requestFocus();
             }
 
             @Override
@@ -117,6 +129,70 @@ public class ControlActivity extends AppCompatActivity {
                         | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    public static class NativeBridge {
+        volatile boolean probeOpen;
+
+        @JavascriptInterface
+        public void setProbeOpen(boolean open) {
+            probeOpen = open;
+        }
+    }
+
+    private static boolean isProbeKey(int code) {
+        return KeyEvent.isGamepadButton(code)
+                || (code >= KeyEvent.KEYCODE_DPAD_UP && code <= KeyEvent.KEYCODE_DPAD_CENTER);
+    }
+
+    private void injectKey(KeyEvent event) {
+        if (web == null) return;
+        String name = KeyEvent.keyCodeToString(event.getKeyCode());
+        if (name == null) name = "UNKNOWN";
+        String js = "window.X30Gamepad&&X30Gamepad.onNativeKey&&X30Gamepad.onNativeKey({"
+                + "down:" + (event.getAction() == KeyEvent.ACTION_DOWN) + ","
+                + "repeat:" + event.getRepeatCount() + ","
+                + "keyCode:" + event.getKeyCode() + ","
+                + "scanCode:" + event.getScanCode() + ","
+                + "deviceId:" + event.getDeviceId() + ","
+                + "name:\"" + name + "\""
+                + "})";
+        web.evaluateJavascript(js, null);
+    }
+
+    private void injectAxes(MotionEvent event) {
+        if (web == null) return;
+        String js = "window.X30Gamepad&&X30Gamepad.onNativeAxis&&X30Gamepad.onNativeAxis({"
+                + "lx:" + event.getAxisValue(MotionEvent.AXIS_X) + ","
+                + "ly:" + event.getAxisValue(MotionEvent.AXIS_Y) + ","
+                + "rx:" + event.getAxisValue(MotionEvent.AXIS_Z) + ","
+                + "ry:" + event.getAxisValue(MotionEvent.AXIS_RZ) + ","
+                + "lt:" + event.getAxisValue(MotionEvent.AXIS_LTRIGGER) + ","
+                + "rt:" + event.getAxisValue(MotionEvent.AXIS_RTRIGGER) + ","
+                + "hatx:" + event.getAxisValue(MotionEvent.AXIS_HAT_X) + ","
+                + "haty:" + event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+                + "})";
+        web.evaluateJavascript(js, null);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        injectKey(event);
+        if (nativeBridge.probeOpen && isProbeKey(event.getKeyCode())) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        int sources = event.getSource();
+        if ((sources & InputDevice.SOURCE_CLASS_JOYSTICK) != 0
+                && event.getAction() == MotionEvent.ACTION_MOVE) {
+            injectAxes(event);
+            if (nativeBridge.probeOpen) return true;
+        }
+        return super.dispatchGenericMotionEvent(event);
     }
 
     @Override

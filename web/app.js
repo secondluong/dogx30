@@ -548,7 +548,7 @@ function applyLayout() {
   stage.querySelectorAll('.pane').forEach((p) => {
     const isMain = viewLayout.mode === '1x1' && p.dataset.view === viewLayout.main;
     p.classList.toggle('is-main', isMain);
-    // 平板壳只要一张底图，不要一主三小。
+    // 平板壳只要一张背景，不要一主三小。
     p.classList.toggle('is-pip', !isAppShell && viewLayout.mode === '1x1' && !isMain);
     if (!isAppShell && viewLayout.mode === '1x1' && !isMain) {
       p.dataset.pip = String(pip++);
@@ -557,10 +557,15 @@ function applyLayout() {
     }
   });
   $('btn-swap').textContent = viewLayout.mode === '1x1' ? '2×2' : '1×1';
-  // 四宫格格子太小，点云工具条会盖住画面。1×1 放大后再露出来。
-  if ($('cloud-ctl')) {
-    $('cloud-ctl').classList.toggle('hidden',
-      isAppShell ? viewLayout.main !== 'cloud' : viewLayout.mode === '2x2');
+  const cloudMain = viewLayout.mode === '1x1' && viewLayout.main === 'cloud';
+  // 点云菜单默认收着，切走背景时一并关掉，避免下次进来还挂着。
+  if (!cloudMain) {
+    if ($('cloud-ctl')) $('cloud-ctl').classList.add('hidden');
+    if ($('btn-cloud-settings')) $('btn-cloud-settings').classList.remove('active');
+  }
+  // 选点云当背景就订，切到相机/布控球就退。不另放「订阅点云」按钮。
+  if (window.X30Cloud && window.X30Cloud.setWanted) {
+    window.X30Cloud.setWanted(cloudMain);
   }
   syncViewPick();
   requestAnimationFrame(() => {
@@ -600,9 +605,17 @@ document.querySelectorAll('[data-view-pick]').forEach((b) => {
   });
 });
 
+$('btn-cloud-settings').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const ctl = $('cloud-ctl');
+  const open = ctl.classList.contains('hidden');
+  ctl.classList.toggle('hidden', !open);
+  $('btn-cloud-settings').classList.toggle('active', open);
+});
+
 document.querySelectorAll('#stage .pane').forEach((pane) => {
   pane.addEventListener('click', (e) => {
-    if (e.target.closest('button, select, a, input')) return;
+    if (e.target.closest('button, select, a, input, #cloud-ctl')) return;
     const view = pane.dataset.view;
     if (viewLayout.mode === '2x2') {
       viewLayout.mode = '1x1';
@@ -639,7 +652,7 @@ document.querySelectorAll('.acc-btn').forEach((btn) => {
 
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.acc')) closeAccordions();
-  if ($('hud-view-pop') && !e.target.closest('#btn-view, #hud-view-pop')) {
+  if ($('hud-view-pop') && !e.target.closest('#bar-view, #btn-view, #hud-view-pop')) {
     $('hud-view-pop').classList.add('hidden');
     $('btn-view').classList.remove('active');
   }

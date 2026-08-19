@@ -77,6 +77,21 @@
     gait_up: { type: 'button', index: 5 },
   };
 
+  // W3C standard mapping。Xbox / 多数 USB 手柄走这套；非标准布局只显示 bN。
+  var STANDARD_BTN = [
+    'A / 南', 'B / 东', 'X / 西', 'Y / 北',
+    'LB', 'RB', 'LT', 'RT',
+    'Back', 'Start', 'L3', 'R3',
+    '↑', '↓', '←', '→', 'Home',
+  ];
+  var STANDARD_AXIS = ['左摇杆X', '左摇杆Y', '右摇杆X', '右摇杆Y'];
+  var FUNC_LABEL = {
+    stand: '坐/站', step: '起步', torque: '力控',
+    gait_up: '步态上', gait_dn: '步态下',
+    estop: '急停', deadman: '死人开关',
+    vx: '前进/后退', vy: '左右平移', wz: '转向', pitch: '俯仰',
+  };
+
   // --- 纯函数部分（可在 node 里直接测） -----------------------------------
 
   function clamp(v, lo, hi) {
@@ -238,6 +253,15 @@
     makeCore: makeCore,
     nextGait: nextGait,
     validateConfig: validateConfig,
+    STANDARD_BTN: STANDARD_BTN,
+    STANDARD_AXIS: STANDARD_AXIS,
+    FUNC_LABEL: FUNC_LABEL,
+    onNativeKey: function (ev) {
+      if (api._onNativeKey) api._onNativeKey(ev);
+    },
+    onNativeAxis: function (ev) {
+      if (api._onNativeAxis) api._onNativeAxis(ev);
+    },
   };
 
   // --- 浏览器侧 -------------------------------------------------------------
@@ -257,6 +281,10 @@
     deadmanOn: false,
     deadmanHeld: false,
     warned: false,
+    probeOpen: false,
+    probePrev: [],
+    probeLog: [],
+    probeBuilt: '',
   };
 
   function loadStored() {
@@ -384,6 +412,176 @@
       }
     }
 
+    function currentMap() {
+      if (stored && stored.map) return stored.map;
+      if (state.source === 'standard') return STANDARD_MAP;
+      return {};
+    }
+
+    function mappedLabels(kind, index) {
+      var map = currentMap();
+      var hits = [];
+      Object.keys(map).forEach(function (k) {
+        if (map[k] && map[k].type === kind && map[k].index === index) {
+          hits.push(FUNC_LABEL[k] || k);
+        }
+      });
+      return hits;
+    }
+
+    function buttonLabel(pad, i) {
+      var name = (pad && pad.mapping === 'standard' && STANDARD_BTN[i])
+        ? STANDARD_BTN[i] : '';
+      return name ? ('b' + i + ' ' + name) : ('b' + i);
+    }
+
+    function tellNativeProbe(open) {
+      try {
+        if (window.X30Native && window.X30Native.setProbeOpen) {
+          window.X30Native.setProbeOpen(!!open);
+        }
+      } catch (e) { /* 浏览器里没有这个桥 */ }
+    }
+
+    function buttonDown(b) {
+      if (b === undefined || b === null) return false;
+      if (typeof b === 'object') {
+        if (b.pressed) return true;
+        return typeof b.value === 'number' && b.value > 0.5;
+      }
+      return b > 0.5;
+    }
+
+    function buttonValue(b) {
+      if (b === undefined || b === null) return 0;
+      if (typeof b === 'object') {
+        if (typeof b.value === 'number') return b.value;
+        return b.pressed ? 1 : 0;
+      }
+      return +b;
+    }
+
+    function setProbeStatus(text) {
+      var el = document.getElementById('gp-probe-status');
+      if (el) el.textContent = text;
+    }
+
+    function setProbeOpen(open) {
+      state.probeOpen = !!open;
+      var mask = document.getElementById('gp-probe');
+      var btn = document.getElementById('btn-probe');
+      if (mask) mask.classList.toggle('hidden', !state.probeOpen);
+      if (btn) {
+        btn.classList.toggle('active', state.probeOpen);
+        btn.blur();
+      }
+      if (document.activeElement && document.activeElement.blur) {
+        document.activeElement.blur();
+      }
+      tellNativeProbe(state.probeOpen);
+      if (state.probeOpen) {
+        zero();
+        if (state.core) state.core.reset();
+        if (mask) {
+          mask.setAttribute('tabindex', '-1');
+          if (mask.focus) mask.focus();
+        }
+        paintProbe(firstPad());
+        setProbeStatus('正在听按键。请按手柄，不要点屏幕。');
+      }
+    }
+
+    function ensureProbeSkeleton(pad) {
+      var key = pad.id + '|' + pad.buttons.length + '|' + pad.axes.length;
+      if (state.probeBuilt === key) return;
+      state.probeBuilt = key;
+      state.probePrev = [];
+      setProbeStatus('Gamepad API：' + pad.id + ' · ' + pad.buttons.length + ' 键 / ' + pad.axes.length + ' 轴');
+      var bBox = document.getElementById('gp-probe-btns');
+      var aBox = document.getElementById('gp-probe-axes');
+      if (bBox) {
+        bBox.innerHTML = '';
+        for (var i = 0; i < pad.buttons.length; i++) {
+          var el = document.createElement('span');
+          el.className = 'gp-bchip';
+          el.id = 'gp-b' + i;
+          el.textContent = buttonLabel(pad, i);
+          bBox.appendChild(el);
+        }
+      }
+      if (aBox) {
+        aBox.innerHTML = '';
+        for (var j = 0; j < pad.axes.length; j++) {
+          var ax = document.createElement('div');
+          ax.className = 'gp-ax';
+          ax.id = 'gp-a' + j;
+          ax.textContent = 'a' + j + '  0.00';
+          aBox.appendChild(ax);
+        }
+      }
+    }
+
+    function pushProbeLog(text) {
+      if (state.probeLog.length && state.probeLog[0] === text) return;
+      state.probeLog.unshift(text);
+      if (state.probeLog.length > 16) state.probeLog.length = 16;
+      var list = document.getElementById('gp-probe-log');
+      if (!list) return;
+      list.innerHTML = '';
+      for (var i = 0; i < state.probeLog.length; i++) {
+        var li = document.createElement('li');
+        li.textContent = state.probeLog[i];
+        list.appendChild(li);
+      }
+    }
+
+    function paintProbe(pad) {
+      var nowEl = document.getElementById('gp-probe-now');
+      if (!state.probeOpen) return;
+      if (!pad) {
+        if (nowEl) nowEl.textContent = '未检测到手柄。插上后先按任意键唤醒。';
+        return;
+      }
+      ensureProbeSkeleton(pad);
+      var down = [];
+      var i;
+      for (i = 0; i < pad.buttons.length; i++) {
+        var b = pad.buttons[i];
+        var pressed = buttonDown(b);
+        var value = buttonValue(b);
+        var chip = document.getElementById('gp-b' + i);
+        if (chip) {
+          chip.classList.toggle('on', pressed);
+          chip.textContent = buttonLabel(pad, i) +
+            (value > 0 && value < 1 ? ' ' + value.toFixed(2) : '');
+        }
+        if (pressed && !state.probePrev[i]) {
+          var extra = mappedLabels('button', i);
+          var line = buttonLabel(pad, i) +
+            (value > 0 && value < 1 ? '  value=' + value.toFixed(2) : '') +
+            (extra.length ? '  当前映射：' + extra.join('、') : '  未映射功能');
+          down.push(line);
+          pushProbeLog(line);
+        }
+        state.probePrev[i] = pressed;
+      }
+      for (i = 0; i < pad.axes.length; i++) {
+        var v = pad.axes[i];
+        var ax = document.getElementById('gp-a' + i);
+        var aname = (pad.mapping === 'standard' && STANDARD_AXIS[i])
+          ? STANDARD_AXIS[i] : ('a' + i);
+        if (ax) {
+          ax.classList.toggle('moved', Math.abs(v) > 0.15);
+          ax.textContent = aname + '  ' + (typeof v === 'number' ? v.toFixed(3) : '—');
+        }
+      }
+      if (nowEl) {
+        nowEl.textContent = down.length
+          ? '刚才按下：' + down.join('  |  ')
+          : (state.probeLog[0] ? '刚才按下：' + state.probeLog[0] : '按任意键，这里显示 b 编号');
+      }
+    }
+
     function poll() {
       var pad = firstPad();
 
@@ -395,6 +593,10 @@
           if (state.core) state.core.reset();
           setStatus();
           showBanner('手柄已断开，运动量已归零');
+        }
+        if (state.probeOpen) {
+          paintProbe(null);
+          setProbeStatus('浏览器没拿到 Gamepad。继续按实体键，系统键值通道仍在听。');
         }
         window.requestAnimationFrame(poll);
         return;
@@ -413,6 +615,14 @@
           state.warned = true;
           showBanner('手柄已连接但布局不认识，请打开诊断页生成映射', 8000);
         }
+      }
+
+      if (state.probeOpen) {
+        paintProbe(pad);
+        zero();
+        if (state.core) state.core.reset();
+        window.requestAnimationFrame(poll);
+        return;
       }
 
       if (!state.core) {
@@ -491,6 +701,60 @@
         state.core = buildCore(null, firstPad());
         setStatus();
         showBanner('已清除映射');
+      });
+    }
+
+    function noteProbeInput(line) {
+      var nowEl = document.getElementById('gp-probe-now');
+      if (nowEl) nowEl.textContent = '刚才按下：' + line;
+      pushProbeLog(line);
+    }
+
+    api._onNativeKey = function (ev) {
+      if (!state.probeOpen || !ev || ev.repeat) return;
+      if (!ev.down) return;
+      var line = (ev.name || 'KEY') + '  keyCode=' + ev.keyCode +
+        '  scan=' + ev.scanCode + '  device=' + ev.deviceId;
+      noteProbeInput(line);
+      setProbeStatus('系统按键通道已收到。这就是安卓层的键值。');
+    };
+
+    api._onNativeAxis = function (ev) {
+      if (!state.probeOpen || !ev) return;
+      var parts = [];
+      var names = ['lx', 'ly', 'rx', 'ry', 'lt', 'rt', 'hatx', 'haty'];
+      for (var i = 0; i < names.length; i++) {
+        var n = names[i];
+        if (typeof ev[n] === 'number' && Math.abs(ev[n]) > 0.12) {
+          parts.push(n + '=' + ev[n].toFixed(2));
+        }
+      }
+      var box = document.getElementById('gp-probe-axes');
+      if (box && parts.length) {
+        box.textContent = '轴  ' + parts.join('  ');
+      }
+    };
+
+    document.addEventListener('keydown', function (e) {
+      if (!state.probeOpen) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      noteProbeInput(
+        'key ' + (e.code || '') + '  keyCode=' + e.keyCode + '  key=' + e.key);
+      setProbeStatus('网页键盘通道已收到。若这是手柄，就用上面这组数。');
+    }, true);
+
+    var probeBtn = document.getElementById('btn-probe');
+    if (probeBtn) {
+      probeBtn.addEventListener('click', function () {
+        setProbeOpen(!state.probeOpen);
+      });
+    }
+    var probeClose = document.getElementById('gp-probe-close');
+    if (probeClose) {
+      probeClose.addEventListener('click', function () {
+        setProbeOpen(false);
       });
     }
 

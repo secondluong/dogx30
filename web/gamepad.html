@@ -51,6 +51,19 @@
              color: var(--text); border: 1px solid var(--line); border-radius: 8px;
              padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.6; }
   .note { font-size: 12px; color: var(--muted); line-height: 1.8; margin-top: 8px; }
+  .live-now {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 16px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    user-select: text;
+  }
+  .live-log { margin: 10px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+  .reftable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .reftable th, .reftable td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+  .reftable th { color: var(--muted); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -63,6 +76,34 @@
 
 <div id="verdict" class="verdict wait">
   等待手柄输入……请拨动摇杆或按任意键。
+</div>
+
+<div class="card" id="live-card" hidden>
+  <h2>刚才按下（对照这个记键值）</h2>
+  <div id="live-now" class="live-now">按任意键……</div>
+  <ol id="live-log" class="live-log"></ol>
+</div>
+
+<div class="card" id="ref-card">
+  <h2>标准布局键值（mapping = standard 时）</h2>
+  <table class="reftable">
+    <tr><th>键</th><th>常见名字</th><th>本控制台默认功能</th></tr>
+    <tr><td>b0</td><td>A / 南 / 叉</td><td>坐 / 站</td></tr>
+    <tr><td>b1</td><td>B / 东 / 圆</td><td>起步 / 停步</td></tr>
+    <tr><td>b2</td><td>X / 西 / 方</td><td>力控站立</td></tr>
+    <tr><td>b3</td><td>Y / 北 / 三角</td><td>（未默认）</td></tr>
+    <tr><td>b4</td><td>LB / L1</td><td>步态下一个</td></tr>
+    <tr><td>b5</td><td>RB / R1</td><td>步态上一个</td></tr>
+    <tr><td>b6</td><td>LT / L2</td><td>（未默认，适合死人开关）</td></tr>
+    <tr><td>b7</td><td>RT / R2</td><td>（未默认）</td></tr>
+    <tr><td>b8</td><td>Back / Select</td><td>（未默认）</td></tr>
+    <tr><td>b9</td><td>Start / Options</td><td>（未默认，急停请自己指定）</td></tr>
+    <tr><td>b10 / b11</td><td>L3 / R3 按下摇杆</td><td>（未默认）</td></tr>
+    <tr><td>b12–b15</td><td>方向键 ↑ ↓ ← →</td><td>（未默认）</td></tr>
+    <tr><td>a0 / a1</td><td>左摇杆 X / Y</td><td>平移 / 前进</td></tr>
+    <tr><td>a2 / a3</td><td>右摇杆 X / Y</td><td>转向 / 俯仰</td></tr>
+  </table>
+  <p class="note">急停故意不给默认键，避免在不认识的手柄上按错。非标准布局只看下面亮起来的 b 编号。</p>
 </div>
 
 <div class="card" id="info-card" hidden>
@@ -141,6 +182,14 @@ let axCount = 0, btnCount = 0;
 const peak = [];         // 每个轴的历史 [min,max]
 const rest = [];         // 松手漂移测量结果
 const btnSeen = [];      // 按过的键
+const btnPrev = [];
+const liveLog = [];
+const STD_BTN = [
+  "A / 南", "B / 东", "X / 西", "Y / 北",
+  "LB", "RB", "LT", "RT",
+  "Back", "Start", "L3", "R3",
+  "↑", "↓", "←", "→", "Home",
+];
 let armed = null;        // 向导当前等待的目标 key
 const mapping = {};      // key -> {type:'axis'|'button', index, invert?}
 let armBaseline = null;  // 进入等待时的轴基线，用来判断哪个轴动了
@@ -174,7 +223,7 @@ function buildSkeleton(gp) {
     const el = document.createElement("span");
     el.className = "bchip";
     el.id = "b" + i;
-    el.textContent = "b" + i;
+    el.textContent = STD_BTN[i] ? ("b" + i + " " + STD_BTN[i]) : ("b" + i);
     bBox.appendChild(el);
   }
 
@@ -194,7 +243,7 @@ function buildSkeleton(gp) {
     b.addEventListener("click", () => arm(b.dataset.arm));
   });
 
-  ["info-card", "axes-card", "btns-card", "map-card", "out-card"].forEach((id) => {
+  ["live-card", "info-card", "axes-card", "btns-card", "map-card", "out-card"].forEach((id) => {
     $(id).hidden = false;
   });
 
@@ -302,7 +351,12 @@ function updateAxes(gp) {
   }
 }
 
+function btnLabel(i) {
+  return STD_BTN[i] ? ("b" + i + " " + STD_BTN[i]) : ("b" + i);
+}
+
 function updateButtons(gp) {
+  const now = [];
   for (let i = 0; i < gp.buttons.length && i < btnCount; i++) {
     const b = gp.buttons[i];
     const el = $("b" + i);
@@ -310,9 +364,25 @@ function updateButtons(gp) {
     if (b.pressed) btnSeen[i] = true;
     el.classList.toggle("on", b.pressed);
     el.classList.toggle("seen", btnSeen[i]);
-    // 模拟量按键（扳机）顺带显示数值，便于区分开关型与行程型。
-    el.textContent = (b.value > 0 && b.value < 1)
-      ? "b" + i + " " + b.value.toFixed(2) : "b" + i;
+    const analog = b.value > 0 && b.value < 1;
+    el.textContent = analog ? btnLabel(i) + " " + b.value.toFixed(2) : btnLabel(i);
+    if (b.pressed && !btnPrev[i]) {
+      const line = btnLabel(i) + (analog ? "  value=" + b.value.toFixed(2) : "");
+      now.push(line);
+      if (liveLog[0] !== line) liveLog.unshift(line);
+      if (liveLog.length > 16) liveLog.length = 16;
+    }
+    btnPrev[i] = b.pressed;
+  }
+  const live = $("live-now");
+  const log = $("live-log");
+  if (live) {
+    live.textContent = now.length
+      ? "刚才按下：" + now.join("  |  ")
+      : (liveLog[0] ? "刚才按下：" + liveLog[0] : "按任意键……");
+  }
+  if (log) {
+    log.innerHTML = liveLog.map((t) => "<li>" + t + "</li>").join("");
   }
 }
 

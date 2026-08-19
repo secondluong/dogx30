@@ -24,6 +24,7 @@
   let canvas = null;
   let pointCount = 0;
   let subscribed = false;
+  let wanted = false;
   let sendFn = null;
   let lastStatus = null;
 
@@ -665,9 +666,10 @@
     draw();
   }
 
-  function toggle() {
+  function applyWanted() {
     if (!sendFn) return;
-    subscribed = !subscribed;
+    if (wanted === subscribed) return;
+    subscribed = wanted;
     sendFn({ t: subscribed ? 'cloud_sub' : 'cloud_unsub' });
     syncSubscribeButton();
     paintTag(lastStatus);
@@ -680,8 +682,17 @@
     }
   }
 
+  function setWanted(want) {
+    wanted = !!want;
+    applyWanted();
+  }
+
+  function toggle() {
+    setWanted(!subscribed);
+  }
+
   function stop() {
-    if (subscribed) toggle();
+    setWanted(false);
   }
 
   function bindToolbar() {
@@ -771,18 +782,20 @@
 
   function initCloud(send) {
     sendFn = send;
-    if (!gl && !initGl()) return;
-    const btn = document.getElementById('btn-cloud');
-    if (btn) btn.addEventListener('click', toggle);
-    bindToolbar();
-    subscribed = false;
     lastStatus = null;
     trail.length = 0;
     resetEst();
     clearCloud();
+    if (!gl && !initGl()) {
+      applyWanted();
+      return;
+    }
+    bindToolbar();
     syncSubscribeButton();
     paintTag(null);
     syncToolbar();
+    // applyLayout 可能先于 init 把 wanted 置上，这里补发订阅。
+    applyWanted();
   }
 
   function resubscribe() {
@@ -792,5 +805,6 @@
 
   window.X30Cloud = {
     initCloud, onCloudFrame, onCloudStatus, onPose, stop, resize, resubscribe,
+    setWanted,
   };
 })();
