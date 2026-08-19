@@ -23,7 +23,7 @@
     <string name="exit_confirm">退出</string>
     <string name="cancel">取消</string>
 
-    <string name="key_strip_idle">先看上面是不是「App 0.2.1」。点我一下应变绿。然后再按手柄任意键。</string>
+    <string name="key_strip_idle">先看上面是不是「App 0.2.2」。点我一下应变绿。然后再按手柄任意键。</string>
     <string name="key_strip_event">收到 %1$s   keyCode=%2$d   scan=%3$d</string>
     <string name="key_strip_tap">触摸已收到，这是新 App。请按手柄任意键。</string>
 </resources>
