@@ -139,6 +139,15 @@ XmlRpcValue ParseValue(const std::string& xml, size_t begin, size_t* end) {
     return v;
   }
 
+  // 空字符串常见写法是 <value></value>。begin 此时正指着闭合标签，
+  // 若当普通类型往下扫，会吞掉后面整个数组——requestTopic 的
+  // [1, '', ['TCPROS', host, port]] 就会变成「TCPROS 地址无效」。
+  if (!tag.empty() && tag[0] == '/') {
+    v.type = XmlRpcValue::Type::kString;
+    *end = tag_end;
+    return v;
+  }
+
   if (tag == "array") {
     size_t arr_end = 0;
     v = ParseArray(xml, content, &arr_end);

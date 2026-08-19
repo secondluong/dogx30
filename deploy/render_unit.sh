@@ -7,30 +7,21 @@
 #
 # 现在只有这一份。测试拿到的就是装机时真正会用的东西。
 #
+# 从「地址也在这里替换」变成「只替换安装前缀」，是因为运行参数搬进了
+# conf/gateway.conf：那些值控制台可以在线改，留在单元里就会有两份且互相打脸。
+#
 # 用法：
 #   source deploy/render_unit.sh
-#   render_unit <模板> <robot> <perception> <local_port> \
-#               <http_port> <bind> <cloud:yes|no> <ros_host> <prefix>
+#   render_unit <模板> <prefix>
 
 render_unit() {
-  local template=$1 robot=$2 perception=$3 local_port=$4
-  local http_port=$5 bind=$6 cloud=$7 ros_host=$8 prefix=$9
-
-  local cloud_flag=""
-  [[ "$cloud" == "yes" ]] && cloud_flag="--cloud "
+  local template=$1 prefix=$2
 
   # 先剥掉 CR。模板在 Windows 上编辑过就会带 CR，照原样 sed 出去的话，
   # systemd 单元里每个参数尾巴上都挂一个 \r：反斜杠续行会断，
-  # 或者 --ros-host 拿到的是 "192.168.1.120\r"。装到板子上才发现就太晚了。
-  tr -d '\r' < "$template" |
-  sed -e "s|--robot-ip 192.168.1.103|--robot-ip $robot|" \
-      -e "s|--perception-ip 192.168.1.105|--perception-ip $perception|" \
-      -e "s|--local-port 43897|--local-port $local_port|" \
-      -e "s|--port 8080|--port $http_port|" \
-      -e "s|--bind 0.0.0.0|--bind $bind|" \
-      -e "s|--ros-master http://192.168.1.105:11311|--ros-master http://$perception:11311|" \
-      -e "s|--ros-host 192.168.1.120|${cloud_flag}--ros-host $ros_host|" \
-      -e "s|/opt/x30|$prefix|g"
+  # 或者 --config 拿到的是 "/opt/x30/conf/gateway.conf\r"。
+  # 装到板子上才发现就太晚了。
+  tr -d '\r' < "$template" | sed -e "s|/opt/x30|$prefix|g"
 }
 
 # 从单元文件里把 ExecStart 的参数抠成一行。

@@ -137,6 +137,49 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 
 未启用点云时返回 `no_cloud` 错误。
 
+### 网关配置
+
+读写网关自己的运行参数：运动主机、感知主机、监听地址、点云开关等。
+控制台的「设置」面板走的就是这两条。
+
+**不看控制权，看管理令牌。** 操控机器狗和改网关指向是两回事，后者危险得多——
+能把服务指到另一台主机上，也能把监听面从内网扩到全部网卡。而本协议
+[没有身份认证](#没有身份认证)，所以这一类操作单设一道门。
+令牌在板子上 `conf/admin.token`（600 root），`sudo bash deploy/checkup.sh --token` 可以取。
+
+```json
+{"t":"config_get","token":"<管理令牌>"}
+{"t":"config_set","token":"<管理令牌>","settings":{"perception_ip":"192.168.1.205"}}
+```
+
+`settings` 里**只放要改的字段**，其余保持原值。可改的键与
+`GatewaySettings` 一一对应：
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `robot_ip` / `robot_port` | 字符串 / 数字 | 运动主机 |
+| `local_port` | 数字 | 本机收遥测的端口，要与运动主机 `network.toml` 登记的一致 |
+| `perception_ip` / `perception_port` | 字符串 / 数字 | 感知主机地形图通道 |
+| `http_port` / `bind_address` | 数字 / 字符串 | 本服务自己的监听端口与地址 |
+| `cloud_enabled` | 布尔 | 点云开关 |
+| `ros_master` / `ros_host` / `cloud_topic` | 字符串 | 点云的 ROS 参数 |
+| `cloud_hz` / `cloud_points` | 数字 | 点云下行帧率与单帧点数上限 |
+
+刻意**不含** `--web` / `--media` 这类文件路径：那些是装机时定的部署布局，
+从一个无 TLS 的网页去改服务端路径只会开出一条目录穿越的口子。
+
+三件事会让 `config_set` 被拒，都是有意为之：
+
+- **有人正持有控制权** → `busy_control`。改配置要重启网关，遥控会中断一两秒，
+  狗正走着的时候不能发生。让对方先释放。
+- **监听地址不是本机任何一块网卡的地址** → `bad_config`。这条最要紧：
+  配错了重启后 `bind` 失败，服务起不来，控制台跟着消失，就再没有地方能改回来。
+  同理，开点云时 `ros_host` 也必须是本机地址。
+- **类型不对或键名拼错** → `bad_config`。不静默忽略，否则表现是
+  「改了、保存了、没生效、也没报错」。
+
+校验不通过时**一个字节都不会落盘**，不存在半份配置。
+
 ## 服务端 → 客户端
 
 ### 连接问候
@@ -144,8 +187,13 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 连上立即下发一次。
 
 ```json
-{"t":"hello","version":"0.2.0","client_id":3,"control":false,"lease_ms":2000}
+{"t":"hello","version":"0.2.0","client_id":3,"control":false,"lease_ms":2000,
+ "config":true}
 ```
+
+`config` 是个能力位：本机是否支持在线改配置（网关要以 `--config` 启动）。
+它不含任何配置内容，遥控端只用它决定要不要显示「设置」入口；
+真要取值仍须凭令牌。
 
 ### 控制权变更
 
@@ -308,10 +356,40 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 ```
 
 `code` 取值：`no_control`、`bad_request`、`unknown_command`、
-`gait_busy`、`no_media`、`media_degraded`、`no_cloud`。
+`gait_busy`、`no_media`、`media_degraded`、`no_cloud`、
+`no_config`、`no_admin_token`、`bad_admin_token`、`bad_config`、
+`busy_control`、`config_write_failed`。
 
 `media_degraded` 不是失败：视频照样能看，只是质量降了，
 配合 `media_plan` 里的 `reason` 使用。
+
+### 配置回执
+
+`config_get` 的回应：
+
+```json
+{"t":"config","settings":{"robot_ip":"192.168.1.103","http_port":8080,"…":"…"},
+ "path":"/opt/x30/conf/gateway.conf","auto_restart":true,"control_held":false}
+```
+
+`settings` 是**当前实际生效的**那一份，不是配置文件的内容——命令行参数会盖过
+文件，回显文件就会和真正在跑的东西不一致。
+
+`auto_restart` 表示网关能不能自己重启：由 systemd 托管时为 `true`
+（写完配置就干净退出，`Restart=always` 一秒内把它带着新配置拉回来）；
+手工在终端里跑时为 `false`，那时网关**不会**自己退出，需要人去重启——
+退了就没人拉它回来了。
+
+`config_set` 成功后的回应，字段含义同上：
+
+```json
+{"t":"config_saved","settings":{"…":"…"},"auto_restart":true}
+```
+
+`auto_restart` 为 `true` 时，回执发出约 400 ms 后连接会断开，
+遥控端按正常重连逻辑等它回来即可。**如果改的是 `http_port` 或 `bind_address`，
+连接不会自己回来**——遥控端要把新地址明确告诉操作员，否则界面上只会剩下
+一个永远在「重连中」的状态。
 
 ### 保活应答
 
@@ -335,6 +413,10 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 
 **本协议目前不做身份认证。** 凡是能建立 WebSocket 连接的客户端都能申请控制权，
 进而驱动机器狗。上面三层兜底防的是链路故障，不是恶意接入。
+
+唯一的例外是 [`config_get` / `config_set`](#网关配置)：它们要一个管理令牌。
+不是因为那里做了认证，而是因为改配置能把网关指到别处、也能把监听面自己打开，
+放任不管等于让上面这条限制形同虚设。**其余所有消息一律没有身份校验。**
 
 这在隔离的遥控局域网里是可接受的，但**一旦本机接入 4G、公网或不受控的 WiFi
 就不成立**。在补上认证之前，靠部署收敛暴露面：

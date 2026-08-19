@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace x30 {
@@ -89,6 +90,18 @@ void MotionClient::TxLoop() {
   int tick = 0;
 
   while (running_.load()) {
+    if (!commanding_.load()) {
+      // 不发心跳、不发轴。原厂手柄走 2.4G 也是 0x21 源，我们一开机就抢，
+      // 两边会把对方的指令盖成全零，运动主机表现为谁都控不了。
+      connect_confirmed_.store(false);
+      ++tick;
+      next += axis_period;
+      const auto now = Clock::now();
+      if (next < now) next = now + axis_period;
+      std::this_thread::sleep_until(next);
+      continue;
+    }
+
     // 心跳必须先于一切。丢心跳的后果比丢一帧轴指令严重得多。
     if (tick % heartbeat_every == 0) {
       SendSimple(cmd::kHeartbeat);
@@ -98,23 +111,37 @@ void MotionClient::TxLoop() {
       }
     }
 
-    int32_t ly, lx, rx, ry;
+    bool send_axes = true;
     {
-      std::lock_guard<std::mutex> lock(axis_mutex_);
-      // 看门狗：上层不再喂数据就归零，机器人会自行减速到停。
-      if (Clock::now() > axis_deadline_) {
-        axis_left_y_ = axis_left_x_ = axis_right_x_ = axis_right_y_ = 0;
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      // 遥测还没来或已经断时，不知道当前基础状态，沿用旧行为继续发轴——
+      // 否则 network.toml 没登记、一条遥测都没有时，力控姿态也发不出去。
+      if (state_.telemetry_alive) {
+        send_axes = AxisCommandsApply(
+            state_.basic_state,
+            last_stand_sit_ == LastStandSit::kStood || axes_unlocked_);
       }
-      ly = axis_left_y_;
-      lx = axis_left_x_;
-      rx = axis_right_x_;
-      ry = axis_right_y_;
     }
 
-    SendAxis(cmd::kAxisLeftY, ly);
-    SendAxis(cmd::kAxisLeftX, lx);
-    SendAxis(cmd::kAxisRightX, rx);
-    SendAxis(cmd::kAxisRightY, ry);
+    if (send_axes) {
+      int32_t ly, lx, rx, ry;
+      {
+        std::lock_guard<std::mutex> lock(axis_mutex_);
+        // 看门狗：上层不再喂数据就归零，机器人会自行减速到停。
+        if (Clock::now() > axis_deadline_) {
+          axis_left_y_ = axis_left_x_ = axis_right_x_ = axis_right_y_ = 0;
+        }
+        ly = axis_left_y_;
+        lx = axis_left_x_;
+        rx = axis_right_x_;
+        ry = axis_right_y_;
+      }
+
+      SendAxis(cmd::kAxisLeftY, ly);
+      SendAxis(cmd::kAxisLeftX, lx);
+      SendAxis(cmd::kAxisRightX, rx);
+      SendAxis(cmd::kAxisRightY, ry);
+    }
 
     ++tick;
     next += axis_period;
@@ -226,9 +253,61 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
 // 离散指令
 // ---------------------------------------------------------------------------
 
-void MotionClient::StandOrSit() { SendSimple(cmd::kStandSitToggle); }
-void MotionClient::EnterTorqueStand() { SendSimple(cmd::kTorqueStand); }
-void MotionClient::ToggleStepping() { SendSimple(cmd::kSteppingToggle); }
+void MotionClient::StandOrSit() {
+  const RobotState s = Snapshot();
+  // 过渡还没走完再发一次，轻则把柔和轨迹掐断，重则当场反转（坐到一半又站）。
+  // RL 起立后 basic_state 仍是「坐下」，这条拦不住 RL 过渡，只拦文档里那套状态机。
+  if (s.telemetry_alive && IsStandSitTransient(s.basic_state)) {
+    std::printf("[运动] 忽略坐/站：当前正在%s\n", ToString(s.basic_state));
+    return;
+  }
+  ReleaseAxes();
+
+  // 遥测在 RL 站着时仍报 basic_state=0。现场 10:45 起了一次之后连点四次「坐」，
+  // 运动主机收到的全是 0x21010223（再起立），一条趴下都没有。
+  // 原厂手柄自己记得现在是站着，发 0x21010222。我们也得自己记。
+  bool sitting;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    const bool telem_upright =
+        s.telemetry_alive &&
+        (s.basic_state == BasicState::kInitialStanding ||
+         s.basic_state == BasicState::kTorqueStanding ||
+         s.basic_state == BasicState::kStepping);
+    if (telem_upright) {
+      sitting = false;
+    } else if (s.telemetry_alive &&
+               s.basic_state == BasicState::kEmergencyOrFall) {
+      sitting = true;
+      last_stand_sit_ = LastStandSit::kSat;
+    } else if (last_stand_sit_ == LastStandSit::kStood) {
+      sitting = false;
+    } else {
+      sitting = true;
+    }
+    last_stand_sit_ = sitting ? LastStandSit::kStood : LastStandSit::kSat;
+    state_.rl_standing = (last_stand_sit_ == LastStandSit::kStood);
+    if (!sitting) axes_unlocked_ = false;
+  }
+
+  if (sitting) {
+    std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n", ToString(s.basic_state));
+    SendSimple(cmd::kRlStandUp);
+  } else {
+    std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n", ToString(s.basic_state));
+    SendSimple(cmd::kRlSitDown);
+  }
+}
+void MotionClient::EnterTorqueStand() {
+  SendSimple(cmd::kTorqueStand);
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  axes_unlocked_ = true;
+}
+void MotionClient::ToggleStepping() {
+  SendSimple(cmd::kSteppingToggle);
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  axes_unlocked_ = true;
+}
 
 void MotionClient::SetGait(Gait gait) {
   const uint32_t code = GaitCommandCode(gait);
@@ -249,6 +328,10 @@ void MotionClient::SoftEmergencyStop() {
   // 免得急停解除后残留的速度指令又把机器人推出去。
   SendSimple(cmd::kSoftEmergencyStop);
   ReleaseAxes();
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  last_stand_sit_ = LastStandSit::kSat;
+  state_.rl_standing = false;
+  axes_unlocked_ = false;
 }
 
 void MotionClient::SaveData(bool legacy_firmware) {
@@ -294,9 +377,21 @@ void MotionClient::ReleaseAxes() {
   axis_deadline_ = Clock::time_point{};
 }
 
+void MotionClient::SetCommanding(bool on) {
+  const bool was = commanding_.exchange(on);
+  if (on && !was) {
+    connect_confirmed_.store(false);
+    std::printf("[运动] 本端接管：开始向运动主机发心跳\n");
+  } else if (!on && was) {
+    std::printf("[运动] 本端松开：停止向运动主机发心跳，原厂手柄可单独接管\n");
+  }
+}
+
 RobotState MotionClient::Snapshot() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  return state_;
+  RobotState s = state_;
+  s.rl_standing = (last_stand_sit_ == LastStandSit::kStood);
+  return s;
 }
 
 }  // namespace x30

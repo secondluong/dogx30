@@ -402,19 +402,217 @@ def cloud_down_scenario(host, port):
     a.close()
 
 
+def read_conf(path):
+    """把 gateway.conf 读成字典。与 deploy/config_util.sh 的 conf_get 同规则。"""
+    out = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            out[key.strip()] = val.strip()
+    return out
+
+
+def config_scenario(host, port, token, conf_path):
+    """在线改配置：令牌、校验、控制权互锁、落盘。
+
+    这一组防的是三件会让人上不了狗的事：谁都能改（协议无身份认证）、
+    改成一个本机没有的监听地址（重启后服务起不来，控制台随之消失）、
+    以及狗正走着的时候把网关重启掉。
+    """
+    print("\n== 在线改配置 ==")
+    a = WsClient(host, port)
+    hello = a.wait_for("hello")
+    check("hello 里带出「支持在线改配置」", hello.get("config") is True, str(hello.get("config")))
+
+    # --- 令牌 ---------------------------------------------------------------
+    a.send({"t": "config_get"})
+    err = a.wait_for("error", timeout=5)
+    check("不带令牌读配置被拒", err.get("code") == "bad_admin_token", err.get("msg", ""))
+
+    a.send({"t": "config_get", "token": "definitely-not-it"})
+    err = a.wait_for("error", timeout=5)
+    check("令牌不对被拒", err.get("code") == "bad_admin_token", err.get("msg", ""))
+
+    # 长度不同和长度相同但内容不同，走的是比较函数里两条不同的分支。
+    a.send({"t": "config_get", "token": "0" * len(token)})
+    err = a.wait_for("error", timeout=5)
+    check("等长但不同的令牌也被拒", err.get("code") == "bad_admin_token", err.get("msg", ""))
+
+    # --- 读回 ---------------------------------------------------------------
+    a.send({"t": "config_get", "token": token})
+    cfg = a.wait_for("config", timeout=5)
+    on_disk = read_conf(conf_path)
+    settings = cfg.get("settings", {})
+    check("凭令牌读到配置", isinstance(settings, dict) and bool(settings), str(cfg)[:80])
+    check("回显的运动主机与文件一致",
+          settings.get("robot_ip") == on_disk.get("robot_ip"),
+          f'{settings.get("robot_ip")} vs {on_disk.get("robot_ip")}')
+    check("回显的感知主机与文件一致",
+          settings.get("perception_ip") == on_disk.get("perception_ip"),
+          f'{settings.get("perception_ip")} vs {on_disk.get("perception_ip")}')
+    check("端口是数字而不是字符串",
+          isinstance(settings.get("http_port"), (int, float)),
+          type(settings.get("http_port")).__name__)
+    check("点云开关是布尔值",
+          isinstance(settings.get("cloud_enabled"), bool),
+          type(settings.get("cloud_enabled")).__name__)
+    # 不是 systemd 托管，网关不该自作主张退出 —— 那样就再也起不来了。
+    check("非 systemd 环境下不承诺自动重启",
+          cfg.get("auto_restart") is False, str(cfg.get("auto_restart")))
+
+    # --- 校验 ---------------------------------------------------------------
+    def reject(label, settings_obj, expect_in=""):
+        a.drain()
+        a.send({"t": "config_set", "token": token, "settings": settings_obj})
+        e = a.wait_for("error", timeout=5)
+        ok = e.get("code") == "bad_config"
+        if ok and expect_in:
+            ok = expect_in in e.get("msg", "")
+        check(label, ok, e.get("msg", "")[:70])
+
+    # 这一条是整个功能里最要紧的：填一个本机没有的地址，重启后 bind 失败，
+    # 服务起不来，控制台跟着消失，就再没有地方能改回来了。
+    reject("监听地址不在本机上被拒", {"bind_address": "203.0.113.9"}, "本机")
+    reject("监听地址不是 IP 被拒", {"bind_address": "eth0"})
+    reject("运动主机不是合法 IP 被拒", {"robot_ip": "192.168.1"})
+    reject("运动主机填 0.0.0.0 被拒", {"robot_ip": "0.0.0.0"})
+    # 两台主机填成同一个的话，地形图通道会指向运动主机，上下楼被静默忽略。
+    reject("运动与感知主机相同被拒",
+           {"robot_ip": "192.168.9.9", "perception_ip": "192.168.9.9"})
+    reject("端口超范围被拒", {"http_port": 70000})
+    reject("端口给成字符串被拒", {"http_port": "8080"}, "数字")
+    reject("IP 给成数字被拒", {"robot_ip": 19216811}, "字符串")
+    reject("键名拼错被拒", {"robot_ipp": "192.168.1.9"}, "不认识")
+    reject("点云话题不以 / 开头被拒",
+           {"cloud_enabled": True, "ros_host": "127.0.0.1",
+            "ros_master": "http://127.0.0.1:11311", "cloud_topic": "lidar"})
+    reject("ROS master 不带端口被拒",
+           {"cloud_enabled": True, "ros_host": "127.0.0.1",
+            "ros_master": "http://127.0.0.1"})
+    reject("开点云但 ROS 地址不在本机被拒",
+           {"cloud_enabled": True, "ros_host": "203.0.113.9",
+            "ros_master": "http://127.0.0.1:11311"}, "本机")
+
+    # 校验失败一次都不能落盘，否则重启后就是一份半对的配置。
+    check("校验失败没有改动文件", read_conf(conf_path) == on_disk)
+
+    # 反过来，该放行的必须放行。"把 0.0.0.0 收紧成某个具体地址"是文档推荐的
+    # 加固动作，而它最容易被自己占着的那个端口误判成"端口已被占用"——
+    # 当前监听套接字就在这个端口上，0.0.0.0 和具体地址在同一端口是互斥的。
+    a.drain()
+    a.send({"t": "config_set", "token": token,
+            "settings": {"bind_address": "127.0.0.1"}})
+    msg = a.wait_for("config_saved", timeout=5)
+    check("只收紧监听地址（端口不变）能通过",
+          msg.get("settings", {}).get("bind_address") == "127.0.0.1",
+          str(msg.get("settings", {}).get("bind_address")))
+
+    # 换端口时才该真去试探绑定：占着的端口必须被拒。
+    import socket as _socket
+    squatter = _socket.socket()
+    squatter.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    squatter.bind(("127.0.0.1", 0))
+    squatter.listen(1)
+    taken = squatter.getsockname()[1]
+    a.drain()
+    a.send({"t": "config_set", "token": token, "settings": {"http_port": taken}})
+    err = a.wait_for("error", timeout=5)
+    check("换到一个已被占用的端口被拒",
+          err.get("code") == "bad_config" and "绑不上" in err.get("msg", ""),
+          err.get("msg", "")[:70])
+    squatter.close()
+
+    on_disk = read_conf(conf_path)   # 上面成功改过一次，基线要跟着更新
+
+    # --- 控制权互锁 ---------------------------------------------------------
+    a.drain()
+    a.send({"t": "claim"})
+    a.wait_for("control", predicate=lambda m: "granted" in m)
+    a.send({"t": "config_set", "token": token, "settings": {"local_port": 43896}})
+    err = a.wait_for("error", timeout=5)
+    check("有人持有控制权时不许改配置",
+          err.get("code") == "busy_control", err.get("msg", "")[:70])
+    check("被互锁挡下时也没动文件", read_conf(conf_path) == on_disk)
+
+    a.send({"t": "yield"})
+    time.sleep(0.2)
+    a.drain()
+
+    # --- 真的改一次 ---------------------------------------------------------
+    want = {
+        "robot_ip": "192.168.1.203",
+        "perception_ip": "192.168.1.205",
+        "local_port": 43896,
+        "cloud_hz": 5,
+        "cloud_points": 30000,
+    }
+    a.send({"t": "config_set", "token": token, "settings": want})
+    saved = a.wait_for("config_saved", timeout=5)
+    got = saved.get("settings", {})
+    check("保存成功并回显新值",
+          got.get("robot_ip") == "192.168.1.203" and got.get("local_port") == 43896,
+          str(got)[:80])
+
+    disk = read_conf(conf_path)
+    check("新值已落盘", disk.get("robot_ip") == "192.168.1.203", disk.get("robot_ip", ""))
+    check("落盘的端口也对", disk.get("local_port") == "43896", disk.get("local_port", ""))
+    check("落盘的点云参数也对",
+          disk.get("cloud_hz") == "5" and disk.get("cloud_points") == "30000",
+          f'{disk.get("cloud_hz")} {disk.get("cloud_points")}')
+    # 没提到的字段不能被顺手改掉。只发改动项，其余必须原样保留。
+    check("没提到的字段保持原样",
+          disk.get("http_port") == on_disk.get("http_port") and
+          disk.get("bind_address") == on_disk.get("bind_address"),
+          f'{disk.get("http_port")} {disk.get("bind_address")}')
+    check("写回的文件仍带着说明注释", "#" in open(conf_path, encoding="utf-8").read())
+
+    # 再读一次，网关内存里的那份也该更新了 —— 否则下一次改动会基于旧值算差异。
+    a.drain()
+    a.send({"t": "config_get", "token": token})
+    cfg2 = a.wait_for("config", timeout=5)
+    check("再读一次拿到的是新值",
+          cfg2["settings"].get("robot_ip") == "192.168.1.203",
+          cfg2["settings"].get("robot_ip", ""))
+
+    # 非 systemd 环境下不许自己退出。退了就没人拉它回来。
+    time.sleep(1.0)
+    a.drain()
+    a.send({"t": "config_get", "token": token})
+    a.wait_for("config", timeout=5)
+    check("保存后网关仍在运行（没有自作主张退出）", True)
+    a.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--token", default="", help="config 场景用的管理令牌")
+    parser.add_argument("--conf", default="", help="config 场景用的配置文件路径")
     parser.add_argument(
         "--scenario",
         default="full",
-        choices=["full", "no-terrain", "media", "no-media", "cloud-down"],
+        choices=["full", "no-terrain", "media", "no-media", "cloud-down", "config"],
         help="no-terrain 验证感知主机地形图不可达；media/no-media 验证媒体编排；"
-             "cloud-down 验证感知主机 ROS 不可达",
+             "cloud-down 验证感知主机 ROS 不可达；config 验证在线改配置",
     )
     args = parser.parse_args()
     host, port = args.host, args.port
+
+    if args.scenario == "config":
+        if not args.token or not args.conf:
+            print("config 场景需要 --token 与 --conf")
+            return 2
+        config_scenario(host, port, args.token, args.conf)
+        print()
+        if FAILURES:
+            print(f"失败 {len(FAILURES)} 项: " + ", ".join(FAILURES))
+            return 1
+        print("全部通过")
+        return 0
 
     standalone = {
         "no-terrain": no_terrain_scenario,

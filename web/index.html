@@ -20,6 +20,8 @@
   </div>
 
   <div class="bar-right">
+    <!-- 网关以 --config 启动时才显示，由 hello 的 config 能力位控制 -->
+    <button class="btn btn-ghost hidden" id="btn-settings">设置</button>
     <button class="btn btn-ghost" id="btn-control">申请控制权</button>
     <button class="btn btn-estop" id="btn-estop">急停</button>
   </div>
@@ -27,56 +29,162 @@
 
 <div id="banner" class="banner hidden"></div>
 
-<main class="layout">
-
-  <!-- 视野区：视频与点云。两路数据链尚未接入，先占位并说明依赖项。 -->
-  <section class="view">
-    <div class="panel view-panel">
-      <div class="panel-head">
-        <span>实时视频</span>
-        <span class="tag" id="media-budget">—</span>
-      </div>
-
-      <video id="media-video" class="media-video" autoplay playsinline muted></video>
-
-      <div class="media-ctl">
-        <div id="media-list" class="media-list">
-          <div class="placeholder sm">
-            <p>未配置视频源</p>
-            <small>需在 <code>media.json</code> 中登记相机，并启动 <code>x30-media</code> 服务。</small>
-          </div>
-        </div>
-        <div class="media-foot">
-          <button class="btn sm" id="btn-talk">按住说话</button>
-          <span class="hint" id="codec-note">正在探测解码能力…</span>
-        </div>
-      </div>
+<!-- 网关设置。改完要重启网关，所以既要令牌，也要求当前没人持有控制权。 -->
+<div id="settings" class="set-mask hidden">
+  <div class="set-panel">
+    <div class="set-head">
+      <span>网关设置</span>
+      <button class="btn sm btn-ghost" id="set-close">关闭</button>
     </div>
 
-    <div class="panel view-panel">
-      <div class="panel-head">
-        <span>激光点云</span>
-        <span class="tag" id="cloud-tag">未订阅</span>
-      </div>
+    <div id="set-unlock-box" class="set-unlock">
+      <p>改这些参数会让网关重启，遥控中断一两秒。需要管理令牌。</p>
+      <p class="set-hint">
+        令牌在板子上，执行 <code>sudo bash deploy/checkup.sh --token</code> 可以看到。
+        它存在 <code>/opt/x30/conf/admin.token</code>，只有 root 能读，所以要 sudo。
+      </p>
+      <label class="set-row">
+        <span class="set-label">管理令牌</span>
+        <input class="set-input" type="password" id="set-token" autocomplete="off">
+      </label>
+      <label class="gp-check">
+        <input type="checkbox" id="set-remember">
+        <span>在本机记住令牌（公用平板上别勾）</span>
+      </label>
+      <button class="btn" id="set-unlock">解锁</button>
+    </div>
 
+    <div id="set-form" class="set-form hidden"></div>
+
+    <div id="set-note" class="set-note hidden"></div>
+
+    <div class="set-foot">
+      <button class="btn hidden" id="set-save">保存并重启网关</button>
+    </div>
+  </div>
+</div>
+
+<!-- 默认按趴下画：只露起立 + 右侧模式。站立后由 app.js 加 dog-up。 -->
+<main class="stage-wrap dog-prone" id="stage-wrap">
+
+  <div id="stage" class="stage layout-1x1">
+    <div id="pane-video" class="pane is-main" data-view="dog_cam">
+      <video id="media-video" class="media-video" autoplay playsinline muted></video>
+      <div class="placeholder media-idle" id="media-idle">
+        <div class="ph-icon">▣</div>
+        <p>机身相机</p>
+        <small>等待拉流…</small>
+      </div>
+      <div class="pane-label">机身相机</div>
+      <div class="pane-actions">
+        <button type="button" class="btn sm" data-capture="shot">截图</button>
+        <button type="button" class="btn sm btn-rec" data-capture="rec">录屏</button>
+      </div>
+      <span class="pip-hint">点击放大</span>
+    </div>
+
+    <div id="pane-ptz-vis" class="pane" data-view="ptz_vis">
+      <video id="media-video-ptz-vis" class="media-video" autoplay playsinline muted></video>
+      <div class="placeholder media-idle" id="media-idle-ptz-vis">
+        <div class="ph-icon">▣</div>
+        <p>布控球 白光</p>
+        <small>未接通时会停在这里</small>
+      </div>
+      <div class="pane-label">布控球 白光</div>
+      <div class="pane-actions">
+        <button type="button" class="btn sm" data-capture="shot">截图</button>
+        <button type="button" class="btn sm btn-rec" data-capture="rec">录屏</button>
+      </div>
+      <span class="pip-hint">点击放大</span>
+    </div>
+
+    <div id="pane-ptz-ir" class="pane" data-view="ptz_ir">
+      <video id="media-video-ptz-ir" class="media-video" autoplay playsinline muted></video>
+      <div class="placeholder media-idle" id="media-idle-ptz-ir">
+        <div class="ph-icon">▣</div>
+        <p>布控球 热成像</p>
+        <small>未接通时会停在这里</small>
+      </div>
+      <div class="pane-label">布控球 热成像</div>
+      <div class="pane-actions">
+        <button type="button" class="btn sm" data-capture="shot">截图</button>
+        <button type="button" class="btn sm btn-rec" data-capture="rec">录屏</button>
+      </div>
+      <span class="pip-hint">点击放大</span>
+    </div>
+
+    <div id="pane-cloud" class="pane" data-view="cloud">
       <div class="cloud-wrap">
         <canvas id="cloud-canvas" class="cloud-canvas"></canvas>
         <div class="placeholder cloud-idle" id="cloud-idle">
           <div class="ph-icon">⁘</div>
           <p>点云未订阅</p>
-          <small>订阅后才会去连感知主机，<br>不看时不占 MESH 带宽。</small>
+          <small>点顶部订阅后才连感知主机。累积和轨迹在本机用里程计对齐，不额外占带宽。</small>
         </div>
       </div>
-
-      <div class="cloud-ctl">
-        <button class="btn sm" id="btn-cloud">订阅点云</button>
-        <span class="hint" id="cloud-note">拖动旋转，滚轮缩放</span>
+      <div class="pane-label">
+        激光点云
+        <span class="tag" id="cloud-tag">未订阅</span>
       </div>
+      <div class="pane-actions">
+        <button type="button" class="btn sm" data-capture="shot">截图</button>
+        <button type="button" class="btn sm btn-rec" data-capture="rec">录屏</button>
+      </div>
+      <div class="cloud-ctl pane-cloud-ctl" id="cloud-ctl">
+        <button class="btn sm" id="btn-cloud">订阅点云</button>
+        <div class="cloud-seg" id="cloud-mode">
+          <button type="button" class="btn sm active" data-cloud-mode="live">实时</button>
+          <button type="button" class="btn sm" data-cloud-mode="persist">持久地图</button>
+        </div>
+        <div class="cloud-seg" id="cloud-accum">
+          <button type="button" class="btn sm active" data-cloud-accum="0">单帧</button>
+          <button type="button" class="btn sm" data-cloud-accum="3">3s</button>
+          <button type="button" class="btn sm" data-cloud-accum="10">10s</button>
+          <button type="button" class="btn sm" data-cloud-accum="30">30s</button>
+        </div>
+        <div class="cloud-seg" id="cloud-voxel">
+          <span class="cloud-lab">体素</span>
+          <button type="button" class="btn sm" data-cloud-voxel="0.05">5</button>
+          <button type="button" class="btn sm active" data-cloud-voxel="0.10">10</button>
+          <button type="button" class="btn sm" data-cloud-voxel="0.20">20</button>
+          <button type="button" class="btn sm" data-cloud-voxel="0.40">40</button>
+        </div>
+        <button type="button" class="btn sm active" id="btn-trail" title="用红色画出狗走过的路">轨迹</button>
+        <label class="cloud-check">
+          <input type="checkbox" id="cloud-slice">
+          <span>楼层切割</span>
+        </label>
+        <label class="cloud-num">
+          <span>高度</span>
+          <input id="cloud-slice-z" type="number" inputmode="decimal" value="0.0" step="0.1" min="-2" max="20">
+          <span>m</span>
+        </label>
+        <label class="cloud-num">
+          <span>±</span>
+          <input id="cloud-slice-h" type="number" inputmode="decimal" value="0.6" step="0.1" min="0.1" max="5">
+          <span>m</span>
+        </label>
+        <button type="button" class="btn sm" id="btn-floor" title="在 0 / 3 / 6 / 9 米之间切换">楼层</button>
+        <button type="button" class="btn sm hidden" id="btn-cloud-clear">清除</button>
+        <span class="hint" id="cloud-note">拖动旋转</span>
+      </div>
+      <span class="pip-hint">点击放大</span>
     </div>
-  </section>
+  </div>
 
-  <!-- 遥测盘 -->
-  <section class="panel telemetry">
+  <div class="hud-layout-bar">
+    <button type="button" class="btn sm hud-swap" id="btn-swap" title="在一主三小和四宫格之间切换">2×2</button>
+    <button type="button" class="btn sm" id="btn-media">画面</button>
+  </div>
+  <div id="hud-layout" class="hud-layout hidden">
+    <span class="tag" id="media-budget">—</span>
+    <span class="hint" id="codec-note">正在探测解码能力…</span>
+    <div id="media-list" class="media-list hud-media-list"></div>
+  </div>
+
+  <!-- 遥测默认收起，再点收回。 -->
+  <button type="button" class="btn sm hud-telem-btn" id="btn-telem">遥测</button>
+  <section id="telemetry" class="panel telemetry hidden">
     <div class="panel-head"><span>遥测</span><span class="tag" id="tag-holder">观察者</span></div>
     <div class="grid">
       <div class="cell"><label>机体速度 X</label><b id="t-vx">0.00</b><em>m/s</em></div>
@@ -95,81 +203,108 @@
     <div class="errors" id="t-errors"></div>
   </section>
 
-  <!-- 操作区 -->
-  <section class="controls">
-
-    <div class="panel actions">
-      <div class="panel-head"><span>状态机</span></div>
+  <button type="button" class="btn sm hud-gp-btn" id="btn-gp">手柄</button>
+  <button type="button" class="btn sm hud-sticks-btn active" id="btn-sticks">摇杆</button>
+  <div id="gp-panel" class="panel hud-gp hidden">
+    <div class="gp-bar">
+      <div class="gp-line">
+        <span>物理手柄</span>
+        <span class="tag" id="gp-status">未连接</span>
+      </div>
+      <div class="gp-note" id="gp-note">插上手柄后拨动摇杆即可识别。</div>
+      <label class="gp-check">
+        <input type="checkbox" id="gp-deadman">
+        <span>死人开关：按住指定键才能推动，松手立即停</span>
+      </label>
       <div class="row">
-        <button class="btn" data-cmd="stand">坐 / 站</button>
-        <button class="btn" data-cmd="torque">力控站立</button>
-        <button class="btn" data-cmd="step">起步 / 停步</button>
+        <a class="btn sm" href="gamepad.html" target="_blank" rel="noopener">诊断 / 映射</a>
+        <button class="btn sm" id="gp-paste">粘贴映射</button>
+        <button class="btn sm" id="gp-clear">清除</button>
       </div>
-      <div class="panel-head"><span>步态</span></div>
-      <div class="row wrap" id="gait-row">
-        <button class="btn sm" data-gait="walk">常规</button>
-        <button class="btn sm" data-gait="slope">爬坡</button>
-        <button class="btn sm" data-gait="offroad">越野</button>
-        <button class="btn sm" data-gait="lwalk">低姿</button>
-        <button class="btn sm" data-gait="mountain">山地</button>
-        <button class="btn sm" data-gait="silent">静音</button>
-      </div>
+    </div>
+  </div>
 
-      <div class="panel-head">
-        <span>上下楼</span>
-        <span class="hint" id="stair-hint">需感知主机地形图配合</span>
+  <!-- 对讲单独一列，不跟手动/辅助/导航编成一组。 -->
+  <div class="hud-right">
+    <button type="button" class="btn hud-talk btn-talk" id="btn-talk">按住说话</button>
+    <div class="hud-modes">
+      <button type="button" class="btn" data-mode="manual">手动</button>
+      <button type="button" class="btn hud-assist" id="btn-assist">辅助</button>
+      <button type="button" class="btn" data-mode="auto">导航</button>
+    </div>
+  </div>
+
+  <div class="hud-stand">
+    <button type="button" class="btn hud-stand-btn" data-cmd="stand" id="btn-stand">起立</button>
+  </div>
+
+  <div id="hud-standing" class="hud-menus">
+    <!-- 原厂 RL 起立后直接能走；本网关仍要力控→起步，所以站立时放在中间，不压左摇杆。 -->
+    <button type="button" class="btn" data-cmd="torque">力控</button>
+    <button type="button" class="btn" data-cmd="step">起步</button>
+    <div class="acc">
+      <button type="button" class="btn acc-btn" data-acc="gait">步态</button>
+      <div class="acc-pop hidden" id="acc-gait">
+        <div class="row wrap" id="gait-row">
+          <button type="button" class="btn sm" data-gait="walk">常规</button>
+          <button type="button" class="btn sm" data-gait="slope">爬坡</button>
+          <button type="button" class="btn sm" data-gait="offroad">越野</button>
+          <button type="button" class="btn sm" data-gait="lwalk">低姿</button>
+          <button type="button" class="btn sm" data-gait="mountain">山地</button>
+          <button type="button" class="btn sm" data-gait="silent">静音</button>
+        </div>
       </div>
-      <div class="row">
-        <label class="sel-label" for="stair-style">踏面</label>
-        <select id="stair-style" class="sel">
-          <option value="solid">实心（常见混凝土楼梯）</option>
+    </div>
+    <div class="acc">
+      <button type="button" class="btn acc-btn" data-acc="stair">上下楼踏面</button>
+      <div class="acc-pop hidden" id="acc-stair">
+        <div class="acc-label">
+          <span>踏面</span>
+          <span class="hint" id="stair-hint">需感知主机地形图配合</span>
+        </div>
+        <select id="stair-style" class="sel hidden" aria-hidden="true">
+          <option value="solid" selected>实心（常见混凝土楼梯）</option>
           <option value="grating">格栅</option>
           <option value="noriser">无踢面</option>
         </select>
-      </div>
-      <div class="row wrap" id="stair-row">
-        <button class="btn sm" data-gait="stair">楼梯</button>
-        <button class="btn sm" data-gait="stairmulti">楼梯(多帧)</button>
-        <button class="btn sm" data-gait="stair45">45°楼梯</button>
-      </div>
-      <div class="panel-head"><span>身高</span></div>
-      <div class="row">
-        <button class="btn sm" data-height="normal">正常</button>
-        <button class="btn sm" data-height="crawl">匍匐</button>
-      </div>
-    </div>
-
-    <div class="panel sticks">
-      <div class="stick-wrap">
-        <div class="stick" id="stick-left"><div class="knob"></div><span class="stick-hint">前后 / 平移</span></div>
-      </div>
-      <div class="stick-wrap">
-        <div class="stick" id="stick-right"><div class="knob"></div><span class="stick-hint">转向 / 俯仰</span></div>
-      </div>
-      <div class="gp-bar">
-        <div class="gp-line">
-          <span>物理手柄</span>
-          <span class="tag" id="gp-status">未连接</span>
+        <div class="row wrap">
+          <button type="button" class="btn sm active" data-stair="solid">实心</button>
+          <button type="button" class="btn sm" data-stair="grating">格栅</button>
+          <button type="button" class="btn sm" data-stair="noriser">无踢面</button>
         </div>
-        <div class="gp-note" id="gp-note">插上手柄后拨动摇杆即可识别。</div>
-        <label class="gp-check">
-          <input type="checkbox" id="gp-deadman">
-          <span>死人开关：按住指定键才能推动，松手立即停</span>
-        </label>
-        <div class="row">
-          <a class="btn sm" href="gamepad.html" target="_blank" rel="noopener">诊断 / 映射</a>
-          <button class="btn sm" id="gp-paste">粘贴映射</button>
-          <button class="btn sm" id="gp-clear">清除</button>
+        <div class="row wrap" id="stair-row">
+          <button type="button" class="btn sm" data-gait="stair">楼梯</button>
+          <button type="button" class="btn sm" data-gait="stairmulti">楼梯(多帧)</button>
+          <button type="button" class="btn sm" data-gait="stair45">45°楼梯</button>
         </div>
       </div>
     </div>
+    <div class="acc">
+      <button type="button" class="btn acc-btn" data-acc="height">身高</button>
+      <div class="acc-pop hidden" id="acc-height">
+        <div class="row wrap">
+          <button type="button" class="btn sm" data-height="normal">正常</button>
+          <button type="button" class="btn sm" data-height="crawl">匍匐</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  </section>
+  <div class="hud-sticks" id="hud-sticks">
+    <div class="stick-wrap stick-wrap-left">
+      <div class="stick" id="stick-left"><div class="knob"></div><span class="stick-hint">前后 / 平移</span></div>
+    </div>
+    <div class="stick-wrap stick-wrap-right">
+      <div class="stick" id="stick-right"><div class="knob"></div><span class="stick-hint">转向 / 俯仰</span></div>
+    </div>
+  </div>
 </main>
 
 <script src="media.js"></script>
+<script src="capture.js"></script>
 <script src="cloud.js"></script>
 <script src="gamepad.js"></script>
+<script src="settings.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

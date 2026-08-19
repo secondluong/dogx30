@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -16,6 +17,7 @@
 
 #include "x30/cloud_bridge.hpp"
 #include "x30/gait_coordinator.hpp"
+#include "x30/gateway_config.hpp"
 #include "x30/media_registry.hpp"
 #include "x30/motion_client.hpp"
 #include "x30/terrain_client.hpp"
@@ -47,6 +49,25 @@ struct RobotServiceConfig {
   // 遥控端应以 2 Hz 发心跳，这个值留了 6 倍余量。
   // 它兜的是 TCP 半开连接 —— 平板突然断电时 OnDisconnect 可能迟迟不触发。
   int control_lease_ms = 3000;
+
+  // --- 在线改配置 -----------------------------------------------------------
+  // 三者缺一就不提供这个功能，config_* 消息一律回「未启用」。开发机上直接跑
+  // 网关时本就不该有它：那时既没有配置文件，也没有 systemd 来接住重启。
+
+  // 配置文件路径（--config）。为空表示没有可写回的地方。
+  std::string config_path;
+
+  // 管理令牌文件（--admin-token-file）。协议没有身份认证，改配置这种能把
+  // 服务指向别处、或把监听面打开的操作必须单独设一道门。
+  std::string admin_token_file;
+
+  // 当前实际生效的配置。config_get 回显的是这份，而不是文件内容 ——
+  // 命令行参数会覆盖文件，回显文件就会和真正在跑的东西不一致。
+  GatewaySettings settings;
+
+  // 请求重启以让新配置生效。为空表示当前不由 systemd 托管，没人会把网关拉
+  // 回来，那就只写文件并让操作员自己重启，绝不能自己退出后起不来。
+  std::function<void()> request_restart;
 };
 
 class RobotService {
@@ -81,6 +102,16 @@ class RobotService {
   void SendGaitResult(WsServer::ClientId id, Gait target,
                       const GaitCoordinator::Result& result);
   void SendMediaPlan(WsServer::ClientId id);
+
+  // 在线改配置。两条消息共用一次令牌校验，见 docs/app-protocol.md。
+  bool ConfigEnabled() const;
+  bool CheckAdminToken(WsServer::ClientId id, const Json& msg);
+  void HandleConfigGet(WsServer::ClientId id);
+  void HandleConfigSet(WsServer::ClientId id, const Json& msg);
+
+  // 有没有人正持有控制权（含未过期的租约）。改配置要重启，重启会中断遥控，
+  // 所以只在没人操控时才允许。
+  bool ControlHeld();
 
   std::string BuildStateJson() const;
 

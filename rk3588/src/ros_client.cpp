@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #if defined(_WIN32)
@@ -48,6 +49,77 @@ bool SendAll(int fd, const char* data, size_t len) {
     len -= static_cast<size_t>(n);
   }
   return true;
+}
+
+bool ParseHttpUri(const std::string& uri, std::string* host, uint16_t* port,
+                  std::string* path) {
+  const std::string prefix = "http://";
+  if (uri.compare(0, prefix.size(), prefix) != 0) return false;
+  const size_t host_begin = prefix.size();
+  const size_t slash = uri.find('/', host_begin);
+  const std::string authority =
+      uri.substr(host_begin, slash == std::string::npos
+                                 ? std::string::npos
+                                 : slash - host_begin);
+  *path = slash == std::string::npos ? "/" : uri.substr(slash);
+  const size_t colon = authority.rfind(':');
+  if (colon == std::string::npos) {
+    *host = authority;
+    *port = 80;
+  } else {
+    *host = authority.substr(0, colon);
+    *port = static_cast<uint16_t>(std::atoi(authority.c_str() + colon + 1));
+  }
+  return !host->empty();
+}
+
+bool IsIpv4Literal(const std::string& host) {
+  unsigned a = 0, b = 0, c = 0, d = 0;
+  char extra = 0;
+  if (std::sscanf(host.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4) {
+    return false;
+  }
+  return a <= 255 && b <= 255 && c <= 255 && d <= 255;
+}
+
+bool HostnameResolves(const std::string& host) {
+  addrinfo hints{};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* res = nullptr;
+  const int rc = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
+  if (res) ::freeaddrinfo(res);
+  return rc == 0;
+}
+
+std::string RewriteHttpUriHost(const std::string& uri,
+                               const std::string& new_host) {
+  std::string host;
+  std::string path;
+  uint16_t port = 0;
+  if (!ParseHttpUri(uri, &host, &port, &path)) return uri;
+  return "http://" + new_host + ":" + std::to_string(port) + path;
+}
+
+// 感知主机经常把 ROS_HOSTNAME 设成 host 这种板子解析不了的短名。
+// TCPROS 是我们主动连发布者，解不开就会永远卡在「连接发布者失败」。
+// 短名解不开时，用 master URI 里的 IP 顶上——发布者和 master 在同一台机器上。
+std::string ResolveAdvertisedHost(const std::string& advertised,
+                                  const std::string& master_uri) {
+  if (advertised.empty() || IsIpv4Literal(advertised) ||
+      HostnameResolves(advertised)) {
+    return advertised;
+  }
+  std::string master_host;
+  std::string master_path;
+  uint16_t master_port = 0;
+  if (!ParseHttpUri(master_uri, &master_host, &master_port, &master_path) ||
+      master_host.empty()) {
+    return advertised;
+  }
+  std::printf("[ros] 发布者地址 %s 解析不了，改用 master 所在的 %s\n",
+              advertised.c_str(), master_host.c_str());
+  return master_host;
 }
 
 bool RecvExact(int fd, uint8_t* buf, size_t len,
@@ -194,7 +266,16 @@ bool RosClient::ConnectOnce(Subscription* sub, std::string* error) {
   }
 
   // 2. 问发布者要 TCPROS 的地址端口。
-  const std::string pub_uri = publishers.At(0).AsString();
+  std::string pub_uri = publishers.At(0).AsString();
+  std::string pub_host;
+  std::string pub_path;
+  uint16_t pub_port = 0;
+  if (ParseHttpUri(pub_uri, &pub_host, &pub_port, &pub_path)) {
+    const std::string resolved = ResolveAdvertisedHost(pub_host, cfg_.master_uri);
+    if (resolved != pub_host) {
+      pub_uri = RewriteHttpUriHost(pub_uri, resolved);
+    }
+  }
   XmlRpcValue topic_reply;
   if (!XmlRpcCall(pub_uri, "requestTopic",
                   {XmlRpcValue::Str(cfg_.node_name),
@@ -211,7 +292,8 @@ bool RosClient::ConnectOnce(Subscription* sub, std::string* error) {
   }
 
   const XmlRpcValue& proto = topic_reply.At(2);
-  const std::string host = proto.At(1).AsString();
+  const std::string host =
+      ResolveAdvertisedHost(proto.At(1).AsString(), cfg_.master_uri);
   const auto port = static_cast<uint16_t>(proto.At(2).AsInt());
   if (host.empty() || port == 0) {
     *error = "发布者返回的 TCPROS 地址无效";

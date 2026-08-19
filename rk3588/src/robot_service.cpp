@@ -137,6 +137,7 @@ bool RobotService::TryClaim(WsServer::ClientId id) {
   if (!free) return false;
   controller_ = id;
   lease_expiry_ = Clock::now() + std::chrono::milliseconds(cfg_.control_lease_ms);
+  client_.SetCommanding(true);
   return true;
 }
 
@@ -154,7 +155,10 @@ void RobotService::ReleaseControl(WsServer::ClientId id, bool zero_axes) {
     // 控制端走了就立刻停车，不等看门狗那 300 ms。
     client_.ReleaseAxes();
   }
-  if (released) BroadcastControlState();
+  if (released) {
+    client_.SetCommanding(false);
+    BroadcastControlState();
+  }
 }
 
 void RobotService::TouchLease(WsServer::ClientId id) {
@@ -208,6 +212,101 @@ void RobotService::SendGaitResult(WsServer::ClientId id, Gait target,
 }
 
 // ---------------------------------------------------------------------------
+// 在线改配置
+// ---------------------------------------------------------------------------
+
+bool RobotService::ConfigEnabled() const { return !cfg_.config_path.empty(); }
+
+bool RobotService::ControlHeld() {
+  std::lock_guard<std::mutex> lock(control_mutex_);
+  return controller_ != 0 && Clock::now() <= lease_expiry_;
+}
+
+bool RobotService::CheckAdminToken(WsServer::ClientId id, const Json& msg) {
+  const std::string expected = LoadAdminToken(cfg_.admin_token_file);
+  if (expected.empty()) {
+    SendError(id, "no_admin_token",
+              "本机没有配置管理令牌，在线改配置已禁用。"
+              "重跑 deploy/install.sh 会生成一个。");
+    return false;
+  }
+  if (!TokenMatches(expected, msg.String("token"))) {
+    // 敏感操作的失败要留痕。现场若真有人在试，日志是唯一的线索。
+    std::printf("[配置] 客户端 %llu 管理令牌不符，已拒绝\n",
+                static_cast<unsigned long long>(id));
+    SendError(id, "bad_admin_token", "管理令牌不正确");
+    return false;
+  }
+  return true;
+}
+
+void RobotService::HandleConfigGet(WsServer::ClientId id) {
+  JsonWriter w;
+  w.BeginObject()
+      .Key("t", "config")
+      .Raw("settings", GatewaySettingsJson(cfg_.settings))
+      .Key("path", cfg_.config_path)
+      // 遥控端据此决定保存后是「等它自己回来」还是「提示人去重启」。
+      .Key("auto_restart", static_cast<bool>(cfg_.request_restart))
+      .Key("control_held", ControlHeld())
+      .EndObject();
+  server_.Send(id, w.Take());
+}
+
+void RobotService::HandleConfigSet(WsServer::ClientId id, const Json& msg) {
+  // 改完要重启，重启会中断遥控几秒。狗正被人操控时绝不能发生。
+  if (ControlHeld()) {
+    SendError(id, "busy_control",
+              "有客户端正持有控制权。改配置需要重启网关，遥控会中断，"
+              "请先释放控制权。");
+    return;
+  }
+
+  GatewaySettings next = cfg_.settings;
+  std::string error;
+  if (!MergeGatewaySettings(msg["settings"], &next, &error)) {
+    SendError(id, "bad_config", error.c_str());
+    return;
+  }
+  if (!ValidateGatewaySettings(next, cfg_.settings, &error)) {
+    SendError(id, "bad_config", error.c_str());
+    return;
+  }
+  if (!SaveGatewaySettings(cfg_.config_path, next, &error)) {
+    SendError(id, "config_write_failed", error.c_str());
+    return;
+  }
+
+  cfg_.settings = next;
+  std::printf("[配置] 客户端 %llu 已写入新配置：运动主机 %s，感知主机 %s，"
+              "监听 %s:%u，点云 %s\n",
+              static_cast<unsigned long long>(id), next.robot_ip.c_str(),
+              next.perception_ip.c_str(), next.bind_address.c_str(),
+              next.http_port, next.cloud_enabled ? "开" : "关");
+
+  const bool auto_restart = static_cast<bool>(cfg_.request_restart);
+  JsonWriter w;
+  w.BeginObject()
+      .Key("t", "config_saved")
+      .Raw("settings", GatewaySettingsJson(next))
+      .Key("auto_restart", auto_restart)
+      .EndObject();
+  server_.Send(id, w.Take());
+
+  if (!auto_restart) return;
+
+  // 让回执先出门再退出。直接在这里请求停机的话，服务器会在响应写完之前就
+  // 开始收摊，遥控端只看到连接断开，不知道到底存没存上。
+  //
+  // 拷一份 std::function 而不是捕获 this：这个线程的寿命可能超过本对象。
+  auto restart = cfg_.request_restart;
+  std::thread([restart]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    restart();
+  }).detach();
+}
+
+// ---------------------------------------------------------------------------
 // 连接与消息
 // ---------------------------------------------------------------------------
 
@@ -225,6 +324,9 @@ void RobotService::OnConnect(WsServer::ClientId id) {
       .Key("control", holder == id)
       .Key("holder", static_cast<int>(holder))
       .Key("lease_ms", cfg_.control_lease_ms)
+      // 本机是否支持在线改配置。只是个能力位，不含任何配置内容 ——
+      // 遥控端据此决定要不要显示「设置」入口，真要取值还得凭令牌。
+      .Key("config", ConfigEnabled())
       .EndObject();
   server_.Send(id, w.Take());
   server_.Send(id, BuildStateJson());
@@ -345,6 +447,23 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     return;
   }
 
+  // 改配置要单独的管理令牌，控制权在这里不作数：操控狗和改网关指向是两回事，
+  // 后者危险得多（能把服务指到别的主机上，也能把监听面从内网扩到全部网卡）。
+  if (t == "config_get" || t == "config_set") {
+    if (!ConfigEnabled()) {
+      SendError(id, "no_config",
+                "本机未启用在线改配置（需要以 --config 指定配置文件）");
+      return;
+    }
+    if (!CheckAdminToken(id, msg)) return;
+    if (t == "config_get") {
+      HandleConfigGet(id);
+    } else {
+      HandleConfigSet(id, msg);
+    }
+    return;
+  }
+
   if (t == "cmd") {
     const std::string name = msg.String("name");
 
@@ -445,12 +564,19 @@ std::string RobotService::BuildStateJson() const {
   const RobotState s = client_.Snapshot();
   const GaitLimits limits = LimitsOf(s.gait);
 
+  // RL 起立后运动主机仍报「坐下」。芯片若跟着撒谎，人会以为没起来而连点起立。
+  const char* state_text = ToString(s.basic_state);
+  if (s.rl_standing && s.basic_state == BasicState::kSitting) {
+    state_text = "RL 站立 · 可走";
+  }
+
   JsonWriter w;
   w.BeginObject()
       .Key("t", "state")
       .Key("alive", s.telemetry_alive)
       .Key("basic_state", static_cast<int>(s.basic_state))
-      .Key("basic_state_text", ToString(s.basic_state))
+      .Key("basic_state_text", state_text)
+      .Key("rl_standing", s.rl_standing)
       .Key("gait", static_cast<int>(s.gait))
       .Key("gait_key", GaitKey(s.gait))
       .Key("gait_text", ToString(s.gait))
@@ -541,6 +667,7 @@ void RobotService::StateLoop() {
       }
       if (expired) {
         client_.ReleaseAxes();
+        client_.SetCommanding(false);
         BroadcastControlState();
         std::printf("[ws] 控制权租约超时，已释放并清零轴指令\n");
       }

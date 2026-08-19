@@ -1,8 +1,12 @@
 // X30 运动控制客户端。
 //
 // 职责：
-//   - 维持与运动主机的心跳，并在首次心跳后补发连接确认；
-//   - 以 50 Hz 稳定下发轴指令（这是协议硬性要求，超过 1 秒不发即失效）；
+  //   - 仅在本端持有控制权时维持心跳并下发轴指令。没人 claim 时保持沉默，
+  //     否则会和原厂 2.4G 手柄抢同一个 0x21 源：两边的心跳和全零轴互相覆盖，
+  //     运动主机谁的都不听。交互式终端一启动就算持有。
+  //   - 以 50 Hz 稳定下发轴指令（协议要求，超过 1 秒不发即失效）；
+  //     只在力控站立和踏步态发，起立/坐下过渡期间停发，否则身高=0
+  //     会把原厂柔和轨迹掐成猛起猛趴；
 //   - 接收并解析运动主机单播回来的遥测；
 //   - 看门狗：上层（平板）一旦停止喂数据，立即把轴指令清零，让机器人原地踏步
 //     而不是带着最后一次速度继续跑。
@@ -81,6 +85,10 @@ struct RobotState {
   int32_t current_mileage_cm = 0;
   uint32_t error_state = 0;
   uint8_t emergency_source = 0;
+
+  // RL 起立之后运动主机仍报 basic_state=0。此标志表示我们已发起立、尚未发趴下。
+  // 控制台用它显示「RL 站立」，避免芯片一直写「坐下」让人连点起立。
+  bool rl_standing = false;
 };
 
 // 把 error_state 位域翻译成人可读的告警列表，无告警时返回空串。
@@ -102,7 +110,7 @@ class MotionClient {
   // 直接忽略。所以调用方应当依据 Snapshot().basic_state 判断是否该发，
   // 而不是假设发了就一定生效。
 
-  void StandOrSit();        // 坐 <-> 站 切换
+  void StandOrSit();        // 坐 <-> 站。发原厂手柄那对 RL 指令，不是文档里的旧切换
   void EnterTorqueStand();  // 初始站立 -> 力控站立
   void ToggleStepping();    // 力控站立 <-> 踏步 切换
   void SetGait(Gait gait);
@@ -124,6 +132,11 @@ class MotionClient {
   // 主动放弃控制，立刻把轴指令清零。
   void ReleaseAxes();
 
+  // 是否向运动主机发心跳和轴。遥控服务在 claim 时打开、释放时关掉；
+  // 关掉之后原厂 2.4G 手柄才能单独工作。
+  void SetCommanding(bool on);
+  bool commanding() const { return commanding_.load(); }
+
   RobotState Snapshot() const;
 
  private:
@@ -142,6 +155,7 @@ class MotionClient {
   std::thread rx_thread_;
   std::atomic<bool> running_{false};
   std::atomic<bool> connect_confirmed_{false};
+  std::atomic<bool> commanding_{false};
 
   // 轴指令的当前值与有效期。TX 线程按 axis_rate_hz 原样重发。
   mutable std::mutex axis_mutex_;
@@ -154,6 +168,15 @@ class MotionClient {
   mutable std::mutex state_mutex_;
   RobotState state_;
   std::chrono::steady_clock::time_point last_telemetry_{};
+
+  // 上次「坐/站」发出去的是起立还是趴下。RL 起立后遥测仍报坐下，
+  // 只能靠这个决定下一次该发哪条，不能信 basic_state。
+  enum class LastStandSit { kUnknown, kStood, kSat };
+  LastStandSit last_stand_sit_{LastStandSit::kUnknown};
+
+  // 操作员点了力控/起步。RL 起立后遥测仍报 0，AxisCommandsApply 会把轴吞掉；
+  // 网关重启也会丢掉 last_stand_sit_。这条记下「按可走发轴」。趴下/急停清掉。
+  bool axes_unlocked_ = false;
 };
 
 }  // namespace x30

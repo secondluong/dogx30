@@ -229,6 +229,14 @@ const Json& Json::operator[](const std::string& key) const {
   return it == object_.end() ? NullJson() : it->second;
 }
 
+std::vector<std::string> Json::Keys() const {
+  std::vector<std::string> keys;
+  if (type_ != Type::kObject) return keys;
+  keys.reserve(object_.size());
+  for (const auto& entry : object_) keys.push_back(entry.first);
+  return keys;
+}
+
 size_t Json::Size() const {
   return type_ == Type::kArray ? array_.size() : 0;
 }
@@ -354,6 +362,12 @@ JsonWriter& JsonWriter::Key(const std::string& key, unsigned value) {
 JsonWriter& JsonWriter::Key(const std::string& key, bool value) {
   Separate();
   buffer_ += '"' + JsonEscape(key) + "\":" + (value ? "true" : "false");
+  return *this;
+}
+
+JsonWriter& JsonWriter::Raw(const std::string& key, const std::string& json) {
+  Separate();
+  buffer_ += '"' + JsonEscape(key) + "\":" + (json.empty() ? "null" : json);
   return *this;
 }
 

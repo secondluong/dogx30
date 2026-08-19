@@ -6,18 +6,22 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# 地址、端口、点云开关都在 conf/gateway.conf 里，这里刻意不重复它们：
+# 两处各存一份的话，迟早出现「单元里写着 .103、实际跑的是 .200」，
+# 而去读单元的人会信单元。控制台的「设置」面板改的就是那个文件。
 ExecStart=/opt/x30/bin/x30_gateway \
-    --robot-ip 192.168.1.103 \
-    --local-port 43897 \
-    --perception-ip 192.168.1.105 \
-    --serve --port 8080 --bind 0.0.0.0 \
+    --config /opt/x30/conf/gateway.conf \
+    --admin-token-file /opt/x30/conf/admin.token \
+    --serve \
     --web /opt/x30/web \
-    --media /opt/x30/media.json \
-    --ros-master http://192.168.1.105:11311 --ros-host 192.168.1.120
+    --media /opt/x30/media.json
 WorkingDirectory=/opt/x30
 
 # 网关掉线时机器狗会按 overtime.toml 自行降级停下，所以自动重启是安全的，
 # 而且必须尽快 —— 每多停一秒操作员就多失控一秒。
+#
+# 控制台改配置也靠这一条：网关写完新配置就干净退出，由这里把它拉回来。
+# 所以是 always 而不是 on-failure —— 改配置走的是正常退出（状态码 0）。
 Restart=always
 RestartSec=1
 
@@ -37,7 +41,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/opt/x30/log
+# conf/ 要可写，控制台的「设置」面板要往 gateway.conf 里写。
+# 只给这个子目录而不是整个 /opt/x30 —— 后者等于让网关能改自己的二进制。
+ReadWritePaths=/opt/x30/log /opt/x30/conf
 
 [Install]
 WantedBy=multi-user.target

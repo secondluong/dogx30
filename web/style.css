@@ -24,6 +24,11 @@ html, body {
   user-select: none;
   touch-action: manipulation;
 }
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
 /* ---------- 顶栏 ---------- */
 
@@ -83,6 +88,14 @@ html, body {
 .btn:active { transform: scale(.97); }
 .btn.sm { padding: 7px 11px; font-size: 13px; }
 .btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* 力控/起步/起立：点下去先 pending，遥测对上了再保持绿色 */
+.btn.pending { box-shadow: 0 0 0 2px var(--ok); }
+.btn.on {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #06210d;
+  font-weight: 600;
+}
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 .btn-ghost.held { background: var(--ok); border-color: var(--ok); color: #06210d; font-weight: 600; }
@@ -106,24 +119,168 @@ html, body {
   color: #ffb3ae;
   font-size: 13px;
 }
-.hidden { display: none; }
+/* !important 是必须的，不是偷懒：这是个工具类，要盖掉的是自带 display 的组件类
+   （.set-mask 是 flex、.layout 是 grid）。两边都只有一个类，优先级持平，就只能
+   看谁写在后面 —— 而组件规则总是往文件尾部加。设置面板正是这么变成关不掉的：
+   .set-mask 在 .hidden 之后 267 行，于是 display:flex 永远赢，加 .hidden 没有任何效果。 */
+.hidden { display: none !important; }
 
-/* ---------- 布局 ---------- */
+/* ---------- 全屏底图 ---------- */
 
-.layout {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  grid-template-areas: "view telemetry" "controls controls";
-  gap: 12px;
-  padding: 12px;
+.stage-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #000;
 }
-.view { grid-area: view; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.telemetry { grid-area: telemetry; }
-.controls { grid-area: controls; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
-@media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; grid-template-areas: "view" "telemetry" "controls"; }
-  .view, .controls { grid-template-columns: 1fr; }
+.stage { position: absolute; inset: 0; }
+
+.pane {
+  position: absolute;
+  overflow: hidden;
+  background: #000;
+}
+.pane .media-video,
+.pane .cloud-canvas {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  object-fit: cover;
+  border-radius: 0;
+}
+.pane .cloud-wrap { width: 100%; height: 100%; }
+
+.pane-label {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(0, 0, 0, .5);
+  pointer-events: none;
+}
+.pane-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 4;
+  display: none;
+  gap: 6px;
+}
+.stage.layout-1x1 .pane.is-main .pane-actions,
+.stage.layout-2x2 .pane .pane-actions {
+  display: flex;
+}
+.stage.layout-1x1 .pane.is-main .pane-actions {
+  top: 10px;
+  right: 88px; /* 给右侧遥测/手柄留空 */
+}
+.stage.layout-2x2 .pane .pane-actions {
+  top: auto;
+  bottom: 6px;
+  right: 6px;
+  flex-wrap: wrap;
+  max-width: 72%;
+  justify-content: flex-end;
+}
+.pane-actions .btn {
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+}
+.btn-rec.active {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.pane-cloud-ctl {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  bottom: auto;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 8px;
+  margin-top: 0;
+  max-width: min(980px, calc(100% - 240px));
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: rgba(13, 17, 23, .78);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+
+/* 1×1：一块铺满，其余左上角竖排小窗 */
+.stage.layout-1x1 .pane.is-main {
+  inset: 0;
+  z-index: 1;
+}
+.stage.layout-1x1 .pane.is-pip {
+  z-index: 5;
+  width: min(220px, 28vw);
+  height: min(120px, 17vh);
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  cursor: pointer;
+}
+.stage.layout-1x1 .pane.is-pip[data-pip="0"] { top: 10px; left: 10px; }
+.stage.layout-1x1 .pane.is-pip[data-pip="1"] {
+  top: calc(10px + min(120px, 17vh) + 8px);
+  left: 10px;
+}
+.stage.layout-1x1 .pane.is-pip[data-pip="2"] {
+  top: calc(10px + 2 * (min(120px, 17vh) + 8px));
+  left: 10px;
+}
+.stage.layout-1x1 .pane.is-pip .media-video,
+.stage.layout-1x1 .pane.is-pip .cloud-canvas,
+.stage.layout-1x1 .pane.is-pip .cloud-idle,
+.stage.layout-1x1 .pane.is-pip .media-idle { border-radius: 9px; }
+.stage.layout-1x1 .pane.is-pip .pip-hint { display: block; }
+.stage.layout-1x1 .pane.is-pip .pane-cloud-ctl { display: none; }
+
+/* 2×2：四块均分 */
+.stage.layout-2x2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 3px;
+}
+.stage.layout-2x2 .pane {
+  position: relative;
+  inset: auto;
+  width: auto;
+  height: auto;
+  cursor: pointer;
+}
+.stage.layout-2x2 .pip-hint { display: none; }
+.stage.layout-2x2 .pane-cloud-ctl { display: none !important; }
+
+.pip-hint {
+  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  text-align: center;
+  font-size: 11px;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .65));
+  padding: 16px 6px 6px;
+  pointer-events: none;
 }
 
 /* ---------- 面板 ---------- */
@@ -253,15 +410,71 @@ html, body {
 
 /* 未订阅时盖在画布上，而不是把画布拆掉 —— 保住 WebGL 上下文，
    避免反复订阅时重建着色器。 */
-.cloud-idle {
+.cloud-idle,
+.media-idle {
   position: absolute;
   inset: 0;
   background: #0d1218;
   border-radius: 8px;
   pointer-events: none;
 }
+.media-idle { background: rgba(13, 18, 24, .82); }
 
 .cloud-ctl { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+
+.cloud-seg {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(28, 34, 48, .55);
+}
+.cloud-seg .btn {
+  border: 0;
+  border-radius: 0;
+  padding: 5px 9px;
+  font-size: 12px;
+  background: transparent;
+}
+.cloud-seg .btn + .btn { border-left: 1px solid var(--line); }
+.cloud-seg .btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.cloud-lab {
+  padding: 0 6px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.cloud-check, .cloud-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.cloud-check input { accent-color: var(--accent); }
+.cloud-num input {
+  width: 52px;
+  padding: 3px 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0d1218;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+  user-select: text;
+}
+#cloud-accum.is-dim { opacity: .4; pointer-events: none; }
+#btn-trail.active {
+  background: #c62828;
+  border-color: #c62828;
+  color: #fff;
+}
 
 #btn-cloud.active {
   background: var(--ok);
@@ -270,7 +483,8 @@ html, body {
 }
 
 /* 按住说话时给个明确的按下态 —— 操作员必须一眼看出麦克风开着没有。 */
-#btn-talk.active {
+#btn-talk.active,
+.btn-talk.active {
   background: var(--ok);
   color: #06210d;
   font-weight: 600;
@@ -328,7 +542,14 @@ html, body {
   width: 180px;
   height: 180px;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 45%, #222b3a 0%, #141a24 70%);
+  /* 扇形从正上/正右/正下/正左各占 90°。十字线转 45°，向上推是上面那块扇形，不是竖线。 */
+  background:
+    conic-gradient(from -45deg,
+      rgba(47, 129, 247, .20) 0deg 90deg,
+      rgba(255, 255, 255, .05) 90deg 180deg,
+      rgba(47, 129, 247, .12) 180deg 270deg,
+      rgba(255, 255, 255, .05) 270deg 360deg),
+    radial-gradient(circle at 50% 45%, #222b3a 0%, #141a24 70%);
   border: 1px solid var(--line);
   touch-action: none;
   display: flex;
@@ -339,10 +560,20 @@ html, body {
 .stick::after {
   content: "";
   position: absolute;
-  background: var(--line);
+  left: 50%;
+  top: 50%;
+  background: rgba(139, 152, 169, .55);
 }
-.stick::before { width: 1px; height: 100%; }
-.stick::after { height: 1px; width: 100%; }
+.stick::before {
+  width: 1px;
+  height: 100%;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.stick::after {
+  width: 100%;
+  height: 1px;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
 
 .knob {
   position: absolute;
@@ -364,4 +595,310 @@ html, body {
   font-size: 11px;
   color: var(--muted);
   pointer-events: none;
+}
+
+/* ---------- 设置面板 ---------- */
+
+.set-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(4, 7, 12, .72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.set-panel {
+  width: 100%;
+  max-width: 560px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.6);
+}
+
+.set-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.set-unlock, .set-form { padding: 14px 16px; overflow-y: auto; }
+.set-unlock p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+
+.set-sect {
+  margin: 16px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.set-sect:first-child { margin-top: 0; }
+.set-sect-note { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+
+/* 标签在上、输入在下、提示在最后。现场戴手套用平板，横排会挤到点不准。 */
+.set-row {
+  display: block;
+  margin-bottom: 12px;
+  cursor: default;
+}
+.set-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+
+.set-input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  user-select: text;
+}
+.set-input:focus { outline: none; border-color: var(--accent); }
+.set-input:disabled { opacity: .45; }
+/* 跟着别的字段自动改过的值，标出来让人看见 */
+.set-input.set-auto { border-color: var(--warn); }
+
+.set-check { width: 18px; height: 18px; accent-color: var(--accent); vertical-align: middle; }
+
+.set-hint { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.set-row.set-off .set-label, .set-row.set-off .set-hint { opacity: .5; }
+
+.set-note {
+  margin: 0 16px 12px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  font-size: 13px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  user-select: text;
+}
+.set-note.ok   { border-color: var(--ok);     background: rgba(63,185,80,.12); }
+.set-note.warn { border-color: var(--warn);   background: rgba(210,153,34,.12); }
+.set-note.bad  { border-color: var(--danger); background: rgba(248,81,73,.12); }
+
+.set-foot {
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
+}
+/* 未解锁时表单和保存键都不在，留一条空的底边很难看 */
+.set-locked .set-foot { display: none; }
+
+.set-panel code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  font-size: 12px;
+  user-select: text;
+}
+
+/* ---------- HUD 叠加（按原厂手柄：键浮在底图上） ---------- */
+
+.hud-swap, .hud-telem-btn, .hud-gp-btn, .hud-sticks-btn {
+  z-index: 12;
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+}
+.hud-layout-bar {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  gap: 6px;
+}
+.stage-wrap:has(.layout-1x1) .hud-layout-bar {
+  top: 10px;
+  left: calc(10px + min(220px, 28vw) + 8px);
+}
+.stage-wrap:has(.layout-2x2) .hud-layout-bar {
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.hud-layout {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(13, 17, 23, .88);
+  border: 1px solid var(--line);
+  max-width: min(420px, 46vw);
+}
+.stage-wrap:has(.layout-1x1) .hud-layout {
+  top: 50px;
+  left: calc(10px + min(220px, 28vw) + 8px);
+}
+.stage-wrap:has(.layout-2x2) .hud-layout {
+  top: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(520px, 70vw);
+}
+.hud-media-list {
+  flex: 1 0 100%;
+  max-height: 22vh;
+  overflow-y: auto;
+}
+
+.hud-telem-btn, .hud-gp-btn, .hud-sticks-btn {
+  position: absolute;
+  right: 16px;
+}
+.hud-telem-btn { top: 10px; }
+.hud-gp-btn { top: 50px; }
+.hud-sticks-btn { top: 90px; }
+
+#telemetry.telemetry {
+  position: absolute;
+  top: 10px;
+  right: 88px;
+  width: min(320px, calc(100% - 110px));
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  z-index: 14;
+  display: block;
+  background: rgba(22, 27, 34, .92);
+  backdrop-filter: blur(8px);
+}
+
+.hud-gp {
+  position: absolute;
+  top: 88px;
+  right: 88px;
+  width: min(320px, calc(100% - 110px));
+  z-index: 14;
+  display: block;
+  background: rgba(22, 27, 34, .92);
+  backdrop-filter: blur(8px);
+}
+.hud-gp .gp-bar { border-top: 0; padding-top: 0; }
+
+.hud-right {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  width: 76px;
+  gap: 10px;
+}
+.hud-talk {
+  padding: 16px 8px;
+  line-height: 1.35;
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+  font-weight: 600;
+}
+.hud-modes {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+.hud-modes .btn {
+  border-radius: 0;
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+  padding: 12px 8px;
+}
+.hud-modes .btn:first-child { border-radius: 8px 8px 0 0; }
+.hud-modes .btn:last-child { border-radius: 0 0 8px 8px; }
+.hud-modes .btn + .btn { border-top: 0; }
+.hud-assist { opacity: .55; }
+
+.hud-stand {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.hud-stand-btn {
+  min-width: 96px;
+  padding: 14px 22px;
+  font-size: 16px;
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+}
+.hud-menus > .btn {
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+}
+
+.hud-menus {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: flex;
+  gap: 8px;
+}
+.acc { position: relative; }
+.acc-btn {
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
+.acc-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 220px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(22, 27, 34, .94);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.acc-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 趴下：只留左下起立和右侧模式。站立才出步态/踏面/身高、力控起步、摇杆。 */
+.dog-prone .hud-menus,
+.dog-prone .hud-sticks { display: none !important; }
+
+.hud-sticks { position: absolute; inset: 0; z-index: 8; pointer-events: none; }
+.hud-sticks .stick-wrap { position: absolute; bottom: 88px; pointer-events: auto; }
+.hud-sticks .stick-wrap-left { left: 16px; }
+.hud-sticks .stick-wrap-right { right: 100px; }
+.hud-sticks .stick {
+  width: 150px;
+  height: 150px;
+  opacity: .88;
+}
+.hud-sticks .knob { width: 52px; height: 52px; }
+
+@media (max-width: 820px) {
+  .hud-sticks .stick { width: 120px; height: 120px; }
+  .hud-sticks .knob { width: 44px; height: 44px; }
+  .hud-menus { left: auto; right: 100px; transform: none; bottom: 16px; flex-wrap: wrap; max-width: 46vw; }
+  .acc-pop { left: auto; right: 0; transform: none; }
+  #telemetry.telemetry, .hud-gp { right: 16px; top: 88px; }
 }

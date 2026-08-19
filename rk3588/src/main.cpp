@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 
+#include "x30/gateway_config.hpp"
 #include "x30/motion_client.hpp"
 #include "x30/robot_service.hpp"
 #include "x30/terrain_client.hpp"
@@ -25,6 +26,7 @@ namespace {
 
 using x30::ControlMode;
 using x30::Gait;
+using x30::GatewaySettings;
 using x30::HeightGear;
 using x30::MotionClient;
 using x30::MotionClientConfig;
@@ -276,8 +278,66 @@ void RunInteractive(MotionClient& client, const MotionClientConfig& cfg) {
   feeder.Stop();
 }
 
+// 配置文件的值铺到各层配置上。
+void ApplySettings(const GatewaySettings& s, MotionClientConfig* motion,
+                   x30::TerrainClientConfig* terrain,
+                   x30::RobotServiceConfig* svc) {
+  motion->robot_ip = s.robot_ip;
+  motion->robot_port = s.robot_port;
+  motion->local_port = s.local_port;
+
+  terrain->perception_ip = s.perception_ip;
+  terrain->perception_port = s.perception_port;
+
+  svc->port = s.http_port;
+  svc->bind_address = s.bind_address;
+
+  svc->cloud_enabled = s.cloud_enabled;
+  svc->cloud.master_uri = s.ros_master;
+  svc->cloud.node_host = s.ros_host;
+  svc->cloud.topic = s.cloud_topic;
+  svc->cloud.cloud.target_hz = s.cloud_hz;
+  svc->cloud.cloud.max_points = s.cloud_points;
+}
+
+// 反过来把真正生效的值收集回来。控制台「设置」面板回显的是这一份，而不是
+// 文件内容 —— 命令行覆盖过的参数，面板上也得是它实际在用的那个值，
+// 否则面板会显示一套、网关在跑另一套。
+GatewaySettings SettingsOf(const MotionClientConfig& motion,
+                           const x30::TerrainClientConfig& terrain,
+                           const x30::RobotServiceConfig& svc) {
+  GatewaySettings s;
+  s.robot_ip = motion.robot_ip;
+  s.robot_port = motion.robot_port;
+  s.local_port = motion.local_port;
+
+  s.perception_ip = terrain.perception_ip;
+  s.perception_port = terrain.perception_port;
+
+  s.http_port = svc.port;
+  s.bind_address = svc.bind_address;
+
+  s.cloud_enabled = svc.cloud_enabled;
+  s.ros_master = svc.cloud.master_uri;
+  s.ros_host = svc.cloud.node_host;
+  s.cloud_topic = svc.cloud.topic;
+  s.cloud_hz = svc.cloud.cloud.target_hz;
+  s.cloud_points = svc.cloud.cloud.max_points;
+  return s;
+}
+
 void PrintUsage() {
   std::printf(R"(用法: x30_gateway [选项]
+
+配置文件:
+  --config <文件>      从文件读取下面「连接」「服务参数」「点云」三节的参数。
+                       命令行显式给出的值优先于文件，便于临时排障。
+                       给了这个参数，控制台的「设置」面板才能在线改配置。
+                       格式是 key = value，见 deploy/install.sh 生成的样例。
+  --admin-token-file <文件>
+                       管理令牌。改配置必须带上它，缺了则在线改配置一律拒绝。
+                       协议本身没有身份认证，而改配置能把网关指向别的主机、
+                       也能把监听面从内网扩到全部网卡，所以单设一道门。
 
 连接:
   --robot-ip <IP>      运动主机地址，默认 192.168.1.103
@@ -318,6 +378,10 @@ void PrintUsage() {
 // Ctrl-C 时要让机器人先停下再退出，不能直接被信号打断。
 std::atomic<bool> g_stop{false};
 
+// 控制台改完配置后请求重启。走的是同一条干净关停路径（先归零轴指令再收摊），
+// 之后由 systemd 的 Restart=always 在 1 秒内把网关拉回来。
+std::atomic<bool> g_restart{false};
+
 void OnSignal(int) { g_stop.store(true); }
 
 int RunServer(MotionClient& client, x30::TerrainClient& terrain,
@@ -337,6 +401,7 @@ int RunServer(MotionClient& client, x30::TerrainClient& terrain,
       "  WebSocket ws://<本机IP>:%u/ws\n"
       "  监听地址 %s\n"
       "  静态目录 %s\n"
+      "  运动链路 未申请控制权时不向狗发心跳，避免和原厂 2.4G 手柄抢源\n"
       "Ctrl-C 退出。\n",
       svc_cfg.port, svc_cfg.port,
       all_ifaces ? "0.0.0.0（全部网卡）" : svc_cfg.bind_address.c_str(),
@@ -353,7 +418,11 @@ int RunServer(MotionClient& client, x30::TerrainClient& terrain,
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 
-  std::printf("\n正在停止……\n");
+  if (g_restart.load()) {
+    std::printf("\n配置已更新，正在重启以生效……\n");
+  } else {
+    std::printf("\n正在停止……\n");
+  }
   client.ReleaseAxes();
   service.Stop();
   return 0;
@@ -372,12 +441,49 @@ int main(int argc, char** argv) {
   bool interactive = false;
   bool serve = false;
 
+  // 先扫一遍只为找出 --config 与 --admin-token-file。文件必须在其余参数之前
+  // 铺开，命令行才能盖在它上面 —— 顺序反了的话，临时用 --robot-ip 排障时
+  // 会被文件里的值悄悄改回去。
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (i + 1 >= argc) break;
+    if (arg == "--config") {
+      svc_cfg.config_path = argv[++i];
+    } else if (arg == "--admin-token-file") {
+      svc_cfg.admin_token_file = argv[++i];
+    }
+  }
+
+  if (!svc_cfg.config_path.empty()) {
+    GatewaySettings from_file;
+    std::string cfg_err;
+    switch (x30::LoadGatewaySettings(svc_cfg.config_path, &from_file, &cfg_err)) {
+      case x30::ConfigLoad::kOk:
+        ApplySettings(from_file, &cfg, &terrain_cfg, &svc_cfg);
+        break;
+      case x30::ConfigLoad::kMissing:
+        // 首次启动时还没有这个文件，用内置默认值。install.sh 会写一份出来，
+        // 控制台第一次保存也会创建它。
+        std::printf("配置文件 %s 还不存在，本次用默认值\n",
+                    svc_cfg.config_path.c_str());
+        break;
+      case x30::ConfigLoad::kMalformed:
+        // 读不懂就不启动。退回默认值意味着悄悄连到 192.168.1.103 上，
+        // 而文件里明明写着别的地址 —— 这种故障现场没人查得出来。
+        std::fprintf(stderr, "配置文件 %s 有问题：%s\n",
+                     svc_cfg.config_path.c_str(), cfg_err.c_str());
+        return 1;
+    }
+  }
+
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     auto next = [&]() -> std::string {
       return (i + 1 < argc) ? argv[++i] : std::string();
     };
-    if (arg == "--robot-ip") {
+    if (arg == "--config" || arg == "--admin-token-file") {
+      next();  // 上一轮已经取过，这里只把值跳过去
+    } else if (arg == "--robot-ip") {
       cfg.robot_ip = next();
     } else if (arg == "--robot-port") {
       cfg.robot_port = static_cast<uint16_t>(std::atoi(next().c_str()));
@@ -423,6 +529,20 @@ int main(int argc, char** argv) {
     }
   }
 
+  // 面板要回显的是实际生效的值，所以在命令行覆盖之后才快照。
+  svc_cfg.settings = SettingsOf(cfg, terrain_cfg, svc_cfg);
+
+  // 只有由 systemd 托管时才允许自重启：那时 Restart=always 会在 1 秒内把网关
+  // 拉回来。手工在终端里跑的话，退出就真的没了 —— 那种情况下只写配置文件，
+  // 让操作员自己重启，绝不能把人家的调试进程弄没。
+  if (serve && !svc_cfg.config_path.empty() &&
+      std::getenv("INVOCATION_ID") != nullptr) {
+    svc_cfg.request_restart = []() {
+      g_restart.store(true);
+      g_stop.store(true);
+    };
+  }
+
   MotionClient client(cfg);
   std::string error;
   if (!client.Start(&error)) {
@@ -448,6 +568,8 @@ int main(int argc, char** argv) {
   if (serve) {
     rc = RunServer(client, terrain, svc_cfg);
   } else if (interactive) {
+    // 交互终端就是唯一操作员，一进来就接管心跳，否则运动主机会判断连。
+    client.SetCommanding(true);
     RunInteractive(client, cfg);
   } else {
     std::printf("状态监视模式，Ctrl-C 退出。\n");

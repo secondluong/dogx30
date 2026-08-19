@@ -2,7 +2,8 @@
 # 装完之后跑一遍，一次性查清楚整条链路。
 #
 #   bash deploy/checkup.sh                # 全套
-#   bash deploy/checkup.sh --config-only  # 只回显装的时候定了哪些参数
+#   bash deploy/checkup.sh --config-only  # 只回显当前生效的参数
+#   bash deploy/checkup.sh --token        # 只打印管理令牌（控制台改配置要用）
 #
 # 每一项要么过，要么给出**下一步该做什么**。装机当天人站在狗旁边，
 # 不该还要翻六百行文档去对症状。
@@ -13,7 +14,11 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 CONFIG_ONLY=no
-[[ ${1:-} == --config-only ]] && CONFIG_ONLY=yes
+TOKEN_ONLY=no
+case ${1:-} in
+  --config-only) CONFIG_ONLY=yes ;;
+  --token)       TOKEN_ONLY=yes ;;
+esac
 
 OK=0; WARN=0; BAD=0
 
@@ -28,44 +33,94 @@ sect() { printf '\n== %s ==\n' "$1"; }
 # 测试时可以指向一份夹具，正常使用不用管。
 UNIT=${X30_UNIT:-/etc/systemd/system/x30-gateway.service}
 
-sect "安装配置"
+if [[ ! -f deploy/render_unit.sh || ! -f deploy/config_util.sh ]]; then
+  bad "找不到 deploy/ 下的辅助脚本" "请在解压出来的完整源码目录里运行本脚本"
+  exit 1
+fi
+# shellcheck source=deploy/render_unit.sh
+source deploy/render_unit.sh
+# shellcheck source=deploy/config_util.sh
+source deploy/config_util.sh
+
 if [[ ! -f $UNIT ]]; then
+  sect "安装配置"
   bad "没有找到 $UNIT" "还没装。先跑 sudo bash deploy/install.sh --robot-ip <运动主机IP>"
   echo
   echo "体检中止：服务都还没装，后面的项没有意义。"
   exit 1
 fi
 
-# --- 读出安装时定下的参数 ---------------------------------------------------
-# 从 systemd 单元里反解，而不是让人再输一遍 —— 输错了这份体检就白做了。
-#
-# 少了这个文件就直接退出，不"尽力而为"地退回默认值：体检报着 192.168.1.103
-# 而实际装的是别的地址，比体检跑不起来危险得多。
-if [[ ! -f deploy/render_unit.sh ]]; then
-  bad "找不到 deploy/render_unit.sh" "请在解压出来的完整源码目录里运行本脚本"
-  exit 1
-fi
-# shellcheck source=deploy/render_unit.sh
-source deploy/render_unit.sh
-
 EXEC=$(unit_exec_args "$UNIT")
 if [[ -z ${EXEC// /} ]]; then
+  sect "安装配置"
   bad "$UNIT 里读不出 ExecStart" "单元文件可能被改坏了，重跑 install.sh"
   exit 1
 fi
 
-arg_of() {                      # arg_of --robot-ip  ->  192.168.1.103
+arg_of() {                      # arg_of --config  ->  /opt/x30/conf/gateway.conf
   echo "$EXEC" | tr ' ' '\n' | grep -A1 -x -- "$1" | sed -n 2p
 }
 
-ROBOT_IP=$(arg_of --robot-ip);      ROBOT_IP=${ROBOT_IP:-192.168.1.103}
-PERC_IP=$(arg_of --perception-ip);  PERC_IP=${PERC_IP:-192.168.1.105}
-HTTP_PORT=$(arg_of --port);         HTTP_PORT=${HTTP_PORT:-8080}
-BIND_ADDR=$(arg_of --bind);         BIND_ADDR=${BIND_ADDR:-0.0.0.0}
-ROS_HOST=$(arg_of --ros-host);      ROS_HOST=${ROS_HOST:-}
+CONF=$(arg_of --config)
+TOKEN_FILE=$(arg_of --admin-token-file)
 
-CLOUD=no
-case " $EXEC " in *" --cloud "*) CLOUD=yes ;; esac
+if [[ $TOKEN_ONLY == yes ]]; then
+  if [[ -z $TOKEN_FILE ]]; then
+    echo "这套安装还没有管理令牌（单元里没有 --admin-token-file）。"
+    echo "重跑 sudo bash deploy/install.sh 会生成一个。"
+    exit 1
+  fi
+  # 先判能不能读，再判有没有内容。令牌文件是 600、目录是 750，非 root 连 stat
+  # 都做不到 —— 那时候报"文件为空"是彻底的误导，人会去重跑 install.sh。
+  if [[ -r $TOKEN_FILE ]]; then
+    if [[ -s $TOKEN_FILE ]]; then
+      cat "$TOKEN_FILE"
+      exit 0
+    fi
+    echo "令牌文件 $TOKEN_FILE 是空的。重跑 sudo bash deploy/install.sh 会生成。"
+    exit 1
+  fi
+  if [[ $EUID -ne 0 ]]; then
+    echo "读不了 $TOKEN_FILE（令牌是 600，目录是 750）。用 sudo 再跑一次："
+    echo "  sudo bash deploy/checkup.sh --token"
+    exit 1
+  fi
+  echo "令牌文件 $TOKEN_FILE 不存在。重跑 bash deploy/install.sh 会生成。"
+  exit 1
+fi
+
+sect "安装配置"
+
+# --- 读出当前生效的参数 -----------------------------------------------------
+# 参数在配置文件里，单元只指向它。不让人再输一遍 —— 输错了这份体检就白做了。
+#
+# 读不出来就直接退出，不"尽力而为"地退回默认值：体检报着 192.168.1.103
+# 而实际跑的是别的地址，比体检跑不起来危险得多。
+conf_defaults
+
+if [[ -n $CONF ]]; then
+  if [[ ! -f $CONF ]]; then
+    bad "单元指向的配置文件 $CONF 不存在" \
+        "网关会用内置默认值跑。重跑 install.sh 写一份出来"
+  else
+    conf_load "$CONF"
+  fi
+else
+  # 升级前装的那一版把参数直接写在 ExecStart 里。还能读就照旧读，
+  # 但要提醒重装一次，否则控制台的「设置」面板用不了。
+  ROBOT_IP=$(arg_of --robot-ip);      ROBOT_IP=${ROBOT_IP:-192.168.1.103}
+  PERCEPTION_IP=$(arg_of --perception-ip)
+  PERCEPTION_IP=${PERCEPTION_IP:-192.168.1.105}
+  HTTP_PORT=$(arg_of --port);         HTTP_PORT=${HTTP_PORT:-8080}
+  BIND_ADDR=$(arg_of --bind);         BIND_ADDR=${BIND_ADDR:-0.0.0.0}
+  ROS_HOST=$(arg_of --ros-host);      ROS_HOST=${ROS_HOST:-}
+  CLOUD=no
+  case " $EXEC " in *" --cloud "*) CLOUD=yes ;; esac
+  warn "这套安装的参数还写在 systemd 单元里（旧版布局）" \
+       "重跑 sudo bash deploy/install.sh 会搬进配置文件，之后才能在控制台里改"
+fi
+
+PERC_IP=$PERCEPTION_IP
 
 # 绑到具体网卡时不能用回环去连自己
 PROBE_HOST=$BIND_ADDR
@@ -73,8 +128,29 @@ if [[ $BIND_ADDR == "0.0.0.0" ]]; then PROBE_HOST=127.0.0.1; fi
 
 echo "  运动主机 $ROBOT_IP   感知主机 $PERC_IP"
 echo "  服务端口 $HTTP_PORT   监听 $BIND_ADDR   点云 $CLOUD"
+if [[ -n $CONF ]]; then
+  echo "  配置文件 $CONF"
+fi
 
 [[ $CONFIG_ONLY == yes ]] && exit 0
+
+# --- 在线改配置是否可用 -----------------------------------------------------
+
+sect "在线改配置"
+
+if [[ -z $CONF ]]; then
+  warn "控制台改不了配置（单元里没有 --config）" "重跑 install.sh 即可启用"
+elif [[ ! -w $(dirname "$CONF") ]] && [[ $EUID -ne 0 ]]; then
+  note "配置目录的写权限要 root 才看得准，这里跳过（网关自己以 root 跑）"
+elif [[ -z $TOKEN_FILE ]]; then
+  warn "没有管理令牌（单元里没有 --admin-token-file）" \
+       "改配置会被拒绝。重跑 install.sh 会生成一个"
+elif [[ ! -s $TOKEN_FILE ]]; then
+  bad "令牌文件 $TOKEN_FILE 不存在或为空" "改配置会被一律拒绝。重跑 install.sh"
+else
+  ok "控制台可以在线改配置（令牌在 $TOKEN_FILE）"
+  note "用 sudo bash deploy/checkup.sh --token 打印令牌，填进控制台的「设置」面板"
+fi
 
 # --- 服务 -------------------------------------------------------------------
 
@@ -121,10 +197,11 @@ WAN=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' |
 if [[ $BIND_ADDR == "0.0.0.0" ]]; then
   if [[ -n $WAN ]]; then
     bad "监听全部网卡，而本机有广域接口（$WAN）" \
-        "协议无身份认证。请用 --bind <遥控链路地址> 重装，例如 --bind 192.168.10.2"
+        "协议无身份认证。在控制台的「设置」里把监听地址改成遥控链路的地址，
+         例如 192.168.10.2；或者用 install.sh --bind 重装"
   else
     warn "监听全部网卡（当前没发现 4G/WWAN 接口）" \
-         "以后插上 4G 模块的话记得改成 --bind"
+         "以后插上 4G 模块的话记得在「设置」里把监听地址收紧"
   fi
 else
   ok "监听地址已限定在 $BIND_ADDR"
@@ -206,8 +283,8 @@ fi
 sect "点云"
 
 if [[ $CLOUD != yes ]]; then
-  note "未开启（默认如此）。确认下面 ROS master 可达后，用 install.sh 加"
-  note "--cloud --ros-host <与狗直连那块网卡的地址> 重装即可打开。"
+  note "未开启（默认如此）。确认下面 ROS master 可达后，在控制台的「设置」里"
+  note "打开「启用点云回传」即可，或者用 install.sh 加 --cloud --ros-host 重装。"
 fi
 
 if curl -s --max-time 3 "http://$PERC_IP:11311/" >/dev/null 2>&1; then

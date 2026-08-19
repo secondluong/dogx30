@@ -16,6 +16,7 @@ add_library(x30_core
   src/terrain_client.cpp
   src/gait_coordinator.cpp
   src/json.cpp
+  src/gateway_config.cpp
   src/ws_server.cpp
   src/media_registry.cpp
   src/net_util.cpp

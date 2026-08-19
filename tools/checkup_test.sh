@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 验 deploy/checkup.sh 能把 install.sh 生成的单元文件正确读回来。
+# 验 deploy/checkup.sh 能把 install.sh 写下的配置正确读回来。
 #
-# 这两个脚本是隔空配合的：install.sh 用 sed 拼出 ExecStart，checkup.sh 再把它
-# 拆回来。改了一边忘了另一边的话，体检不会报错，只会**安静地报着默认地址** ——
-# 那比直接失败糟得多，因为人会信它。
+# 这两个脚本是隔空配合的：install.sh 写 gateway.conf 并让单元指向它，
+# checkup.sh 再顺着单元把值读出来。改了一边忘了另一边的话，体检不会报错，
+# 只会**安静地报着默认地址** —— 那比直接失败糟得多，因为人会信它。
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -15,27 +15,36 @@ trap 'rm -rf "$TMP"' EXIT
 pass() { echo "  [OK]   $1"; }
 fail() { echo "  [FAIL] $1  $2"; FAILED=1; }
 
-# 用 install.sh 真正在用的那个函数，而不是照着抄一份
+# 用 install.sh 真正在用的那两个函数，而不是照着抄一份
 # shellcheck source=deploy/render_unit.sh
 source deploy/render_unit.sh
+# shellcheck source=deploy/config_util.sh
+source deploy/config_util.sh
 
-render() {   # render <bind> <perception> <cloud> <ros_host> <robot> <port>
-  render_unit deploy/x30-gateway.service \
-    "$5" "$2" 43897 "$6" "$1" "$3" "$4" /opt/x30
-}
+# 造一套装好的样子：前缀 $TMP/opt，单元指向 $TMP/opt/conf/gateway.conf
+PREFIX="$TMP/opt"
+CONF="$PREFIX/conf/gateway.conf"
+TOKEN="$PREFIX/conf/admin.token"
+UNIT="$TMP/x30.service"
+render_unit deploy/x30-gateway.service "$PREFIX" > "$UNIT"
 
 # 只要"安装配置"那一段 —— 后面的检查要连真设备，在这里跑纯属浪费。
 config_line() {
-  X30_UNIT="$1" bash deploy/checkup.sh --config-only 2>/dev/null |
-    grep -E '运动主机|服务端口' | tr -s ' '
+  X30_UNIT="$UNIT" bash deploy/checkup.sh --config-only 2>/dev/null |
+    grep -E '运动主机|服务端口|配置文件' | tr -s ' '
 }
 
-echo "== 读回 install.sh 生成的配置 =="
+echo "== 读回 install.sh 写下的配置 =="
 
-render 192.168.10.2 192.168.1.200 yes 192.168.1.120 192.168.1.106 9090 \
-  > "$TMP/a.service"
-OUT=$(config_line "$TMP/a.service")
+conf_defaults
+ROBOT_IP="192.168.1.106"
+PERCEPTION_IP="192.168.1.200"
+HTTP_PORT="9090"
+BIND_ADDR="192.168.10.2"
+CLOUD="yes"
+write_gateway_conf "$CONF"
 
+OUT=$(config_line)
 for want in "运动主机 192.168.1.106" "感知主机 192.168.1.200" \
             "服务端口 9090" "监听 192.168.10.2" "点云 yes"; do
   if [[ "$OUT" == *"$want"* ]]; then
@@ -48,10 +57,10 @@ done
 echo
 echo "== 默认安装（点云关闭）=="
 
-render 0.0.0.0 192.168.1.105 no 192.168.1.120 192.168.1.103 8080 \
-  > "$TMP/b.service"
-OUT=$(config_line "$TMP/b.service")
+conf_defaults
+write_gateway_conf "$CONF"
 
+OUT=$(config_line)
 for want in "运动主机 192.168.1.103" "感知主机 192.168.1.105" \
             "服务端口 8080" "监听 0.0.0.0" "点云 no"; do
   if [[ "$OUT" == *"$want"* ]]; then
@@ -60,6 +69,119 @@ for want in "运动主机 192.168.1.103" "感知主机 192.168.1.105" \
     fail "没读到 $want" "实得: $OUT"
   fi
 done
+
+echo
+echo "== 每一个参数都要能读回来 =="
+
+# 上面两组只覆盖了常改的那几项。剩下的读不回来同样危险，而且更不容易发现。
+conf_defaults
+ROBOT_PORT="43894"
+LOCAL_PORT="43898"
+PERCEPTION_PORT="43900"
+CLOUD="yes"
+ROS_MASTER="http://10.1.2.3:11400"
+ROS_HOST="10.9.9.9"
+CLOUD_TOPIC="/points_raw"
+CLOUD_HZ="7"
+CLOUD_POINTS="31000"
+write_gateway_conf "$CONF"
+
+check_get() {   # check_get <键> <期望值>
+  local got
+  got=$(conf_get "$CONF" "$1")
+  if [[ $got == "$2" ]]; then
+    pass "$1 = $got"
+  else
+    fail "$1 读回的是 $got" "应为 $2"
+  fi
+}
+check_get robot_port 43894
+check_get local_port 43898
+check_get perception_port 43900
+check_get ros_master "http://10.1.2.3:11400"
+check_get ros_host 10.9.9.9
+check_get cloud_topic /points_raw
+check_get cloud_hz 7
+check_get cloud_points 31000
+
+echo
+echo "== 注释和空行不能干扰解析 =="
+
+cat > "$CONF" <<'EOF'
+# 这是注释
+   # 缩进的注释
+
+robot_ip = 192.168.1.77
+   perception_ip   =   192.168.1.88
+# robot_ip = 192.168.1.99   ← 被注释掉的不算
+EOF
+OUT=$(config_line)
+if [[ "$OUT" == *"运动主机 192.168.1.77"* && "$OUT" == *"感知主机 192.168.1.88"* ]]; then
+  pass "注释、缩进、键值两侧空格都处理正确"
+else
+  fail "带注释的配置读错了" "实得: $OUT"
+fi
+if [[ "$OUT" == *"192.168.1.99"* ]]; then
+  fail "把注释掉的那行也读进去了" "实得: $OUT"
+else
+  pass "注释掉的行没被当成配置"
+fi
+
+echo
+echo "== 管理令牌 =="
+
+conf_defaults
+write_gateway_conf "$CONF"
+gen_admin_token > "$TOKEN"
+GOT=$(X30_UNIT="$UNIT" bash deploy/checkup.sh --token 2>&1)
+if [[ "$GOT" == "$(cat "$TOKEN")" && -n "$GOT" ]]; then
+  pass "--token 打印出令牌本身（$(echo "$GOT" | cut -c1-8)…）"
+else
+  fail "--token 没能打印令牌" "实得: $GOT"
+fi
+if [[ ${#GOT} -ge 16 ]]; then
+  pass "令牌长度 ${#GOT}，够猜不出来"
+else
+  fail "令牌太短（${#GOT}）" "改配置能改监听地址，这道门不能形同虚设"
+fi
+
+: > "$TOKEN"
+OUT=$(X30_UNIT="$UNIT" bash deploy/checkup.sh --token 2>&1)
+if [[ $? -ne 0 && "$OUT" == *"空"* ]]; then
+  pass "令牌文件为空时 --token 报「是空的」"
+else
+  fail "令牌为空时的回应不对" "实得: $OUT"
+fi
+
+rm -f "$TOKEN"
+OUT=$(X30_UNIT="$UNIT" bash deploy/checkup.sh --token 2>&1)
+RC=$?
+if [[ $RC -ne 0 ]]; then
+  pass "令牌文件不存在时 --token 报错退出"
+else
+  fail "令牌文件不存在时 --token 返回了 0" "应当报错"
+fi
+# 不能把"读不了"说成"不存在"。非 root 在板子上跑体检是常态（文档就那么写的），
+# 那时令牌读不到是权限问题，报"不存在"会让人去重跑安装。
+if [[ $EUID -eq 0 ]]; then
+  if [[ "$OUT" == *"不存在"* ]]; then
+    pass "root 下如实报「不存在」"
+  else
+    fail "root 下没报「不存在」" "实得: $OUT"
+  fi
+  # 模拟非 root：拿一个存在但读不了的文件，且不是 root 在读。
+  gen_admin_token > "$TOKEN"
+  chmod 600 "$TOKEN"
+  if command -v setpriv >/dev/null 2>&1; then
+    OUT=$(X30_UNIT="$UNIT" setpriv --reuid 65534 --regid 65534 --clear-groups \
+            bash deploy/checkup.sh --token 2>&1)
+    if [[ "$OUT" == *"sudo"* ]]; then
+      pass "非 root 读不到令牌时提示用 sudo，而不是谎报不存在"
+    else
+      fail "非 root 时的提示不对" "实得: $OUT"
+    fi
+  fi
+fi
 
 echo
 echo "== 没装的时候要说人话 =="
@@ -89,11 +211,54 @@ else
 fi
 
 echo
+echo "== 配置文件丢了要报出来 =="
+
+# 单元指着一个不存在的配置文件时，网关会用内置默认值跑起来。所以这里报
+# 默认地址是**对的**，但必须同时标成失败 —— 否则人会以为那就是装的时候定的。
+rm -f "$CONF"
+OUT=$(X30_UNIT="$UNIT" bash deploy/checkup.sh --config-only 2>&1)
+if [[ "$OUT" == *"[失败]"* ]]; then
+  pass "配置文件缺失被标成失败"
+else
+  fail "配置文件缺失没有报错" "$OUT"
+fi
+
+echo
+echo "== 旧版布局（参数写在单元里）仍要能读 =="
+
+# 升级前装的那一版把地址直接写在 ExecStart 上。读不出来的话，装了旧版的板子
+# 一跑体检就是一片默认值，比报错更误导人。
+cat > "$TMP/legacy.service" <<'EOF'
+[Service]
+ExecStart=/opt/x30/bin/x30_gateway \
+    --robot-ip 192.168.1.150 \
+    --local-port 43897 \
+    --perception-ip 192.168.1.160 \
+    --serve --port 8888 --bind 192.168.10.5 \
+    --web /opt/x30/web \
+    --cloud --ros-host 192.168.1.120
+EOF
+OUT=$(X30_UNIT="$TMP/legacy.service" bash deploy/checkup.sh --config-only 2>&1)
+for want in "运动主机 192.168.1.150" "感知主机 192.168.1.160" \
+            "服务端口 8888" "监听 192.168.10.5" "点云 yes"; do
+  if [[ "$OUT" == *"$want"* ]]; then
+    pass "旧布局读到 $want"
+  else
+    fail "旧布局没读到 $want" "实得: $(echo "$OUT" | tr -s ' \n' ' ')"
+  fi
+done
+if [[ "$OUT" == *"旧版布局"* ]]; then
+  pass "提示了要重装一次才能在控制台里改"
+else
+  fail "没提示旧布局需要重装" "$OUT"
+fi
+
+echo
 echo "== 多行 ExecStart 必须整段解析 =="
 # 这一条专门盯着那个真实出过的问题：只 grep 第一行的话，
 # 所有参数都抠不到，然后静静地退回默认值。
-FIRST=$(grep '^ExecStart=' "$TMP/a.service")
-if [[ "$FIRST" == *"--robot-ip"* ]]; then
+FIRST=$(grep '^ExecStart=' "$UNIT")
+if [[ "$FIRST" == *"--config"* ]]; then
   fail "夹具不对" "ExecStart 第一行就含参数，这条测试失去意义"
 else
   pass "ExecStart 首行确实不含参数（续行结构没变）"

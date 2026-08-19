@@ -14,6 +14,8 @@ const media = {
   caps: { h264: true, h265: false },
 };
 
+const playingPath = new Map();
+
 // ---------------------------------------------------------------------------
 // 编解码能力探测
 // ---------------------------------------------------------------------------
@@ -126,6 +128,7 @@ function stopSource(id) {
     pc.close();
     media.pcs.delete(id);
   }
+  playingPath.delete(id);
 }
 
 function stopAll() {
@@ -142,11 +145,50 @@ function onMediaPlan(plan, showBanner) {
   renderMediaPanel(plan, showBanner);
 }
 
+// 四宫格/一主三小都要把三路视频拉起来。机身相机没有子码流，
+// 网关计划里不选它就 available=false —— 这里仍用登记路径去拉，
+// 否则点成小窗就黑了。布控球优先子码流，减轻同时三路的带宽。
+const VIDEO_TILES = [
+  { id: 'dog_cam', video: 'media-video', idle: 'media-idle', fallback: 'dog_cam_main' },
+  { id: 'ptz_vis', video: 'media-video-ptz-vis', idle: 'media-idle-ptz-vis', fallback: 'ptz_vis_sub' },
+  { id: 'ptz_ir', video: 'media-video-ptz-ir', idle: 'media-idle-ptz-ir', fallback: 'ptz_ir_sub' },
+];
+
+function setIdle(id, on) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden', !on);
+}
+
+function pathFor(tile, plan) {
+  const src = plan.sources.find((s) => s.id === tile.id);
+  if (src && src.available && src.path) return src.path;
+  return tile.fallback;
+}
+
+function playTile(plan, tile, showBanner) {
+  const videoEl = document.getElementById(tile.video);
+  if (!videoEl || !plan.webrtc_base) return;
+  const path = pathFor(tile, plan);
+  if (media.pcs.has(tile.id) && playingPath.get(tile.id) === path) return;
+  stopSource(tile.id);
+  playingPath.set(tile.id, path);
+  setIdle(tile.idle, false);
+  whepPlay(plan.webrtc_base, path, videoEl)
+    .then((pc) => { media.pcs.set(tile.id, pc); })
+    .catch((e) => {
+      setIdle(tile.idle, true);
+      stopSource(tile.id);
+      playingPath.delete(tile.id);
+      if (tile.id === 'dog_cam' && showBanner) {
+        showBanner(`机身相机拉流失败：${e.message}`, 6000);
+      }
+    });
+}
+
 function renderMediaPanel(plan, showBanner) {
   const panel = document.getElementById('media-list');
   if (!panel) return;
 
-  const wanted = new Set();
   panel.innerHTML = '';
 
   for (const s of plan.sources) {
@@ -156,7 +198,9 @@ function renderMediaPanel(plan, showBanner) {
     const btn = document.createElement('button');
     btn.className = 'btn media-pick';
     btn.textContent = s.name;
-    btn.disabled = !s.available;
+    const canPick = s.available ||
+      (s.reason && s.reason.indexOf('选为主视图') !== -1);
+    btn.disabled = !canPick;
     btn.onclick = () => selectMain(s.id);
     row.appendChild(btn);
 
@@ -175,8 +219,6 @@ function renderMediaPanel(plan, showBanner) {
     }
     row.appendChild(tag);
     panel.appendChild(row);
-
-    if (s.available) wanted.add(s.id);
   }
 
   const budget = document.getElementById('media-budget');
@@ -188,21 +230,20 @@ function renderMediaPanel(plan, showBanner) {
     showBanner('视频码率超出链路预算，请降低相机码率设置', 9000);
   }
 
-  // 只拉主视图这一路。缩略图同时拉三路会把链路吃掉，而且遥控端只有一块屏，
-  // 缩略图的价值是「看一眼有没有情况」，做成点开才拉更合适。
-  for (const id of Array.from(media.pcs.keys())) {
-    if (id !== plan.main) stopSource(id);
+  if (!plan.main && sendRef) {
+    const dog = plan.sources.find((s) => s.id === 'dog_cam');
+    if (dog) {
+      sendRef({ t: 'media_select', id: 'dog_cam' });
+      return;
+    }
   }
-  const mainSrc = plan.sources.find((s) => s.id === plan.main && s.available);
-  const videoEl = document.getElementById('media-video');
-  if (mainSrc && videoEl && !media.pcs.has(mainSrc.id)) {
-    whepPlay(plan.webrtc_base, mainSrc.path, videoEl)
-      .then((pc) => media.pcs.set(mainSrc.id, pc))
-      .catch((e) => {
-        if (showBanner) showBanner(`拉流失败：${e.message}`, 6000);
-      });
-  }
-  if (!mainSrc && videoEl) videoEl.srcObject = null;
+
+  for (const tile of VIDEO_TILES) playTile(plan, tile, showBanner);
+}
+
+function onLayout(layout) {
+  if (!layout || !layout.main || layout.main === 'cloud') return;
+  if (sendRef) sendRef({ t: 'media_select', id: layout.main });
 }
 
 let sendRef = null;
@@ -272,15 +313,27 @@ function initMedia(sendFn, showBanner) {
   sendRef = sendFn;
   reportCaps(sendFn);
 
-  const talkBtn = document.getElementById('btn-talk');
-  if (talkBtn) {
-    const down = (e) => { e.preventDefault(); talkBtn.classList.add('active'); talkStart(showBanner); };
-    const up = (e) => { e.preventDefault(); talkBtn.classList.remove('active'); talkStop(); };
+  const talkBtns = document.querySelectorAll('.btn-talk');
+  const setTalk = (on) => {
+    talkBtns.forEach((b) => b.classList.toggle('active', on));
+  };
+  talkBtns.forEach((talkBtn) => {
+    const down = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setTalk(true);
+      talkStart(showBanner);
+    };
+    const up = (e) => {
+      e.preventDefault();
+      setTalk(false);
+      talkStop();
+    };
     talkBtn.addEventListener('pointerdown', down);
     talkBtn.addEventListener('pointerup', up);
     talkBtn.addEventListener('pointercancel', up);
     talkBtn.addEventListener('pointerleave', up);
-  }
+  });
 
   // 页面切后台时把流停掉，省带宽也省电。回来时网关会重发计划。
   document.addEventListener('visibilitychange', () => {
@@ -293,4 +346,4 @@ function initMedia(sendFn, showBanner) {
   });
 }
 
-window.X30Media = { initMedia, onMediaPlan, stopAll };
+window.X30Media = { initMedia, onMediaPlan, stopAll, onLayout };

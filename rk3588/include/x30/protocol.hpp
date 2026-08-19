@@ -52,7 +52,17 @@ inline constexpr uint32_t kHeartbeat = 0x21040001;
 inline constexpr uint32_t kConnectConfirm = 0x21020001;
 
 // 基础状态迁移
-inline constexpr uint32_t kStandSitToggle = 0x21010202;  // 坐 <-> 站 切换
+//
+// 文档只写了 0x21010202 这一条切换。现场对照运动主机日志：
+//   原厂手柄起立 → "Received RL-StandUp"     0x21010223
+//   原厂手柄趴下 → "Received RL Sit Cmd"     0x21010222
+//   我们发 0x21010202 → "Received stand up or sit down command"
+// 后一条是旧路径，起身/趴下又快又硬；前两条走 RL 策略，才是遥控器那种柔和轨迹。
+// 这两码不在公开 API 里，但是运动程序认、原厂手柄在用，比文档更值得信。
+// RL 起立后 basic_state 仍报 0，下一次该起还是该坐只能自己记。
+inline constexpr uint32_t kStandSitToggle = 0x21010202;  // 旧：坐 <-> 站，轨迹硬
+inline constexpr uint32_t kRlSitDown = 0x21010222;       // 原厂手柄趴下
+inline constexpr uint32_t kRlStandUp = 0x21010223;       // 原厂手柄起立
 inline constexpr uint32_t kTorqueStand = 0x2101020A;     // 初始站立 -> 力控站立
 inline constexpr uint32_t kSteppingToggle = 0x21010201;  // 力控站立 <-> 踏步 切换
 
@@ -174,6 +184,25 @@ enum class BasicState : uint8_t {
   kStandToSit = 5,
   kEmergencyOrFall = 6,
 };
+
+// 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。其余状态里发轴，
+// 实测会把原厂柔和的起身/趴下掐成猛起猛趴——力控站立的左摇杆 Y 是身高，
+// 50 Hz 发 0 等于一直在喊「把身子按到最低」。
+//
+// 例外：RL 起立后运动主机仍报 basic_state=0（坐下），但原厂手柄此时就能走。
+// 我们自己记得已经起立时，按可走处理，否则遥控台推杆网关直接把轴吞掉。
+// 起立中 / 坐下中 / 急停仍然不发。
+inline bool AxisCommandsApply(BasicState s, bool rl_standing = false) {
+  if (s == BasicState::kTorqueStanding || s == BasicState::kStepping) {
+    return true;
+  }
+  return rl_standing && s == BasicState::kSitting;
+}
+
+// 坐↔站过渡。再发一次切换会打断正在走的轨迹，甚至当场反转。
+inline bool IsStandSitTransient(BasicState s) {
+  return s == BasicState::kSitToStand || s == BasicState::kStandToSit;
+}
 
 enum class Gait : uint8_t {
   kWalk = 0,

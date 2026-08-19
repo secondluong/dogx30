@@ -1,28 +1,48 @@
 // 点云渲染。WebGL 直接画，不引 three.js。
 //
-// 不引库有两个实在的理由：一是遥控端要能离线装，多一个几百 KB 的依赖就多一份
-// 打包和版本维护；二是我们只需要「画一堆点」这一个功能，three.js 的场景图、
-// 材质、光照全用不上。整个渲染就是一个 attribute 加两个 uniform。
+// 网关下发的是机体系当前帧（见 docs/app-protocol.md），不是累积地图。
+// 累积、楼层切割、显示体素、轨迹都在本机做：用运动主机里程计把历史帧
+// 变到当前机体系，不回头向感知主机多要带宽。
 //
-// 关键设计：GPU 里直接吃 int16。网关下发的就是量化后的 int16，如果在 JS 里
-// 先转成 float32 再上传，等于白白多一次遍历和一倍显存 —— 用
-// vertexAttribPointer 的归一化整型格式，让顶点着色器自己还原坐标。
+// 坐标仍按量化帧还原：世界（机体）坐标 = origin + uint16 × scale。
 
 (function () {
   'use strict';
 
   const MAGIC = 0x43303358; // "X30C" 小端读成 u32
   const HEADER_SIZE = 40;
+  const FLOORS = [0, 3, 6, 9];
+  const MAX_LIVE_FRAMES = 80;
+  const MAX_PERSIST = 80000;
+  const MAX_TRAIL = 2000;
 
   let gl = null;
   let program = null;
+  let lineProgram = null;
   let buffer = null;
+  let lineBuffer = null;
   let canvas = null;
   let pointCount = 0;
-  let origin = [0, 0, 0];
-  let scale = 1;
   let subscribed = false;
   let sendFn = null;
+  let lastStatus = null;
+
+  const pose = { x: 0, y: 0, yaw: 0 };
+  const frames = [];
+  const trail = [];
+  const persistMap = new Map();
+  const est = { x: 0, y: 0, yaw: 0, t: 0, mile: null, odomLive: false };
+
+  const opts = {
+    persist: false,
+    accumMs: 0,
+    voxel: 0.10,
+    trail: true,
+    slice: false,
+    sliceZ: 0,
+    sliceHalf: 0.6,
+    floorIdx: 0,
+  };
 
   // 相机：绕原点的轨道视角。仰角限制在两极之间，避免翻转。
   const cam = { yaw: -2.4, pitch: 0.5, dist: 12 };
@@ -31,18 +51,13 @@
   let lastY = 0;
 
   const VERT = `
-    attribute vec3 a_q;
-    uniform vec3 u_origin;
-    uniform float u_scale;
+    attribute vec3 a_p;
     uniform mat4 u_mvp;
     uniform float u_size;
     varying float v_h;
     void main() {
-      // a_q 是归一化过的 uint16（0..1），还原成量化前的坐标
-      vec3 p = u_origin + a_q * 65535.0 * u_scale;
-      v_h = p.z;
-      gl_Position = u_mvp * vec4(p, 1.0);
-      // 近处的点画大一些，远处收小，避免远景糊成一团白
+      v_h = a_p.z;
+      gl_Position = u_mvp * vec4(a_p, 1.0);
       gl_PointSize = clamp(u_size / gl_Position.w, 1.0, 4.0);
     }
   `;
@@ -52,7 +67,11 @@
   const FRAG = `
     precision mediump float;
     varying float v_h;
+    uniform float u_slice;
+    uniform float u_z0;
+    uniform float u_zHalf;
     void main() {
+      if (u_slice > 0.5 && abs(v_h - u_z0) > u_zHalf) discard;
       float t = clamp((v_h + 0.6) / 2.6, 0.0, 1.0);
       vec3 low  = vec3(0.15, 0.45, 0.75);
       vec3 mid  = vec3(0.30, 0.85, 0.60);
@@ -60,6 +79,21 @@
       vec3 c = t < 0.5 ? mix(low, mid, t * 2.0) : mix(mid, high, (t - 0.5) * 2.0);
       gl_FragColor = vec4(c, 1.0);
     }
+  `;
+
+  const LINE_VERT = `
+    attribute vec3 a_p;
+    uniform mat4 u_mvp;
+    uniform float u_size;
+    void main() {
+      gl_Position = u_mvp * vec4(a_p, 1.0);
+      gl_PointSize = u_size;
+    }
+  `;
+  const LINE_FRAG = `
+    precision mediump float;
+    uniform vec3 u_color;
+    void main() { gl_FragColor = vec4(u_color, 1.0); }
   `;
 
   function compile(type, src) {
@@ -73,30 +107,40 @@
     return s;
   }
 
+  function link(vsSrc, fsSrc) {
+    const vs = compile(gl.VERTEX_SHADER, vsSrc);
+    const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) return null;
+    const p = gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      console.error('着色器链接失败:', gl.getProgramInfoLog(p));
+      return null;
+    }
+    return p;
+  }
+
   function initGl() {
     canvas = document.getElementById('cloud-canvas');
     if (!canvas) return false;
-    gl = canvas.getContext('webgl', { antialias: false, alpha: false });
+    // preserveDrawingBuffer：截图/录屏要从画布读像素。默认会在提交后清掉。
+    gl = canvas.getContext('webgl', {
+      antialias: false, alpha: false, preserveDrawingBuffer: true,
+    });
     if (!gl) {
       const note = document.getElementById('cloud-note');
       if (note) note.textContent = '此设备不支持 WebGL，点云无法显示';
       return false;
     }
 
-    const vs = compile(gl.VERTEX_SHADER, VERT);
-    const fs = compile(gl.FRAGMENT_SHADER, FRAG);
-    if (!vs || !fs) return false;
-
-    program = gl.createProgram();
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error('着色器链接失败:', gl.getProgramInfoLog(program));
-      return false;
-    }
+    program = link(VERT, FRAG);
+    lineProgram = link(LINE_VERT, LINE_FRAG);
+    if (!program || !lineProgram) return false;
 
     buffer = gl.createBuffer();
+    lineBuffer = gl.createBuffer();
     gl.clearColor(0.05, 0.07, 0.10, 1.0);
     gl.enable(gl.DEPTH_TEST);
 
@@ -209,28 +253,198 @@
     return o;
   }
 
+  function bodyToOdom(x, y, z, p) {
+    const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+    return [p.x + c * x - s * y, p.y + s * x + c * y, z];
+  }
+
+  function odomToBody(x, y, z, p) {
+    const dx = x - p.x, dy = y - p.y;
+    const c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+    return [c * dx + s * dy, -s * dx + c * dy, z];
+  }
+
+  function voxelKey(x, y, z, inv) {
+    const ix = Math.floor(x * inv);
+    const iy = Math.floor(y * inv);
+    const iz = Math.floor(z * inv);
+    return ix * 73856093 + iy * 19349663 + iz * 83492791;
+  }
+
+  function voxelize(src, n, voxel) {
+    if (n === 0) return { xyz: src, count: 0 };
+    if (voxel <= 1e-4) return { xyz: src, count: n };
+    const inv = 1 / voxel;
+    const seen = new Map();
+    for (let i = 0; i < n; i++) {
+      const x = src[i * 3], y = src[i * 3 + 1], z = src[i * 3 + 2];
+      const key = voxelKey(x, y, z, inv);
+      if (!seen.has(key)) seen.set(key, i);
+    }
+    const count = seen.size;
+    const xyz = new Float32Array(count * 3);
+    let k = 0;
+    seen.forEach((i) => {
+      xyz[k++] = src[i * 3];
+      xyz[k++] = src[i * 3 + 1];
+      xyz[k++] = src[i * 3 + 2];
+    });
+    return { xyz, count };
+  }
+
+  function decodeFrame(view, origin, scale, count) {
+    const xyz = new Float32Array(count * 3);
+    let o = HEADER_SIZE;
+    for (let i = 0; i < count; i++) {
+      xyz[i * 3] = origin[0] + view.getUint16(o, true) * scale;
+      xyz[i * 3 + 1] = origin[1] + view.getUint16(o + 2, true) * scale;
+      xyz[i * 3 + 2] = origin[2] + view.getUint16(o + 4, true) * scale;
+      o += 6;
+    }
+    return xyz;
+  }
+
+  function ingestPersist(xyz, n, from) {
+    const inv = 1 / Math.max(opts.voxel, 0.05);
+    for (let i = 0; i < n && persistMap.size < MAX_PERSIST; i++) {
+      const w = bodyToOdom(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2], from);
+      const key = voxelKey(w[0], w[1], w[2], inv);
+      if (!persistMap.has(key)) persistMap.set(key, w);
+    }
+  }
+
+  function rebuild() {
+    const now = pose;
+    let src;
+    let n = 0;
+
+    if (opts.persist && persistMap.size > 0) {
+      src = new Float32Array(persistMap.size * 3);
+      persistMap.forEach((w) => {
+        const b = odomToBody(w[0], w[1], w[2], now);
+        src[n++] = b[0];
+        src[n++] = b[1];
+        src[n++] = b[2];
+      });
+      n /= 3;
+    } else {
+      const cutoff = opts.accumMs > 0 ? Date.now() - opts.accumMs : 0;
+      const use = [];
+      for (let i = 0; i < frames.length; i++) {
+        const f = frames[i];
+        if (opts.accumMs === 0) {
+          if (i === frames.length - 1) use.push(f);
+        } else if (f.t >= cutoff) {
+          use.push(f);
+        }
+      }
+      let total = 0;
+      for (let i = 0; i < use.length; i++) total += use[i].count;
+      src = new Float32Array(total * 3);
+      for (let i = 0; i < use.length; i++) {
+        const f = use[i];
+        const samePose = Math.abs(f.pose.x - now.x) < 1e-4 &&
+                         Math.abs(f.pose.y - now.y) < 1e-4 &&
+                         Math.abs(f.pose.yaw - now.yaw) < 1e-4;
+        for (let k = 0; k < f.count; k++) {
+          const x = f.xyz[k * 3], y = f.xyz[k * 3 + 1], z = f.xyz[k * 3 + 2];
+          if (samePose) {
+            src[n++] = x; src[n++] = y; src[n++] = z;
+          } else {
+            const w = bodyToOdom(x, y, z, f.pose);
+            const b = odomToBody(w[0], w[1], w[2], now);
+            src[n++] = b[0]; src[n++] = b[1]; src[n++] = b[2];
+          }
+        }
+      }
+      n /= 3;
+    }
+
+    const packed = voxelize(src, n, opts.voxel);
+    if (!gl) {
+      pointCount = packed.count;
+      return;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, packed.xyz, gl.DYNAMIC_DRAW);
+    pointCount = packed.count;
+  }
+
+  function trailBodyVerts() {
+    const out = [];
+    for (let i = 0; i < trail.length; i++) {
+      const b = odomToBody(trail[i].x, trail[i].y, 0.12, pose);
+      out.push(b[0], b[1], b[2]);
+      // 段太长时中间补点，WebGL 线宽在很多 GPU 上只能是 1px。
+      if (i + 1 < trail.length) {
+        const n = odomToBody(trail[i + 1].x, trail[i + 1].y, 0.12, pose);
+        const dx = n[0] - b[0], dy = n[1] - b[1];
+        const dist = Math.hypot(dx, dy);
+        const steps = Math.min(8, Math.floor(dist / 0.08));
+        for (let s = 1; s < steps; s++) {
+          const t = s / steps;
+          out.push(b[0] + dx * t, b[1] + dy * t, 0.12);
+        }
+      }
+    }
+    return new Float32Array(out);
+  }
+
+  function headingVerts() {
+    return new Float32Array([
+      0, 0, 0.12, 0.55, 0, 0.12,
+      0.55, 0, 0.12, 0.38, 0.10, 0.12,
+      0.55, 0, 0.12, 0.38, -0.10, 0.12,
+    ]);
+  }
+
   function draw() {
     if (!gl || !program) return;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (pointCount === 0) return;
+    const mvp = mvpMatrix(canvas.width / canvas.height);
 
-    gl.useProgram(program);
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    if (pointCount > 0) {
+      gl.useProgram(program);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      const loc = gl.getAttribLocation(program, 'a_p');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_size'), canvas.height / 180);
+      gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_mvp'), false, mvp);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_slice'), opts.slice ? 1 : 0);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_z0'), opts.sliceZ);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_zHalf'), opts.sliceHalf);
+      gl.drawArrays(gl.POINTS, 0, pointCount);
+    }
 
-    const loc = gl.getAttribLocation(program, 'a_q');
+    if (!opts.trail || !subscribed) return;
+
+    gl.disable(gl.DEPTH_TEST);
+    gl.useProgram(lineProgram);
+    const loc = gl.getAttribLocation(lineProgram, 'a_p');
     gl.enableVertexAttribArray(loc);
-    // normalized=true 让 GPU 把 uint16 映射到 0..1，省掉 CPU 侧的转换
-    gl.vertexAttribPointer(loc, 3, gl.UNSIGNED_SHORT, true, 6, 0);
+    gl.uniformMatrix4fv(gl.getUniformLocation(lineProgram, 'u_mvp'), false, mvp);
+    gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.16, 0.16);
 
-    gl.uniform3fv(gl.getUniformLocation(program, 'u_origin'), origin);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_scale'), scale);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_size'),
-                 canvas.height / 180);
-    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_mvp'), false,
-                        mvpMatrix(canvas.width / canvas.height));
+    const dots = trailBodyVerts();
+    const nDots = dots.length / 3;
+    if (nDots > 0) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, dots, gl.DYNAMIC_DRAW);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+      gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_size'), 6.0);
+      if (nDots >= 2) gl.drawArrays(gl.LINE_STRIP, 0, nDots);
+      gl.drawArrays(gl.POINTS, 0, nDots);
+    }
 
-    gl.drawArrays(gl.POINTS, 0, pointCount);
+    const head = headingVerts();
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, head, gl.DYNAMIC_DRAW);
+    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+    gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_size'), 8.0);
+    gl.drawArrays(gl.LINES, 0, 6);
+    gl.enable(gl.DEPTH_TEST);
   }
 
   function onCloudFrame(arrayBuffer) {
@@ -239,64 +453,230 @@
     if (view.getUint32(0, true) !== MAGIC) return;
     if (view.getUint8(4) !== 1) return;
 
-    origin = [view.getFloat32(20, true), view.getFloat32(24, true),
-              view.getFloat32(28, true)];
-    scale = view.getFloat32(32, true);
+    const origin = [view.getFloat32(20, true), view.getFloat32(24, true),
+                    view.getFloat32(28, true)];
+    const scale = view.getFloat32(32, true);
     const count = view.getUint32(36, true);
     if (HEADER_SIZE + count * 6 > arrayBuffer.byteLength) return;
 
-    if (!gl) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER,
-                  new Uint8Array(arrayBuffer, HEADER_SIZE, count * 6),
-                  gl.DYNAMIC_DRAW);
-    pointCount = count;
+    const xyz = decodeFrame(view, origin, scale, count);
+    const stamped = {
+      t: Date.now(),
+      pose: { x: pose.x, y: pose.y, yaw: pose.yaw },
+      xyz: xyz,
+      count: count,
+    };
+    frames.push(stamped);
+    if (frames.length > MAX_LIVE_FRAMES) frames.splice(0, frames.length - MAX_LIVE_FRAMES);
+    if (opts.persist) ingestPersist(xyz, count, stamped.pose);
 
+    // 帧到了就是订上了。只信本地按钮的话，重连或 2×2 切布局时角标会停在「未订阅」。
+    if (!subscribed) {
+      subscribed = true;
+      syncSubscribeButton();
+    }
     const idle = document.getElementById('cloud-idle');
     if (idle) idle.classList.add('hidden');
+    rebuild();
     draw();
+    paintTag(lastStatus);
   }
 
-  function onCloudStatus(msg) {
+  function resetEst(seed) {
+    est.x = seed && typeof seed.x === 'number' ? seed.x : 0;
+    est.y = seed && typeof seed.y === 'number' ? seed.y : 0;
+    est.yaw = seed && typeof seed.yaw === 'number' ? seed.yaw : 0;
+    est.t = 0;
+    est.mile = null;
+    est.odomLive = false;
+  }
+
+  function onPose(a, b, c) {
+    let x, y, yaw, vx = 0, vy = 0, wz = 0, imuYaw = null, mile = null;
+    if (a && typeof a === 'object') {
+      x = a.x;
+      y = a.y;
+      yaw = a.yaw;
+      vx = typeof a.vx === 'number' ? a.vx : 0;
+      vy = typeof a.vy === 'number' ? a.vy : 0;
+      wz = typeof a.wz === 'number' ? a.wz : 0;
+      imuYaw = typeof a.imuYaw === 'number' ? a.imuYaw * Math.PI / 180 : null;
+      mile = typeof a.mile === 'number' ? a.mile : null;
+    } else {
+      x = a;
+      y = b;
+      yaw = c;
+    }
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof yaw !== 'number') {
+      return;
+    }
+    if (!subscribed) return;
+
+    const now = Date.now();
+    if (!est.t) {
+      resetEst({ x: x, y: y, yaw: yaw });
+      est.t = now;
+      est.mile = mile;
+    }
+
+    const dt = Math.min(0.25, Math.max(0, (now - est.t) / 1000));
+    est.t = now;
+
+    const dOdom = Math.hypot(x - est.x, y - est.y);
+    if (Math.hypot(x, y) > 0.05 && dOdom > 0.015) est.odomLive = true;
+
+    if (est.odomLive) {
+      est.x = x;
+      est.y = y;
+      est.yaw = yaw;
+    } else {
+      const heading = imuYaw !== null ? imuYaw : yaw;
+      const c = Math.cos(heading), s = Math.sin(heading);
+      const speed = Math.hypot(vx, vy);
+      if (speed > 0.03) {
+        est.x += (c * vx - s * vy) * dt;
+        est.y += (s * vx + c * vy) * dt;
+      } else if (mile !== null && est.mile !== null && mile > est.mile + 2) {
+        // 速度遥测也是 0 时，用本次里程沿机头往前推。
+        const ds = (mile - est.mile) / 100;
+        est.x += c * ds;
+        est.y += s * ds;
+      }
+      est.yaw = heading + wz * dt;
+    }
+    if (mile !== null) est.mile = mile;
+
+    pose.x = est.x;
+    pose.y = est.y;
+    pose.yaw = est.yaw;
+
+    const last = trail[trail.length - 1];
+    const moved = !last ||
+      (est.x - last.x) * (est.x - last.x) + (est.y - last.y) * (est.y - last.y) > 0.0004 ||
+      Math.abs(est.yaw - last.yaw) > 0.03;
+    const speeding = Math.hypot(vx, vy) > 0.04;
+    if (!last || ((moved || speeding) && now - last.t > 80)) {
+      trail.push({ x: est.x, y: est.y, yaw: est.yaw, t: now });
+      if (trail.length > MAX_TRAIL) trail.splice(0, trail.length - 1600);
+    }
+    if (opts.trail) draw();
+  }
+
+  function syncSubscribeButton() {
+    const btn = document.getElementById('btn-cloud');
+    if (!btn) return;
+    btn.textContent = subscribed ? '停止点云' : '订阅点云';
+    btn.classList.toggle('active', subscribed);
+  }
+
+  function paintTag(msg) {
     const tag = document.getElementById('cloud-tag');
     const note = document.getElementById('cloud-note');
     if (!tag) return;
 
-    if (!msg.active) {
+    // active 是「网上有没有任何人在订」，不是这台平板自己。
+    // 角标必须看本地 subscribed，否则 2×2 左上角会一直停在初始的「未订阅」。
+    if (!subscribed) {
       tag.textContent = '未订阅';
       tag.className = 'tag';
-    } else if (msg.error) {
+      const idle = document.getElementById('cloud-idle');
+      if (idle) idle.classList.remove('hidden');
+      return;
+    }
+
+    const err = msg && msg.error;
+    const connected = msg ? !!msg.connected : pointCount > 0;
+    if (err && !connected) {
       tag.textContent = '感知主机异常';
       tag.className = 'tag tag-warn';
-      if (note) note.textContent = msg.error;
-    } else if (!msg.connected) {
+      if (note) note.textContent = err;
+      return;
+    }
+    if (!connected && pointCount === 0) {
       tag.textContent = '连接中…';
       tag.className = 'tag tag-warn';
-    } else {
-      tag.textContent = `${(msg.points / 1000).toFixed(1)}k 点`;
-      tag.className = 'tag tag-ok';
-      if (note) {
-        const dropped = msg.dropped > 0 ? `，丢帧 ${msg.dropped}` : '';
-        note.textContent =
-          `体素 ${(msg.voxel * 100).toFixed(0)} cm${dropped}`;
-      }
+      return;
     }
+
+    const shown = pointCount || (msg && msg.points) || 0;
+    tag.textContent = shown > 0 ? `${(shown / 1000).toFixed(1)}k 点` : '已订阅';
+    tag.className = 'tag tag-ok';
+    if (note && msg) {
+      const dropped = msg.dropped > 0 ? `，丢帧 ${msg.dropped}` : '';
+      const extra = opts.persist ? '，持久' :
+                    opts.accumMs > 0 ? `，累积 ${opts.accumMs / 1000}s` : '';
+      note.textContent = `下行 ${(msg.voxel * 100).toFixed(0)} cm${extra}${dropped}`;
+    }
+  }
+
+  function onCloudStatus(msg) {
+    lastStatus = msg;
+    // 本机已订但网关说没人订：多半是重连后 client id 换了，补发一次。
+    if (subscribed && msg && msg.active === false && sendFn) {
+      sendFn({ t: 'cloud_sub' });
+    }
+    paintTag(msg);
+  }
+
+  function setSeg(rootId, attr, value) {
+    const root = document.getElementById(rootId);
+    if (!root) return;
+    root.querySelectorAll('[' + attr + ']').forEach((b) => {
+      b.classList.toggle('active', b.getAttribute(attr) === value);
+    });
+  }
+
+  function syncToolbar() {
+    setSeg('cloud-mode', 'data-cloud-mode', opts.persist ? 'persist' : 'live');
+    setSeg('cloud-accum', 'data-cloud-accum', String(opts.accumMs / 1000));
+    setSeg('cloud-voxel', 'data-cloud-voxel', opts.voxel.toFixed(2));
+    const accum = document.getElementById('cloud-accum');
+    if (accum) accum.classList.toggle('is-dim', opts.persist);
+    const trailBtn = document.getElementById('btn-trail');
+    if (trailBtn) trailBtn.classList.toggle('active', opts.trail);
+    const slice = document.getElementById('cloud-slice');
+    if (slice) slice.checked = opts.slice;
+    const z = document.getElementById('cloud-slice-z');
+    if (z && document.activeElement !== z) z.value = String(opts.sliceZ);
+    const h = document.getElementById('cloud-slice-h');
+    if (h && document.activeElement !== h) h.value = String(opts.sliceHalf);
+    const clear = document.getElementById('btn-cloud-clear');
+    if (clear) clear.classList.toggle('hidden', !opts.persist);
+  }
+
+  function applyOpts() {
+    syncToolbar();
+    if (frames.length || persistMap.size) {
+      rebuild();
+      draw();
+    } else {
+      draw();
+    }
+  }
+
+  function clearCloud() {
+    frames.length = 0;
+    persistMap.clear();
+    pointCount = 0;
+    if (gl && buffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, 0, gl.DYNAMIC_DRAW);
+    }
+    draw();
   }
 
   function toggle() {
     if (!sendFn) return;
     subscribed = !subscribed;
     sendFn({ t: subscribed ? 'cloud_sub' : 'cloud_unsub' });
-    const btn = document.getElementById('btn-cloud');
-    if (btn) {
-      btn.textContent = subscribed ? '停止点云' : '订阅点云';
-      btn.classList.toggle('active', subscribed);
-    }
+    syncSubscribeButton();
+    paintTag(lastStatus);
     if (!subscribed) {
-      pointCount = 0;
+      trail.length = 0;
+      resetEst();
+      clearCloud();
       const idle = document.getElementById('cloud-idle');
       if (idle) idle.classList.remove('hidden');
-      draw();
     }
   }
 
@@ -304,19 +684,113 @@
     if (subscribed) toggle();
   }
 
+  function bindToolbar() {
+    const bar = document.querySelector('.pane-cloud-ctl');
+    if (!bar) return;
+    bar.addEventListener('click', (e) => {
+      const t = e.target.closest('button');
+      if (!t) return;
+      if (t.id === 'btn-cloud') return;
+      if (t.dataset.cloudMode) {
+        opts.persist = t.dataset.cloudMode === 'persist';
+        if (opts.persist) {
+          persistMap.clear();
+          for (let i = 0; i < frames.length; i++) {
+            ingestPersist(frames[i].xyz, frames[i].count, frames[i].pose);
+          }
+        }
+        applyOpts();
+        return;
+      }
+      if (t.dataset.cloudAccum !== undefined) {
+        opts.accumMs = Number(t.dataset.cloudAccum) * 1000;
+        applyOpts();
+        return;
+      }
+      if (t.dataset.cloudVoxel) {
+        const next = Number(t.dataset.cloudVoxel);
+        if (next !== opts.voxel) {
+          opts.voxel = next;
+          if (opts.persist) {
+            const old = [];
+            persistMap.forEach((w) => old.push(w));
+            persistMap.clear();
+            const inv = 1 / Math.max(opts.voxel, 0.05);
+            for (let i = 0; i < old.length && persistMap.size < MAX_PERSIST; i++) {
+              const w = old[i];
+              persistMap.set(voxelKey(w[0], w[1], w[2], inv), w);
+            }
+          }
+        }
+        applyOpts();
+        return;
+      }
+      if (t.id === 'btn-trail') {
+        opts.trail = !opts.trail;
+        applyOpts();
+        return;
+      }
+      if (t.id === 'btn-floor') {
+        opts.floorIdx = (opts.floorIdx + 1) % FLOORS.length;
+        opts.sliceZ = FLOORS[opts.floorIdx];
+        opts.slice = true;
+        applyOpts();
+        return;
+      }
+      if (t.id === 'btn-cloud-clear') {
+        persistMap.clear();
+        frames.length = 0;
+        applyOpts();
+      }
+    });
+
+    const slice = document.getElementById('cloud-slice');
+    if (slice) {
+      slice.addEventListener('change', () => {
+        opts.slice = slice.checked;
+        applyOpts();
+      });
+    }
+    const z = document.getElementById('cloud-slice-z');
+    if (z) {
+      z.addEventListener('change', () => {
+        const v = Number(z.value);
+        if (!Number.isNaN(v)) opts.sliceZ = v;
+        applyOpts();
+      });
+    }
+    const h = document.getElementById('cloud-slice-h');
+    if (h) {
+      h.addEventListener('change', () => {
+        const v = Number(h.value);
+        if (!Number.isNaN(v) && v > 0) opts.sliceHalf = v;
+        applyOpts();
+      });
+    }
+  }
+
   function initCloud(send) {
     sendFn = send;
     if (!gl && !initGl()) return;
     const btn = document.getElementById('btn-cloud');
     if (btn) btn.addEventListener('click', toggle);
-    // 重连后网关那边不记得我们订阅过，状态要跟着回到未订阅。
+    bindToolbar();
     subscribed = false;
-    pointCount = 0;
-    if (btn) {
-      btn.textContent = '订阅点云';
-      btn.classList.remove('active');
-    }
+    lastStatus = null;
+    trail.length = 0;
+    resetEst();
+    clearCloud();
+    syncSubscribeButton();
+    paintTag(null);
+    syncToolbar();
   }
 
-  window.X30Cloud = { initCloud, onCloudFrame, onCloudStatus, stop };
+  function resubscribe() {
+    if (!subscribed || !sendFn) return;
+    sendFn({ t: 'cloud_sub' });
+  }
+
+  window.X30Cloud = {
+    initCloud, onCloudFrame, onCloudStatus, onPose, stop, resize, resubscribe,
+  };
 })();

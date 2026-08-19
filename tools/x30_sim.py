@@ -28,6 +28,8 @@ import time
 HEARTBEAT = 0x21040001
 CONNECT_CONFIRM = 0x21020001
 STAND_SIT = 0x21010202
+RL_SIT = 0x21010222
+RL_STAND = 0x21010223
 TORQUE_STAND = 0x2101020A
 STEPPING = 0x21010201
 MODE_NON_MANUAL = 0x21010C03
@@ -161,6 +163,11 @@ class Robot:
         self.emergency_source = 0
         self.axes = {c: 0 for c in AXIS_CODES}
         self.axis_stamp = 0.0
+        # 过渡态（起立中/坐下中）不该收到轴指令。实机上 50 Hz 的身高=0
+        # 会把原厂柔和轨迹掐成猛起猛趴。计数用来断言网关不会再这么干。
+        self.axis_during_transition = 0
+        # 复现实机：RL 起立后 basic_state 仍报 0。网关若信遥测，会连发起立坐不下来。
+        self.lie_rl_state = False
         self.last_heartbeat = 0.0
         self.connected = False
         # 收包线程每转一圈就刷新它（含空转），用来判断"没收到心跳"到底是
@@ -203,6 +210,10 @@ class Robot:
             with self.lock:
                 self.axes[code] = signed
                 self.axis_stamp = now
+                if self.state in (SIT_TO_STAND, STAND_TO_SIT):
+                    self.axis_during_transition += 1
+                    if self.axis_during_transition == 1:
+                        log("过渡态收到轴指令（起立/坐下过程中不该发轴）")
             return
 
         with self.lock:
@@ -212,17 +223,26 @@ class Robot:
                 self._zero_axes()
                 log("软急停 -> 趴下并锁关节")
 
-            elif code == STAND_SIT:
-                if self.state == SITTING:
-                    self._begin(SIT_TO_STAND, INITIAL_STANDING, 2.0, log, "起立")
-                elif self.state in (INITIAL_STANDING, TORQUE_STANDING):
-                    self._begin(STAND_TO_SIT, SITTING, 2.0, log, "坐下")
-                elif self.state == EMERGENCY:
-                    # 手册里跌倒后可以尝试直接站起来
-                    self._begin(SIT_TO_STAND, INITIAL_STANDING, 2.0, log, "从急停恢复")
+            elif code in (STAND_SIT, RL_STAND, RL_SIT):
+                # 0x21010223 / 0x21010222 是原厂手柄的 RL 起立/趴下。
+                # 0x21010202 是文档里的旧切换，实机上又快又硬，网关不该再发。
+                want_stand = (
+                    code == RL_STAND
+                    or (code == STAND_SIT and self.state in (SITTING, EMERGENCY))
+                )
+                want_sit = (
+                    code == RL_SIT
+                    or (code == STAND_SIT and self.state in (INITIAL_STANDING, TORQUE_STANDING))
+                )
+                if want_stand and self.state in (SITTING, EMERGENCY):
+                    tag = "RL起立" if code == RL_STAND else "起立"
+                    self._begin(SIT_TO_STAND, INITIAL_STANDING, 2.0, log, tag)
                     self.emergency_source = 0
+                elif want_sit and self.state in (INITIAL_STANDING, TORQUE_STANDING):
+                    tag = "RL趴下" if code == RL_SIT else "坐下"
+                    self._begin(STAND_TO_SIT, SITTING, 2.0, log, tag)
                 else:
-                    log(f"忽略站坐指令，当前是「{STATE_NAMES[self.state]}」")
+                    log(f"忽略站坐指令 0x{code:08X}，当前是「{STATE_NAMES[self.state]}」")
 
             elif code == TORQUE_STAND:
                 if self.state == INITIAL_STANDING:
@@ -320,6 +340,8 @@ class Robot:
         now = time.time()
         with self.lock:
             if self.transition_at is not None and now >= self.transition_at:
+                if self.axis_during_transition:
+                    log(f"过渡期间共收到轴指令 {self.axis_during_transition} 次")
                 self.state = self.transition_to
                 self.transition_at = None
                 self.transition_to = None
@@ -398,9 +420,14 @@ class Robot:
 
     def pack_motion(self):
         with self.lock:
+            reported = self.state
+            if self.lie_rl_state and self.state in (
+                SIT_TO_STAND, INITIAL_STANDING, TORQUE_STANDING, STEPPING_STATE
+            ):
+                reported = SITTING
             payload = struct.pack(
                 "<BB2xff3f3ffI I 10s2x",
-                self.state,
+                reported,
                 self.gait,
                 0.0,
                 0.0,
@@ -489,6 +516,11 @@ def main():
         help="遥测回送目标，对应实机 network.toml 里登记的地址",
     )
     parser.add_argument("--quiet", action="store_true", help="只打印状态迁移")
+    parser.add_argument(
+        "--lie-rl-state",
+        action="store_true",
+        help="RL 起立后遥测仍报坐下，复现实机 jy_exe 的撒谎",
+    )
     args = parser.parse_args()
 
     host, _, port = args.target.rpartition(":")
@@ -504,6 +536,7 @@ def main():
     terrain_rx.bind(("0.0.0.0", args.terrain_port))
 
     robot = Robot()
+    robot.lie_rl_state = args.lie_rl_state
     stop = threading.Event()
 
     def log(msg):

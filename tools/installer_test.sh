@@ -51,10 +51,12 @@ else
 fi
 
 for must in deploy/install_gui.sh deploy/install.sh deploy/checkup.sh \
-            deploy/bootstrap.sh deploy/render_unit.sh \
+            deploy/bootstrap.sh deploy/render_unit.sh deploy/config_util.sh \
             deploy/x30-gateway.service deploy/media.json \
             rk3588/CMakeLists.txt rk3588/src/main.cpp \
-            web/index.html web/gamepad.js tools/checkup_test.sh; do
+            rk3588/src/gateway_config.cpp \
+            web/index.html web/gamepad.js web/settings.js \
+            tools/checkup_test.sh; do
   if [[ -f "$TMP/out/$must" ]]; then pass "含 $must"; else fail "缺 $must"; fi
 done
 

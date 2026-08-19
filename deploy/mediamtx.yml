@@ -16,6 +16,8 @@ logDestinations: [stdout]
 rtmp: no
 hls: no
 srt: no
+moq: no
+playback: no
 
 rtsp: yes
 rtspTransports: [tcp]
@@ -76,3 +78,4 @@ paths:
   # 再由 RK3588 上的 ffmpeg 拉出来写声卡。见 docs/media-architecture.md 第七节。
   talkback:
     source: publisher
+    sourceOnDemand: no   # MediaMTX v1.20+ 不允许 publisher 继承 on-demand，否则进程退出

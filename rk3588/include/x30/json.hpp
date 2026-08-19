@@ -29,6 +29,10 @@ class Json {
   bool Has(const std::string& key) const;
   const Json& operator[](const std::string& key) const;
 
+  // 对象的键，按字典序。用于"只认已知键、其余一律报错"的场合 ——
+  // 静默忽略拼错的键，表现是「改了、保存了、没生效、也没报错」。
+  std::vector<std::string> Keys() const;
+
   // 数组访问。越界返回空值而不抛异常，与上面取值带默认的风格一致。
   size_t Size() const;
   const Json& At(size_t index) const;
@@ -65,6 +69,11 @@ class JsonWriter {
   JsonWriter& Key(const std::string& key, unsigned value);
   JsonWriter& Key(const std::string& key, bool value);
   JsonWriter& Value(const std::string& value);  // 数组元素
+
+  // 把一段已经序列化好的 JSON 原样作为某个键的值嵌进来。用于复用别处拼好的
+  // 对象，免得同一组字段在两个地方各写一遍 —— 那种副本改一处忘一处时，
+  // 表现是协议里少了个字段而没人报错。调用方负责保证 json 本身合法。
+  JsonWriter& Raw(const std::string& key, const std::string& json);
 
   std::string Take();
 

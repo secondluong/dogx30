@@ -54,7 +54,8 @@ if ! "$RUN" --extract "$VERIFY" > /dev/null 2>&1; then
   exit 1
 fi
 for must in deploy/install_gui.sh deploy/install.sh deploy/checkup.sh \
-            rk3588/CMakeLists.txt web/index.html; do
+            deploy/config_util.sh rk3588/CMakeLists.txt web/index.html \
+            web/settings.js; do
   if [[ ! -f "$VERIFY/$must" ]]; then
     rm -rf "$VERIFY"
     echo "自检失败：包里缺 $must"

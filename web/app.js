@@ -22,8 +22,11 @@ const app = {
   hasControl: false,
   alive: false,
   basicState: 0,
+  rlStanding: false,
+  controlMode: 0,
   gait: 'walk',
   gaitPending: false,
+  walkMode: null,         // 'torque' | 'step'，RL 起立后遥测常仍报 0
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
 };
@@ -32,11 +35,46 @@ const app = {
 // 免得用户对着没反应的摇杆反复推。
 const STATE_STEPPING = 4;
 const STATE_TORQUE_STANDING = 3;
+const STATE_SIT_TO_STAND = 1;
+const STATE_STAND_TO_SIT = 5;
+const STATE_INITIAL_STAND = 2;
+
+// 趴下只露起立；站立（含 RL 起立后遥测仍报 0）才出步态/身高和力控起步。
+function isStandingUi() {
+  if (app.rlStanding && app.basicState !== STATE_STAND_TO_SIT) return true;
+  const s = app.basicState;
+  return s === STATE_INITIAL_STAND || s === STATE_TORQUE_STANDING ||
+         s === STATE_STEPPING || s === STATE_STAND_TO_SIT;
+}
 
 function controlChannel() {
   if (app.basicState === STATE_STEPPING) return 'vel';
   if (app.basicState === STATE_TORQUE_STANDING) return 'pose';
+  // RL 起立后遥测仍报 0，力控/起步常被主机忽略。原厂此时走速度通道。
+  if (app.rlStanding &&
+      app.basicState !== STATE_SIT_TO_STAND &&
+      app.basicState !== STATE_STAND_TO_SIT) {
+    return 'vel';
+  }
+  if (app.walkMode === 'step') return 'vel';
+  if (app.walkMode === 'torque') return 'pose';
   return null;
+}
+
+function effectiveWalk() {
+  if (app.basicState === STATE_STEPPING) return 'step';
+  if (app.basicState === STATE_TORQUE_STANDING) return 'torque';
+  return app.walkMode;
+}
+
+function paintWalkButtons() {
+  const walk = effectiveWalk();
+  document.querySelectorAll('[data-cmd="torque"]').forEach((b) => {
+    b.classList.toggle('on', walk === 'torque');
+  });
+  document.querySelectorAll('[data-cmd="step"]').forEach((b) => {
+    b.classList.toggle('on', walk === 'step');
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +87,14 @@ function connect() {
   const ws = new WebSocket(url);
   app.ws = ws;
 
-  ws.onopen = () => setLink(true);
+  ws.onopen = () => {
+    setLink(true);
+    // 重连后网关不记得订阅。本机还标着已订的话要重新发一次，
+    // 不然 2×2 左上角会停在「未订阅」，画布上却还留着上一帧。
+    if (window.X30Cloud && window.X30Cloud.resubscribe) {
+      window.X30Cloud.resubscribe();
+    }
+  };
 
   ws.onclose = () => {
     setLink(false);
@@ -78,6 +123,13 @@ function connect() {
         app.holder = msg.holder || 0;
         app.hasControl = !!msg.control;
         renderControl();
+        if (window.X30Settings) window.X30Settings.onHello(msg);
+        break;
+      case 'config':
+        if (window.X30Settings) window.X30Settings.onConfig(msg);
+        break;
+      case 'config_saved':
+        if (window.X30Settings) window.X30Settings.onConfigSaved(msg);
         break;
       case 'control':
         app.holder = msg.holder || 0;
@@ -97,6 +149,9 @@ function connect() {
         if (window.X30Cloud) window.X30Cloud.onCloudStatus(msg);
         break;
       case 'error':
+        // 配置相关的报错归设置面板显示在表单旁边，横幅四秒就没了，
+        // 而人这时正盯着表单等结果。
+        if (window.X30Settings && window.X30Settings.onError(msg)) break;
         showBanner(msg.msg);
         break;
     }
@@ -139,6 +194,7 @@ function setLink(online) {
   if (!online) {
     document.querySelector('.telemetry').classList.add('stale');
   }
+  if (window.X30Settings) window.X30Settings.onLink(online);
 }
 
 function renderControl() {
@@ -164,6 +220,8 @@ const fmt = (v, n = 2) => (typeof v === 'number' ? v.toFixed(n) : '—');
 function renderState(s) {
   app.alive = !!s.alive;
   app.basicState = s.basic_state;
+  app.rlStanding = !!s.rl_standing;
+  app.controlMode = typeof s.mode === 'number' ? s.mode : 0;
 
   document.querySelector('.telemetry').classList.toggle('stale', !s.alive);
 
@@ -179,6 +237,20 @@ function renderState(s) {
   $('t-wz').textContent = fmt(s.vel.yaw);
   $('t-ox').textContent = fmt(s.odom.x);
   $('t-oy').textContent = fmt(s.odom.y);
+  if (window.X30Cloud && window.X30Cloud.onPose) {
+    // 腿式里程计在 RL 起立后经常 x/y 不动。把速度和 IMU 航向一并交给
+    // 点云，轨迹才能在里程计失效时靠积分画出来。
+    window.X30Cloud.onPose({
+      x: s.odom && s.odom.x,
+      y: s.odom && s.odom.y,
+      yaw: s.odom && s.odom.yaw,
+      vx: s.vel && s.vel.x,
+      vy: s.vel && s.vel.y,
+      wz: s.vel && s.vel.yaw,
+      imuYaw: s.att && s.att.yaw,
+      mile: s.mileage_cm,
+    });
+  }
   $('t-yaw').textContent = fmt(s.att.yaw, 1);
   $('t-rp').textContent = `${fmt(s.att.roll, 1)} / ${fmt(s.att.pitch, 1)}`;
   $('t-batt').textContent = s.battery.level;
@@ -204,6 +276,32 @@ function renderState(s) {
     b.classList.toggle('active',
       (s.height_gear === 0 && b.dataset.height === 'normal') ||
       (s.height_gear < 0 && b.dataset.height === 'crawl'));
+  });
+
+  // 起立/坐下走的是运动主机自己的轨迹，过渡中再点一次会打断甚至反转。
+  const standBusy = s.basic_state === STATE_SIT_TO_STAND ||
+                    s.basic_state === STATE_STAND_TO_SIT;
+  document.querySelectorAll('[data-cmd="stand"]').forEach((b) => {
+    b.disabled = standBusy;
+  });
+
+  const standing = isStandingUi();
+  const wrap = $('stage-wrap');
+  wrap.classList.toggle('dog-up', standing);
+  wrap.classList.toggle('dog-prone', !standing);
+  $('btn-stand').textContent = standing ? '趴下' : '起立';
+  $('btn-stand').classList.toggle('on', standing && !standBusy);
+  if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
+  else if (s.basic_state === STATE_TORQUE_STANDING) app.walkMode = 'torque';
+  else if (!standing) app.walkMode = null;
+  paintWalkButtons();
+  if (!standing) closeAccordions();
+
+  document.querySelectorAll('[data-mode]').forEach((b) => {
+    const manual = app.controlMode === 0;
+    b.classList.toggle('active',
+      (manual && b.dataset.mode === 'manual') ||
+      (!manual && b.dataset.mode === 'auto'));
   });
 
   updateStickAvailability();
@@ -344,14 +442,34 @@ $('btn-estop').addEventListener('click', () => {
 });
 
 function guarded(fn) {
-  return () => {
+  return (ev) => {
     if (!app.hasControl) { showBanner('请先申请控制权'); return; }
-    fn();
+    fn(ev);
   };
 }
 
+function markPending(el) {
+  if (!el) return;
+  el.classList.add('pending');
+  clearTimeout(el._pendingTimer);
+  el._pendingTimer = setTimeout(() => el.classList.remove('pending'), 700);
+}
+
 document.querySelectorAll('[data-cmd]').forEach((b) => {
-  b.addEventListener('click', guarded(() => send({ t: 'cmd', name: b.dataset.cmd })));
+  b.addEventListener('click', guarded(() => {
+    send({ t: 'cmd', name: b.dataset.cmd });
+    markPending(b);
+    if (b.dataset.cmd === 'torque') {
+      app.walkMode = 'torque';
+      paintWalkButtons();
+    } else if (b.dataset.cmd === 'step') {
+      app.walkMode = 'step';
+      paintWalkButtons();
+    } else if (b.dataset.cmd === 'stand' && isStandingUi()) {
+      app.walkMode = null;
+      paintWalkButtons();
+    }
+  }));
 });
 document.querySelectorAll('[data-gait]').forEach((b) => {
   b.addEventListener('click', guarded(() => {
@@ -363,12 +481,136 @@ document.querySelectorAll('[data-gait]').forEach((b) => {
       value: b.dataset.gait,
       stair_style: $('stair-style').value,
     });
+    markPending(b);
     // 网关最长约 5 秒给结果（含等待静止）。兜底解禁，别把按钮永久锁死。
     setTimeout(() => { if (app.gaitPending) setGaitPending(false); }, 9000);
   }));
 });
 document.querySelectorAll('[data-height]').forEach((b) => {
-  b.addEventListener('click', guarded(() => send({ t: 'cmd', name: 'height', value: b.dataset.height })));
+  b.addEventListener('click', guarded(() => {
+    send({ t: 'cmd', name: 'height', value: b.dataset.height });
+    markPending(b);
+  }));
+});
+document.querySelectorAll('[data-mode]').forEach((b) => {
+  b.addEventListener('click', guarded(() => {
+    send({ t: 'cmd', name: 'mode', value: b.dataset.mode });
+    markPending(b);
+  }));
+});
+
+$('btn-assist').addEventListener('click', () => {
+  showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
+});
+
+$('btn-telem').addEventListener('click', () => {
+  $('telemetry').classList.toggle('hidden');
+  $('btn-telem').classList.toggle('active', !$('telemetry').classList.contains('hidden'));
+});
+
+$('btn-media').addEventListener('click', () => {
+  $('hud-layout').classList.toggle('hidden');
+  $('btn-media').classList.toggle('active', !$('hud-layout').classList.contains('hidden'));
+});
+
+$('btn-gp').addEventListener('click', () => {
+  $('gp-panel').classList.toggle('hidden');
+  $('btn-gp').classList.toggle('active', !$('gp-panel').classList.contains('hidden'));
+});
+
+$('btn-sticks').addEventListener('click', () => {
+  $('hud-sticks').classList.toggle('hidden');
+  const shown = !$('hud-sticks').classList.contains('hidden');
+  $('btn-sticks').classList.toggle('active', shown);
+  if (!shown) {
+    app.left.x = 0;
+    app.left.y = 0;
+    app.right.x = 0;
+    app.right.y = 0;
+    document.querySelectorAll('.stick .knob').forEach((k) => {
+      k.style.transform = 'translate(0px, 0px)';
+    });
+  }
+});
+
+const viewLayout = { mode: '1x1', main: 'dog_cam' };
+
+function applyLayout() {
+  const stage = $('stage');
+  stage.classList.toggle('layout-1x1', viewLayout.mode === '1x1');
+  stage.classList.toggle('layout-2x2', viewLayout.mode === '2x2');
+  let pip = 0;
+  stage.querySelectorAll('.pane').forEach((p) => {
+    const isMain = viewLayout.mode === '1x1' && p.dataset.view === viewLayout.main;
+    p.classList.toggle('is-main', isMain);
+    p.classList.toggle('is-pip', viewLayout.mode === '1x1' && !isMain);
+    if (viewLayout.mode === '1x1' && !isMain) p.dataset.pip = String(pip++);
+    else p.removeAttribute('data-pip');
+  });
+  $('btn-swap').textContent = viewLayout.mode === '1x1' ? '2×2' : '1×1';
+  // 四宫格格子太小，点云工具条会盖住画面。1×1 放大后再露出来。
+  if ($('cloud-ctl')) $('cloud-ctl').classList.toggle('hidden', viewLayout.mode === '2x2');
+  requestAnimationFrame(() => {
+    if (window.X30Cloud && window.X30Cloud.resize) window.X30Cloud.resize();
+    if (window.X30Media && window.X30Media.onLayout) window.X30Media.onLayout(viewLayout);
+  });
+}
+
+$('btn-swap').addEventListener('click', (e) => {
+  e.stopPropagation();
+  viewLayout.mode = viewLayout.mode === '1x1' ? '2x2' : '1x1';
+  applyLayout();
+});
+
+document.querySelectorAll('#stage .pane').forEach((pane) => {
+  pane.addEventListener('click', (e) => {
+    if (e.target.closest('button, select, a, input')) return;
+    const view = pane.dataset.view;
+    if (viewLayout.mode === '2x2') {
+      viewLayout.mode = '1x1';
+      viewLayout.main = view;
+      applyLayout();
+      return;
+    }
+    if (pane.classList.contains('is-pip')) {
+      viewLayout.main = view;
+      applyLayout();
+    }
+  });
+});
+
+applyLayout();
+
+function closeAccordions() {
+  document.querySelectorAll('.acc-pop').forEach((p) => p.classList.add('hidden'));
+  document.querySelectorAll('.acc-btn').forEach((b) => b.classList.remove('active'));
+}
+
+document.querySelectorAll('.acc-btn').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pop = $('acc-' + btn.dataset.acc);
+    const open = !pop.classList.contains('hidden');
+    closeAccordions();
+    if (!open) {
+      pop.classList.remove('hidden');
+      btn.classList.add('active');
+    }
+  });
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.acc')) closeAccordions();
+});
+
+document.querySelectorAll('[data-stair]').forEach((b) => {
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('stair-style').value = b.dataset.stair;
+    document.querySelectorAll('[data-stair]').forEach((x) => {
+      x.classList.toggle('active', x.dataset.stair === b.dataset.stair);
+    });
+  });
 });
 
 // 切后台时立刻停车。平板锁屏或切 App 后定时器会被节流，
@@ -378,12 +620,14 @@ document.addEventListener('visibilitychange', () => {
     send({ t: 'release' });
     showBanner('已切至后台，运动已停止');
   }
-  // 后台时点云既看不见也渲染不了，继续收只是白占 MESH 带宽。
-  if (document.hidden && window.X30Cloud) window.X30Cloud.stop();
+  // 点云订阅不要跟着显隐走：切标签、缩窗口、平板分屏都会把
+  // document.hidden 置上，退订后再回来要重新点，操作员会以为订不住。
 });
 
 connect();
 
 if (window.X30Media) window.X30Media.initMedia(send, showBanner);
+if (window.X30Capture) window.X30Capture.initCapture(showBanner);
 if (window.X30Cloud) window.X30Cloud.initCloud(send);
 if (window.X30Gamepad) window.X30Gamepad.initGamepad(send, showBanner, () => app);
+if (window.X30Settings) window.X30Settings.initSettings(send);
