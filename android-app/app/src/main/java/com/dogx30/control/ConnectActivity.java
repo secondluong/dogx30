@@ -45,7 +45,13 @@ public class ConnectActivity extends AppCompatActivity {
         portInput.setText(String.valueOf(prefs.getInt(KEY_PORT, 8080)));
 
         connectButton.setOnClickListener(v -> attemptConnect());
-        if (keyStrip != null) keyStrip.requestFocus();
+        if (keyStrip != null) {
+            keyStrip.setOnClickListener(v -> {
+                keyStrip.setBackgroundColor(0xFF3FB950);
+                keyStrip.setText(R.string.key_strip_tap);
+            });
+            keyStrip.requestFocus();
+        }
     }
 
     private void showKey(KeyEvent event) {
