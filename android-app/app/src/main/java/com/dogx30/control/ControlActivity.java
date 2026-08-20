@@ -4,16 +4,12 @@ import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -24,11 +20,6 @@ import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
-
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * 遥控页。
@@ -44,21 +35,14 @@ public class ControlActivity extends AppCompatActivity {
     private TextView overlayMsg;
     private EditText overlayHost;
     private EditText overlayPort;
-    private String url;
-    private boolean usingLocalConsole;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final ExecutorService io = Executors.newSingleThreadExecutor();
 
     @Override
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "SetAllowFileAccess", "SetAllowFileAccessFromFileURLs"})
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_control);
-
-        // 不再先登录。地址在设置里改；WiFi 不通也进遥控页，摇杆走 2.4G。
-        url = GatewayStore.consoleUrl(this);
 
         // 遥控过程中息屏等于失去控制，必须常亮。
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -81,8 +65,13 @@ public class ControlActivity extends AppCompatActivity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
+        s.setAllowFileAccessFromFileURLs(true);
+        s.setAllowUniversalAccessFromFileURLs(true);
         s.setMediaPlaybackRequiresUserGesture(false);  // 后续视频自动播放
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             s.setSafeBrowsingEnabled(false);  // 内网地址，联网校验只会拖慢加载
         }
@@ -95,25 +84,16 @@ public class ControlActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String u) {
                 hideOverlay();
                 view.requestFocus();
-                if (usingLocalConsole) {
-                    view.evaluateJavascript(
-                            "document.documentElement.classList.add('shell-app');",
-                            null);
-                }
-            }
-
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request,
-                                        WebResourceError error) {
-                if (request.isForMainFrame() && !usingLocalConsole) {
-                    loadLocalConsole();
-                }
+                // file:// 常丢掉 ?shell=app，进包装页就按 App 壳画。
+                view.evaluateJavascript(
+                        "document.documentElement.classList.add('shell-app');",
+                        null);
             }
         });
 
-        // 链路只跟顶栏按钮：上次选 2.4G 就先开数传，选 MESH 就连网关。
+        // 始终用包装页。去拉网关 HTML 会跑到狗上的旧脚本，顶栏按钮点了也不切 2.4G。
         G20Rc.get().setBackupRadio("radio".equals(GatewayStore.radioPath(this)));
-        openConsole();
+        loadLocalConsole();
 
         // 误触返回键会直接退出遥控页，机器狗随即失去控制指令。必须二次确认。
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
@@ -154,59 +134,12 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     void reloadGateway() {
-        usingLocalConsole = false;
-        url = GatewayStore.consoleUrl(this);
         overlayHost.setText(GatewayStore.host(this));
         overlayPort.setText(String.valueOf(GatewayStore.port(this)));
-        openConsole();
-    }
-
-    private void openConsole() {
-        final String probe = url;
-        io.execute(() -> {
-            final boolean ok = gatewayReachable(probe);
-            mainHandler.post(() -> {
-                if (isFinishing()) return;
-                if (ok) {
-                    usingLocalConsole = false;
-                    web.loadUrl(probe);
-                } else {
-                    loadLocalConsole();
-                }
-            });
-        });
-        mainHandler.postDelayed(() -> {
-            if (!usingLocalConsole && web != null
-                    && (web.getUrl() == null || web.getUrl().equals("about:blank"))) {
-                loadLocalConsole();
-            }
-        }, 1800);
-    }
-
-    private static boolean gatewayReachable(String consoleUrl) {
-        HttpURLConnection c = null;
-        try {
-            URL u = new URL(consoleUrl);
-            c = (HttpURLConnection) u.openConnection();
-            c.setConnectTimeout(1200);
-            c.setReadTimeout(1200);
-            c.setInstanceFollowRedirects(false);
-            c.setRequestMethod("GET");
-            int code = c.getResponseCode();
-            return code >= 200 && code < 500;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            if (c != null) c.disconnect();
-        }
+        loadLocalConsole();
     }
 
     private void loadLocalConsole() {
-        if (usingLocalConsole) {
-            String cur = web != null ? web.getUrl() : null;
-            if (cur != null && cur.contains("android_asset")) return;
-        }
-        usingLocalConsole = true;
         hideOverlay();
         web.loadUrl("file:///android_asset/web/index.html?shell=app");
     }
@@ -438,7 +371,6 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        io.shutdownNow();
         if (web != null) {
             web.loadUrl("about:blank");
             web.destroy();

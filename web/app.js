@@ -26,13 +26,19 @@ const isAppShell = detectAppShell();
 if (isAppShell) document.documentElement.classList.add('shell-app');
 
 const RADIO_STORE = 'x30.radioPath';
-function nativeRadioPath() {
+
+function nativeCall(name, arg) {
   try {
-    if (window.X30Native && typeof window.X30Native.getRadioPath === 'function') {
-      const v = window.X30Native.getRadioPath();
-      if (v === 'radio' || v === 'mesh') return v;
-    }
-  } catch (e) { /* 网页没有原生桥 */ }
+    const fn = window.X30Native[name];
+    return arguments.length > 1 ? fn.call(window.X30Native, arg) : fn.call(window.X30Native);
+  } catch (e) {
+    return undefined;
+  }
+}
+
+function nativeRadioPath() {
+  const v = nativeCall('getRadioPath');
+  if (v === 'radio' || v === 'mesh') return v;
   return '';
 }
 
@@ -127,14 +133,11 @@ function paintWalkButtons() {
 // ---------------------------------------------------------------------------
 
 function meshWsUrl() {
-  try {
-    if (isAppShell && window.X30Native
-        && typeof window.X30Native.getGatewayHost === 'function') {
-      const host = String(window.X30Native.getGatewayHost() || '').trim();
-      const port = Number(window.X30Native.getGatewayPort()) || 8080;
-      if (host) return 'ws://' + host + ':' + port + '/ws';
-    }
-  } catch (e) { /* 用当前页地址 */ }
+  if (isAppShell) {
+    const host = String(nativeCall('getGatewayHost') || '').trim();
+    const port = Number(nativeCall('getGatewayPort')) || 8080;
+    if (host) return 'ws://' + host + ':' + port + '/ws';
+  }
   if (location.protocol === 'file:') return '';
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return proto + '//' + location.host + '/ws';
@@ -274,8 +277,10 @@ function onGaitResult(msg) {
 }
 
 function hasNativeRadio() {
+  // 安卓 WebView 里 X30Native 的方法 typeof 常常不是 function，
+  // 用 typeof === 'function' 会误判成没有 2.4G，点了也不开数传。
   try {
-    return !!(window.X30Native && typeof window.X30Native.radioCmd === 'function');
+    return !!window.X30Native;
   } catch (e) {
     return false;
   }
@@ -323,47 +328,32 @@ function radioHint(kind) {
 app.radioHint = radioHint;
 
 function nativeRadioCmd(name) {
-  try {
-    if (window.X30Native && typeof window.X30Native.radioCmd === 'function') {
-      window.X30Native.radioCmd(String(name));
-      return true;
-    }
-  } catch (e) { /* 网页没有原生桥 */ }
-  return false;
+  if (!hasNativeRadio()) return false;
+  nativeCall('radioCmd', String(name));
+  return true;
 }
 app.nativeRadioCmd = nativeRadioCmd;
 
 function hasRadioStanding() {
-  try {
-    return !!(window.X30Native && typeof window.X30Native.radioStanding === 'function');
-  } catch (e) {
-    return false;
-  }
+  return hasNativeRadio();
 }
 
 function nativeRadioLinkOk() {
-  try {
-    if (window.X30Native && typeof window.X30Native.radioLinkOk === 'function') {
-      return !!window.X30Native.radioLinkOk();
-    }
-  } catch (e) { /* 网页没有原生桥 */ }
-  return false;
+  return !!nativeCall('radioLinkOk');
 }
 
 function nativeRadioStatus() {
   try {
-    if (window.X30Native && typeof window.X30Native.radioStatus === 'function') {
-      return JSON.parse(window.X30Native.radioStatus() || '{}');
-    }
-  } catch (e) { /* ignore */ }
-  return null;
+    return JSON.parse(nativeCall('radioStatus') || '{}');
+  } catch (e) {
+    return null;
+  }
 }
 
 function nativeRadioStanding() {
-  try {
-    if (hasRadioStanding()) return !!window.X30Native.radioStanding();
-  } catch (e) { /* 网页没有原生桥 */ }
-  return app.rlStanding;
+  if (!hasNativeRadio()) return app.rlStanding;
+  const v = nativeCall('radioStanding');
+  return v === undefined ? app.rlStanding : !!v;
 }
 
 
@@ -473,11 +463,7 @@ function paintRadioBtn() {
 }
 
 function notifyNativeRadio() {
-  try {
-    if (window.X30Native && typeof window.X30Native.setRadioPath === 'function') {
-      window.X30Native.setRadioPath(app.radioPath);
-    }
-  } catch (e) { /* 网页没有原生桥 */ }
+  nativeCall('setRadioPath', app.radioPath);
 }
 
 function applyRadioPath(announce) {
@@ -520,6 +506,7 @@ function applyRadioPath(announce) {
 function setRadioPath(path) {
   app.radioPath = path === 'radio' ? 'radio' : 'mesh';
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
+  notifyNativeRadio();
   if (app.radioPath === 'radio') {
     const ws = app.ws;
     app.ws = null;
@@ -978,10 +965,15 @@ $('btn-control').addEventListener('click', () => {
   }
 });
 
+function toggleRadioPath() {
+  setRadioPath(app.radioPath === 'radio' ? 'mesh' : 'radio');
+}
+app.toggleRadioPath = toggleRadioPath;
 if ($('btn-radio')) {
-  $('btn-radio').addEventListener('click', () => {
-    setRadioPath(app.radioPath === 'radio' ? 'mesh' : 'radio');
-  });
+  $('btn-radio').onclick = function (e) {
+    if (e) e.preventDefault();
+    toggleRadioPath();
+  };
 }
 
 // 急停不检查控制权，任何客户端任何时候都能按。

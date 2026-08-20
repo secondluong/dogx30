@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260820n">
+<link rel="stylesheet" href="style.css?v=20260820p">
 </head>
 <body>
 
@@ -54,7 +54,8 @@
       </div>
     </div>
     <button class="btn btn-ghost" id="btn-control">控制权</button>
-    <button type="button" class="btn btn-ghost" id="btn-radio" title="切换 2.4G 与 MESH">MESH</button>
+    <button type="button" class="btn btn-ghost" id="btn-radio" title="切换 2.4G 与 MESH"
+      onclick="if(window.app&&app.toggleRadioPath)app.toggleRadioPath();">MESH</button>
     <button class="btn btn-estop" id="btn-estop">急停</button>
   </div>
 </header>
@@ -357,6 +358,6 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="app.js?v=20260820n"></script>
+<script src="app.js?v=20260820p"></script>
 </body>
 </html>

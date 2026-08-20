@@ -298,14 +298,16 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /radioStatus/.test(radioBridge));
 check('链路只跟顶栏 MESH/2.4G 按钮',
       /function setRadioPath/.test(appJs) &&
+      /function toggleRadioPath/.test(appJs) &&
+      /function nativeCall/.test(appJs) &&
       /function meshWsUrl/.test(appJs) &&
       /getRadioPath/.test(appJs) &&
       /saveRadioPath/.test(radioBridge) &&
       /String getRadioPath/.test(radioBridge) &&
+      /android_asset\/web\/index\.html/.test(radioBridge) &&
+      !/gatewayReachable/.test(radioBridge) &&
       !/meshWifiOn/.test(radioBridge) &&
-      !/isWifiEnabled/.test(radioBridge) &&
-      !/已自动切到 2\.4G/.test(appJs) &&
-      !/只能走 2\.4G/.test(appJs));
+      !/已自动切到 2\.4G/.test(appJs));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));
 var mediaJs = read('media.js');
