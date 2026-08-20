@@ -11,8 +11,10 @@ import androidx.annotation.Nullable;
 import com.skydroid.rcsdk.KeyManager;
 import com.skydroid.rcsdk.RCSDKManager;
 import com.skydroid.rcsdk.SDKManagerCallBack;
+import com.skydroid.rcsdk.common.callback.CompletionCallback;
 import com.skydroid.rcsdk.common.callback.CompletionCallbackWith;
 import com.skydroid.rcsdk.common.error.SkyException;
+import com.skydroid.rcsdk.key.AirLinkKey;
 import com.skydroid.rcsdk.key.RemoteControllerKey;
 import com.skydroid.rcsdk.utils.RCSDKUtils;
 
@@ -171,7 +173,24 @@ public final class G20Rc {
     public void setBackupRadio(boolean on) {
         backupRadio = on;
         RadioLink.get().setEnabled(on);
+        enableRf(on);
         if (on && connected) RadioLink.get().onRcReady();
+    }
+
+    private void enableRf(boolean on) {
+        try {
+            KeyManager.INSTANCE.set(
+                    AirLinkKey.INSTANCE.getKeyRCRFEnable(),
+                    Boolean.valueOf(on),
+                    new CompletionCallback() {
+                        @Override
+                        public void onResult(@Nullable SkyException e) {
+                            Log.i(TAG, "RF " + on + " " + e);
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.w(TAG, "RF", t);
+        }
     }
 
     public void setWsDown(boolean down) {

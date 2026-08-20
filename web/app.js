@@ -490,7 +490,7 @@ function applyRadioPath(announce) {
         if (nativeRadioLinkOk()) return;
         const st = nativeRadioStatus() || {};
         const why = st.status === 'no-usb-net'
-          ? '接收机还没接到平板（G20 USB 网没起来）。请确认已对频，并关掉云卓助手/云深处'
+          ? 'G20 还没有 USB 网 192.168.144（射频/对频没起来）。关云卓助手和云深处后再切 2.4G'
           : ('2.4G 还没到运动主机 192.168.1.103（' + (st.status || 'unknown') + '）');
         showBanner(why, 10000);
       }, 2000);
@@ -577,7 +577,7 @@ function paintRadioChip() {
   if (text) text.textContent = radioStatusLine();
   if (!st.ready && hasNativeRadio()) {
     const why = st.status === 'no-usb-net'
-      ? '接收机还没接到平板（G20 USB 网没起来）。请确认已对频，并关掉云卓助手/云深处'
+      ? 'G20 还没有 USB 网 192.168.144（射频/对频没起来）。关云卓助手和云深处后再切 2.4G'
       : ('2.4G 还没到运动主机 192.168.1.103（' + (st.status || 'unknown') + '）');
     showBanner(why, 0, 'wait');
   }

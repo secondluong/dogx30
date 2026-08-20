@@ -6,6 +6,7 @@ import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -13,10 +14,13 @@ import android.util.Log;
 
 import androidx.annotation.Nullable;
 
+import com.skydroid.rcsdk.KeyManager;
 import com.skydroid.rcsdk.PipelineManager;
 import com.skydroid.rcsdk.comm.CommListener;
+import com.skydroid.rcsdk.common.callback.CompletionCallback;
 import com.skydroid.rcsdk.common.error.SkyException;
 import com.skydroid.rcsdk.common.pipeline.Pipeline;
+import com.skydroid.rcsdk.key.AirLinkKey;
 
 import org.json.JSONObject;
 
@@ -24,13 +28,17 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Enumeration;
 
 /**
  * 厂家拓扑：手柄 --2.4G--> 接收机 --交换机--> 运动主机 192.168.1.103:43893。
- * CSDK 只负责把平板接到接收机（G20 USB / 数传）。0x21 的终点永远是 .103，
- * 不是 G20 天空端地址。
+ * CSDK 负责开射频、拉起 G20 的 192.168.144 USB 网。0x21 只走 IP 到 .103。
+ * G12G20 串口管道通了也不算通：那是天空端 UART，运动主机收不到。
  */
 final class RadioLink {
 
@@ -79,14 +87,15 @@ final class RadioLink {
     private int sentOk;
     private int sentFail;
     private boolean pipeOk;
-    private boolean g20Ok;
+    private boolean rfOn;
     private String status = "off";
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
     @Nullable private InetAddress robotAddr;
+    @Nullable private InetAddress boundLocal;
     @Nullable private Network airNet;
     @Nullable private Pipeline udpPipe;
-    @Nullable private Pipeline g20Pipe;
+    @Nullable private ConnectivityManager.NetworkCallback netCb;
 
     private final Runnable loop = this::onTick;
 
@@ -114,7 +123,7 @@ final class RadioLink {
     }
 
     synchronized boolean isLinkReady() {
-        return enabled && (pipeOk || g20Ok || udp != null);
+        return enabled && (pipeOk || udp != null);
     }
 
     synchronized String statusJson() {
@@ -125,10 +134,11 @@ final class RadioLink {
             o.put("status", status);
             o.put("udp", udp != null);
             o.put("pipe", pipeOk);
-            o.put("g20", g20Ok);
+            o.put("rf", rfOn);
             o.put("air", airNet != null);
-            o.put("local", airLocalIp());
+            o.put("local", boundLocal != null ? boundLocal.getHostAddress() : airLocalIp());
             o.put("nets", allV4());
+            o.put("ifaces", osIfaces());
             o.put("sentOk", sentOk);
             o.put("sentFail", sentFail);
             o.put("standing", standing);
@@ -143,10 +153,10 @@ final class RadioLink {
         StringBuilder sb = new StringBuilder();
         sb.append(isLinkReady() ? "2.4G 已通 " : "2.4G 未通 ");
         sb.append(status);
-        String local = airLocalIp();
+        String local = boundLocal != null ? boundLocal.getHostAddress() : airLocalIp();
         if (!local.isEmpty()) sb.append(" 本机").append(local);
-        String nets = allV4();
-        if (!nets.isEmpty() && !nets.equals(local)) sb.append(" 网卡").append(nets);
+        String ifaces = osIfaces();
+        if (!ifaces.isEmpty()) sb.append(" ").append(ifaces);
         sb.append(" ok").append(sentOk).append("/fail").append(sentFail);
         return sb.toString();
     }
@@ -165,7 +175,7 @@ final class RadioLink {
             enabled = true;
             start();
         }
-        if (udp == null && !pipeOk && !g20Ok) {
+        if (udp == null && !pipeOk) {
             openUdp();
             openSdkUdp();
         }
@@ -280,6 +290,8 @@ final class RadioLink {
         sentOk = 0;
         sentFail = 0;
         status = "starting";
+        enableRf(true);
+        requestEthernet();
         openUdp();
         openSdkUdp();
         if (!running) {
@@ -290,24 +302,39 @@ final class RadioLink {
 
     private synchronized void openUdp() {
         try {
+            InetAddress local = findAirLocal();
             Network net = findAirlink();
-            if (net == null) {
+            if (local == null && net == null) {
                 if (udp == null) status = "no-usb-net";
-                Log.w(TAG, "no-usb-net");
+                Log.w(TAG, "no-usb-net ifaces=" + osIfaces());
                 return;
             }
-            if (udp != null && airNet != null && airNet.equals(net)) return;
+            if (udp != null && boundLocal != null && boundLocal.equals(local)
+                    && (net == null || net.equals(airNet))) {
+                return;
+            }
             closeSocketOnly();
             airNet = net;
+            boundLocal = local;
             ConnectivityManager cm = connectivity();
-            if (cm != null) {
+            if (cm != null && net != null) {
                 cm.bindProcessToNetwork(net);
             }
-            robotAddr = resolve(net, ROBOT_IP);
-            udp = new DatagramSocket();
-            net.bindSocket(udp);
+            robotAddr = net != null ? resolve(net, ROBOT_IP) : InetAddress.getByName(ROBOT_IP);
+            if (local != null) {
+                udp = new DatagramSocket(new InetSocketAddress(local, 0));
+            } else {
+                udp = new DatagramSocket();
+            }
+            if (net != null) {
+                try {
+                    net.bindSocket(udp);
+                } catch (Exception e) {
+                    Log.w(TAG, "bindSocket", e);
+                }
+            }
             status = "udp-" + ROBOT_IP;
-            Log.i(TAG, status);
+            Log.i(TAG, status + " local=" + (local != null ? local.getHostAddress() : "-"));
         } catch (Exception e) {
             status = "udp-fail";
             Log.w(TAG, "udp", e);
@@ -329,20 +356,9 @@ final class RadioLink {
     }
 
     private synchronized void openSdkUdp() {
-        if ((pipeOk && udpPipe != null) || (g20Ok && g20Pipe != null)) return;
+        if (pipeOk && udpPipe != null) return;
         if (udpPipe == null) {
             udpPipe = openPipe(LOCAL_PORT, ROBOT_IP, "udp103");
-        }
-        if (g20Pipe == null) {
-            try {
-                g20Pipe = PipelineManager.INSTANCE.createG12G20Pipeline();
-                if (g20Pipe != null) {
-                    g20Pipe.setOnCommListener(pipeListener("g20", false));
-                    PipelineManager.INSTANCE.connectPipeline(g20Pipe);
-                }
-            } catch (Throwable t) {
-                Log.w(TAG, "g20 pipe", t);
-            }
         }
     }
 
@@ -368,9 +384,6 @@ final class RadioLink {
                 if (udpKind) {
                     pipeOk = true;
                     status = "pipe-" + ROBOT_IP;
-                } else {
-                    g20Ok = true;
-                    if (!pipeOk) status = "g20-up";
                 }
                 Log.i(TAG, tag + " up");
             }
@@ -378,14 +391,12 @@ final class RadioLink {
             @Override
             public void onConnectFail(@Nullable SkyException e) {
                 if (udpKind) pipeOk = false;
-                else g20Ok = false;
                 Log.w(TAG, tag + " fail " + e);
             }
 
             @Override
             public void onDisconnect() {
                 if (udpKind) pipeOk = false;
-                else g20Ok = false;
             }
 
             @Override
@@ -396,7 +407,6 @@ final class RadioLink {
 
     private void closeSdkUdp() {
         pipeOk = false;
-        g20Ok = false;
         if (udpPipe != null) {
             try {
                 PipelineManager.INSTANCE.disconnectPipeline(udpPipe);
@@ -404,13 +414,101 @@ final class RadioLink {
             }
             udpPipe = null;
         }
-        if (g20Pipe != null) {
-            try {
-                PipelineManager.INSTANCE.disconnectPipeline(g20Pipe);
-            } catch (Throwable ignored) {
-            }
-            g20Pipe = null;
+    }
+
+    private void enableRf(boolean on) {
+        try {
+            KeyManager.INSTANCE.set(
+                    AirLinkKey.INSTANCE.getKeyRCRFEnable(),
+                    Boolean.valueOf(on),
+                    new CompletionCallback() {
+                        @Override
+                        public void onResult(@Nullable SkyException e) {
+                            rfOn = on && e == null;
+                            Log.i(TAG, "RF " + on + " " + e);
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.w(TAG, "RF", t);
         }
+    }
+
+    private void requestEthernet() {
+        ConnectivityManager cm = connectivity();
+        if (cm == null || netCb != null) return;
+        netCb = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                handler.post(() -> {
+                    openUdp();
+                    openSdkUdp();
+                });
+            }
+        };
+        try {
+            NetworkRequest.Builder b = new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET);
+            if (Build.VERSION.SDK_INT >= 31) {
+                b.addTransportType(NetworkCapabilities.TRANSPORT_USB);
+            }
+            cm.requestNetwork(b.build(), netCb);
+        } catch (Exception e) {
+            Log.w(TAG, "requestNetwork", e);
+        }
+    }
+
+    @Nullable
+    private InetAddress findAirLocal() {
+        InetAddress n144 = null;
+        InetAddress wired1 = null;
+        try {
+            Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
+            if (en == null) return null;
+            while (en.hasMoreElements()) {
+                NetworkInterface ni = en.nextElement();
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                if (isWifiName(ni.getName())) continue;
+                for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                    InetAddress a = ia.getAddress();
+                    if (!(a instanceof Inet4Address)) continue;
+                    byte[] v = a.getAddress();
+                    int a0 = v[0] & 0xff;
+                    int a1 = v[1] & 0xff;
+                    int a2 = v[2] & 0xff;
+                    if (a0 == 192 && a1 == 168 && a2 == 144) n144 = a;
+                    else if (a0 == 192 && a1 == 168 && a2 == 1) wired1 = a;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return n144 != null ? n144 : wired1;
+    }
+
+    private static boolean isWifiName(@Nullable String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase();
+        return n.startsWith("wlan") || n.startsWith("wifi") || n.startsWith("ap")
+                || n.startsWith("p2p");
+    }
+
+    private static String osIfaces() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
+            if (en == null) return "";
+            while (en.hasMoreElements()) {
+                NetworkInterface ni = en.nextElement();
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                    InetAddress a = ia.getAddress();
+                    if (!(a instanceof Inet4Address)) continue;
+                    if (sb.length() > 0) sb.append(',');
+                    sb.append(ni.getName()).append('=').append(a.getHostAddress());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return sb.toString();
     }
 
     @Nullable
@@ -508,6 +606,7 @@ final class RadioLink {
 
     private void closeSocketOnly() {
         airNet = null;
+        boundLocal = null;
         robotAddr = null;
         if (udp != null) {
             udp.close();
@@ -531,6 +630,14 @@ final class RadioLink {
         status = "off";
         closeSdkUdp();
         closeSocketOnly();
+        ConnectivityManager cm = connectivity();
+        if (cm != null && netCb != null) {
+            try {
+                cm.unregisterNetworkCallback(netCb);
+            } catch (Exception ignored) {
+            }
+            netCb = null;
+        }
     }
 
     private void onTick() {
@@ -538,7 +645,7 @@ final class RadioLink {
         handler.postDelayed(loop, TICK_MS);
         if (tick % 50 == 0) {
             if (udp == null) openUdp();
-            if (!pipeOk && !g20Ok) openSdkUdp();
+            if (!pipeOk) openSdkUdp();
         }
         G20Rc.Snapshot snap = G20Rc.get().snapshot();
         if (tick % HB_EVERY == 0) {
@@ -620,15 +727,11 @@ final class RadioLink {
         buf.putInt(0);
         byte[] pkt = buf.array();
         // 只走一条成功路径。起步/力控是切换指令，多路齐发会互相抵消。
-        if (pipeOk && udpPipe != null && writePipe(udpPipe, pkt)) {
-            sentOk++;
-            return;
-        }
-        if (g20Ok && g20Pipe != null && writePipe(g20Pipe, pkt)) {
-            sentOk++;
-            return;
-        }
         if (udp != null && sendUdp(pkt, robotAddr)) {
+            sentOk++;
+            return;
+        }
+        if (pipeOk && udpPipe != null && writePipe(udpPipe, pkt)) {
             sentOk++;
             return;
         }
