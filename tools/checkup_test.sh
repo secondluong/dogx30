@@ -84,6 +84,8 @@ ROS_HOST="10.9.9.9"
 CLOUD_TOPIC="/points_raw"
 CLOUD_HZ="7"
 CLOUD_POINTS="31000"
+PTZ_VIS_RTSP="rtsp://admin:pw@192.168.10.12:554/Streaming/Channels/101"
+PTZ_IR_RTSP="rtsp://admin:pw@192.168.10.12:554/Streaming/Channels/201"
 write_gateway_conf "$CONF"
 
 check_get() {   # check_get <键> <期望值>
@@ -103,6 +105,8 @@ check_get ros_host 10.9.9.9
 check_get cloud_topic /points_raw
 check_get cloud_hz 7
 check_get cloud_points 31000
+check_get ptz_vis_rtsp "rtsp://admin:pw@192.168.10.12:554/Streaming/Channels/101"
+check_get ptz_ir_rtsp "rtsp://admin:pw@192.168.10.12:554/Streaming/Channels/201"
 
 echo
 echo "== 注释和空行不能干扰解析 =="
@@ -128,59 +132,13 @@ else
 fi
 
 echo
-echo "== 管理令牌 =="
+echo "== 设置密码 =="
 
-conf_defaults
-write_gateway_conf "$CONF"
-gen_admin_token > "$TOKEN"
 GOT=$(X30_UNIT="$UNIT" bash deploy/checkup.sh --token 2>&1)
-if [[ "$GOT" == "$(cat "$TOKEN")" && -n "$GOT" ]]; then
-  pass "--token 打印出令牌本身（$(echo "$GOT" | cut -c1-8)…）"
+if [[ "$GOT" == "54longqr" ]]; then
+  pass "--token 打印设置密码"
 else
-  fail "--token 没能打印令牌" "实得: $GOT"
-fi
-if [[ ${#GOT} -ge 16 ]]; then
-  pass "令牌长度 ${#GOT}，够猜不出来"
-else
-  fail "令牌太短（${#GOT}）" "改配置能改监听地址，这道门不能形同虚设"
-fi
-
-: > "$TOKEN"
-OUT=$(X30_UNIT="$UNIT" bash deploy/checkup.sh --token 2>&1)
-if [[ $? -ne 0 && "$OUT" == *"空"* ]]; then
-  pass "令牌文件为空时 --token 报「是空的」"
-else
-  fail "令牌为空时的回应不对" "实得: $OUT"
-fi
-
-rm -f "$TOKEN"
-OUT=$(X30_UNIT="$UNIT" bash deploy/checkup.sh --token 2>&1)
-RC=$?
-if [[ $RC -ne 0 ]]; then
-  pass "令牌文件不存在时 --token 报错退出"
-else
-  fail "令牌文件不存在时 --token 返回了 0" "应当报错"
-fi
-# 不能把"读不了"说成"不存在"。非 root 在板子上跑体检是常态（文档就那么写的），
-# 那时令牌读不到是权限问题，报"不存在"会让人去重跑安装。
-if [[ $EUID -eq 0 ]]; then
-  if [[ "$OUT" == *"不存在"* ]]; then
-    pass "root 下如实报「不存在」"
-  else
-    fail "root 下没报「不存在」" "实得: $OUT"
-  fi
-  # 模拟非 root：拿一个存在但读不了的文件，且不是 root 在读。
-  gen_admin_token > "$TOKEN"
-  chmod 600 "$TOKEN"
-  if command -v setpriv >/dev/null 2>&1; then
-    OUT=$(X30_UNIT="$UNIT" setpriv --reuid 65534 --regid 65534 --clear-groups \
-            bash deploy/checkup.sh --token 2>&1)
-    if [[ "$OUT" == *"sudo"* ]]; then
-      pass "非 root 读不到令牌时提示用 sudo，而不是谎报不存在"
-    else
-      fail "非 root 时的提示不对" "实得: $OUT"
-    fi
-  fi
+  fail "--token 没能打印密码" "实得: $GOT"
 fi
 
 echo

@@ -303,6 +303,10 @@ void ApplySettings(const GatewaySettings& s, MotionClientConfig* motion,
   svc->cloud.topic = s.cloud_topic;
   svc->cloud.cloud.target_hz = s.cloud_hz;
   svc->cloud.cloud.max_points = s.cloud_points;
+  svc->settings.ptz_vis_rtsp = s.ptz_vis_rtsp;
+  svc->settings.ptz_ir_rtsp = s.ptz_ir_rtsp;
+  svc->settings.ptz_vis_codec = s.ptz_vis_codec;
+  svc->settings.ptz_ir_codec = s.ptz_ir_codec;
 }
 
 // 反过来把真正生效的值收集回来。控制台「设置」面板回显的是这一份，而不是
@@ -328,6 +332,10 @@ GatewaySettings SettingsOf(const MotionClientConfig& motion,
   s.cloud_topic = svc.cloud.topic;
   s.cloud_hz = svc.cloud.cloud.target_hz;
   s.cloud_points = svc.cloud.cloud.max_points;
+  s.ptz_vis_rtsp = svc.settings.ptz_vis_rtsp;
+  s.ptz_ir_rtsp = svc.settings.ptz_ir_rtsp;
+  s.ptz_vis_codec = svc.settings.ptz_vis_codec;
+  s.ptz_ir_codec = svc.settings.ptz_ir_codec;
   return s;
 }
 
@@ -340,9 +348,7 @@ void PrintUsage() {
                        给了这个参数，控制台的「设置」面板才能在线改配置。
                        格式是 key = value，见 deploy/install.sh 生成的样例。
   --admin-token-file <文件>
-                       管理令牌。改配置必须带上它，缺了则在线改配置一律拒绝。
-                       协议本身没有身份认证，而改配置能把网关指向别的主机、
-                       也能把监听面从内网扩到全部网卡，所以单设一道门。
+                       兼容旧单元，已不再使用。设置面板的密码是 54longqr。
 
 连接:
   --robot-ip <IP>      运动主机地址，默认 192.168.1.103

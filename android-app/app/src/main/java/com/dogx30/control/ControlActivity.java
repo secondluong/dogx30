@@ -16,6 +16,9 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
@@ -31,7 +34,10 @@ import androidx.appcompat.app.AppCompatActivity;
 public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
-    private TextView overlay;
+    private LinearLayout overlay;
+    private TextView overlayMsg;
+    private EditText overlayHost;
+    private EditText overlayPort;
     private String url;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
@@ -42,17 +48,21 @@ public class ControlActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_control);
 
-        String host = getIntent().getStringExtra(ConnectActivity.KEY_HOST);
-        int port = getIntent().getIntExtra(ConnectActivity.KEY_PORT, 8080);
-        // shell=app：控制台走平板小屏布局（单背景切换，不要虚拟摇杆）。
-        // 网页直接打开 / 时不受影响。
-        url = "http://" + host + ":" + port + "/index.html?shell=app";
+        // 不再先登录。地址在设置里改；WiFi 不通也进遥控页，摇杆走 2.4G。
+        url = GatewayStore.consoleUrl(this);
 
         // 遥控过程中息屏等于失去控制，必须常亮。
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         goImmersive();
 
         overlay = findViewById(R.id.overlay);
+        overlayMsg = findViewById(R.id.overlay_msg);
+        overlayHost = findViewById(R.id.overlay_host);
+        overlayPort = findViewById(R.id.overlay_port);
+        Button overlayRetry = findViewById(R.id.overlay_retry);
+        overlayHost.setText(GatewayStore.host(this));
+        overlayPort.setText(String.valueOf(GatewayStore.port(this)));
+        overlayRetry.setOnClickListener(v -> saveOverlayAndReload());
         web = findViewById(R.id.web);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
@@ -86,7 +96,7 @@ public class ControlActivity extends AppCompatActivity {
             public void onReceivedError(WebView view, WebResourceRequest request,
                                         WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    showOverlay(getString(R.string.load_failed, url));
+                    showOverlay(getString(R.string.load_failed_radio, url));
                 }
             }
         });
@@ -111,8 +121,37 @@ public class ControlActivity extends AppCompatActivity {
                 .show();
     }
 
+    private void saveOverlayAndReload() {
+        String host = overlayHost.getText().toString().trim();
+        String portText = overlayPort.getText().toString().trim();
+        int port;
+        try {
+            port = Integer.parseInt(portText);
+        } catch (NumberFormatException e) {
+            overlayMsg.setText(R.string.err_bad_port);
+            overlay.setVisibility(View.VISIBLE);
+            return;
+        }
+        if (host.isEmpty()) {
+            overlayMsg.setText(R.string.err_no_host);
+            overlay.setVisibility(View.VISIBLE);
+            return;
+        }
+        GatewayStore.save(this, host, port);
+        reloadGateway();
+    }
+
+    void reloadGateway() {
+        url = GatewayStore.consoleUrl(this);
+        overlayHost.setText(GatewayStore.host(this));
+        overlayPort.setText(String.valueOf(GatewayStore.port(this)));
+        web.loadUrl(url);
+    }
+
     private void showOverlay(String text) {
-        overlay.setText(text);
+        overlayMsg.setText(text);
+        overlayHost.setText(GatewayStore.host(this));
+        overlayPort.setText(String.valueOf(GatewayStore.port(this)));
         overlay.setVisibility(View.VISIBLE);
     }
 
@@ -131,7 +170,7 @@ public class ControlActivity extends AppCompatActivity {
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     }
 
-    public static class NativeBridge {
+    public class NativeBridge {
         volatile String lastKey = "";
         volatile String lastAxis = "";
         private int keySeq;
@@ -150,6 +189,25 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public String pollRc() {
             return G20Rc.get().pollJson();
+        }
+
+        @JavascriptInterface
+        public String getGatewayHost() {
+            return GatewayStore.host(ControlActivity.this);
+        }
+
+        @JavascriptInterface
+        public int getGatewayPort() {
+            return GatewayStore.port(ControlActivity.this);
+        }
+
+        @JavascriptInterface
+        public void setGateway(String host, int port) {
+            if (host == null) return;
+            host = host.trim();
+            if (host.isEmpty() || port < 1 || port > 65535) return;
+            GatewayStore.save(ControlActivity.this, host, port);
+            runOnUiThread(ControlActivity.this::reloadGateway);
         }
 
         @JavascriptInterface

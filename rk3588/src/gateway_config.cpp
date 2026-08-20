@@ -8,11 +8,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <vector>
 
 #include "x30/json.hpp"
 
@@ -40,6 +42,14 @@ bool ParseLong(const std::string& text, long* out) {
   if (errno != 0 || end == nullptr || *end != '\0') return false;
   *out = v;
   return true;
+}
+
+std::string NormalizeVideoCodec(const std::string& raw) {
+  std::string s = raw;
+  for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (s == "h.264" || s == "avc") return "h264";
+  if (s == "h.265" || s == "hevc") return "h265";
+  return s;
 }
 
 bool ParseBool(const std::string& text, bool* out) {
@@ -145,6 +155,18 @@ bool TakeLong(const Json& obj, const char* key, long lo, long hi, long* out,
   return true;
 }
 
+bool TakeOptionalString(const Json& obj, const char* key, std::string* out,
+                        std::string* error) {
+  if (!obj.Has(key)) return true;
+  const Json& v = obj[key];
+  if (v.type() != Json::Type::kString) {
+    *error = std::string(key) + " 必须是字符串";
+    return false;
+  }
+  *out = Trim(v.AsString());
+  return true;
+}
+
 bool TakeBool(const Json& obj, const char* key, bool* out,
               std::string* error) {
   if (!obj.Has(key)) return true;
@@ -224,6 +246,14 @@ ConfigLoad LoadGatewaySettings(const std::string& path, GatewaySettings* out,
       if (!ParseLong(val, &num) || num < 100 || num > 200000)
         return bad("应在 100–200000");
       s.cloud_points = static_cast<uint32_t>(num);
+    } else if (key == "ptz_vis_rtsp") {
+      s.ptz_vis_rtsp = val;
+    } else if (key == "ptz_ir_rtsp") {
+      s.ptz_ir_rtsp = val;
+    } else if (key == "ptz_vis_codec") {
+      s.ptz_vis_codec = NormalizeVideoCodec(val);
+    } else if (key == "ptz_ir_codec") {
+      s.ptz_ir_codec = NormalizeVideoCodec(val);
     } else {
       // 未知键报错而不是忽略。拼错 robot_ip 却被静默忽略的话，网关会拿
       // 默认地址去跑，而文件里明明写着正确的地址 —— 这种现场没人查得出来。
@@ -268,6 +298,11 @@ bool SaveGatewaySettings(const std::string& path, const GatewaySettings& s,
   std::fprintf(f, "cloud_topic = %s\n", s.cloud_topic.c_str());
   std::fprintf(f, "cloud_hz = %d\n", s.cloud_hz);
   std::fprintf(f, "cloud_points = %u\n", s.cloud_points);
+  std::fprintf(f, "\n");
+  std::fprintf(f, "ptz_vis_rtsp = %s\n", s.ptz_vis_rtsp.c_str());
+  std::fprintf(f, "ptz_ir_rtsp = %s\n", s.ptz_ir_rtsp.c_str());
+  std::fprintf(f, "ptz_vis_codec = %s\n", s.ptz_vis_codec.c_str());
+  std::fprintf(f, "ptz_ir_codec = %s\n", s.ptz_ir_codec.c_str());
 
   if (std::fflush(f) != 0 || ::fsync(::fileno(f)) != 0) {
     *error = std::string("写入 ") + tmp + " 失败：" + std::strerror(errno);
@@ -312,7 +347,8 @@ bool MergeGatewaySettings(const Json& obj, GatewaySettings* inout,
       "robot_ip",      "robot_port",      "local_port",   "perception_ip",
       "perception_port", "http_port",     "bind_address", "cloud_enabled",
       "ros_master",    "ros_host",        "cloud_topic",  "cloud_hz",
-      "cloud_points"};
+      "cloud_points",  "ptz_vis_rtsp",    "ptz_ir_rtsp",
+      "ptz_vis_codec", "ptz_ir_codec"};
   for (const auto& key : obj.Keys()) {
     bool known = false;
     for (const char* k : kKnown) {
@@ -359,6 +395,17 @@ bool MergeGatewaySettings(const Json& obj, GatewaySettings* inout,
   if (!TakeLong(obj, "cloud_points", 100, 200000, &num, error)) return false;
   s.cloud_points = static_cast<uint32_t>(num);
 
+  if (!TakeOptionalString(obj, "ptz_vis_rtsp", &s.ptz_vis_rtsp, error))
+    return false;
+  if (!TakeOptionalString(obj, "ptz_ir_rtsp", &s.ptz_ir_rtsp, error))
+    return false;
+  if (!TakeOptionalString(obj, "ptz_vis_codec", &s.ptz_vis_codec, error))
+    return false;
+  s.ptz_vis_codec = NormalizeVideoCodec(s.ptz_vis_codec);
+  if (!TakeOptionalString(obj, "ptz_ir_codec", &s.ptz_ir_codec, error))
+    return false;
+  s.ptz_ir_codec = NormalizeVideoCodec(s.ptz_ir_codec);
+
   *inout = s;
   return true;
 }
@@ -379,6 +426,10 @@ std::string GatewaySettingsJson(const GatewaySettings& s) {
       .Key("cloud_topic", s.cloud_topic)
       .Key("cloud_hz", s.cloud_hz)
       .Key("cloud_points", static_cast<int>(s.cloud_points))
+      .Key("ptz_vis_rtsp", s.ptz_vis_rtsp)
+      .Key("ptz_ir_rtsp", s.ptz_ir_rtsp)
+      .Key("ptz_vis_codec", s.ptz_vis_codec)
+      .Key("ptz_ir_codec", s.ptz_ir_codec)
       .EndObject();
   return w.Take();
 }
@@ -485,6 +536,27 @@ bool ValidateGatewaySettings(const GatewaySettings& s,
     }
   }
 
+  const std::string* rtsp[] = {&s.ptz_vis_rtsp, &s.ptz_ir_rtsp};
+  const char* rtsp_label[] = {"白光 RTSP", "热成像 RTSP"};
+  for (int i = 0; i < 2; ++i) {
+    if (rtsp[i]->empty()) continue;
+    std::string host, user, pass;
+    if (!ParseRtspAuthority(*rtsp[i], &host, &user, &pass, error)) {
+      *error = std::string(rtsp_label[i]) + " " + *error;
+      return false;
+    }
+  }
+
+  const std::string* codec[] = {&s.ptz_vis_codec, &s.ptz_ir_codec};
+  const char* codec_label[] = {"白光编码", "热成像编码"};
+  for (int i = 0; i < 2; ++i) {
+    if (codec[i]->empty()) continue;
+    if (*codec[i] != "h264" && *codec[i] != "h265") {
+      *error = std::string(codec_label[i]) + " 只能是 h264 或 h265";
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -512,6 +584,238 @@ bool TokenMatches(const std::string& expected, const std::string& given) {
             static_cast<unsigned char>(given[i]);
   }
   return diff == 0;
+}
+
+// ---------------------------------------------------------------------------
+// 布控球 RTSP
+// ---------------------------------------------------------------------------
+
+bool ParseRtspAuthority(const std::string& url, std::string* host,
+                        std::string* user, std::string* password,
+                        std::string* error) {
+  const std::string prefix = "rtsp://";
+  if (url.size() < prefix.size() ||
+      url.compare(0, prefix.size(), prefix) != 0) {
+    if (error) *error = "必须以 rtsp:// 开头";
+    return false;
+  }
+  const std::string rest = url.substr(prefix.size());
+  const size_t slash = rest.find('/');
+  const size_t auth_end = (slash == std::string::npos) ? rest.size() : slash;
+  const std::string ahead = rest.substr(0, auth_end);
+  if (ahead.empty()) {
+    if (error) *error = "缺少主机";
+    return false;
+  }
+
+  std::string hostport = ahead;
+  const size_t at = ahead.rfind('@');
+  if (at != std::string::npos) {
+    const std::string cred = ahead.substr(0, at);
+    hostport = ahead.substr(at + 1);
+    const size_t colon = cred.find(':');
+    if (user) *user = (colon == std::string::npos) ? cred : cred.substr(0, colon);
+    if (password) {
+      *password = (colon == std::string::npos) ? "" : cred.substr(colon + 1);
+    }
+  } else {
+    if (user) user->clear();
+    if (password) password->clear();
+  }
+
+  if (hostport.empty()) {
+    if (error) *error = "缺少主机";
+    return false;
+  }
+  const size_t colon = hostport.rfind(':');
+  std::string h = hostport;
+  if (colon != std::string::npos && colon > 0) h = hostport.substr(0, colon);
+  if (host) *host = h;
+  return true;
+}
+
+std::string MediamtxPathBeside(const std::string& media_json) {
+  if (media_json.empty()) return "";
+  const size_t slash = media_json.find_last_of('/');
+  if (slash == std::string::npos) return "mediamtx.yml";
+  return media_json.substr(0, slash + 1) + "mediamtx.yml";
+}
+
+std::string DeriveHikSubRtsp(const std::string& main_url) {
+  if (main_url.size() < 3) return "";
+  const std::string tail = main_url.substr(main_url.size() - 3);
+  if (tail == "101") return main_url.substr(0, main_url.size() - 3) + "102";
+  if (tail == "201") return main_url.substr(0, main_url.size() - 3) + "202";
+  return "";
+}
+
+std::string ReadMediamtxSource(const std::string& yml_path,
+                               const std::string& path_name) {
+  std::ifstream in(yml_path);
+  if (!in) return "";
+  std::string line;
+  std::string current;
+  const std::string want = path_name + ":";
+  while (std::getline(in, line)) {
+    std::string t = Trim(line);
+    if (!t.empty() && t.back() == ':' && t.find(' ') == std::string::npos) {
+      current = t;
+    }
+    if (current != want) continue;
+    const std::string key = "source:";
+    const size_t pos = t.find(key);
+    if (pos != 0) continue;
+    return Trim(t.substr(key.size()));
+  }
+  return "";
+}
+
+bool PatchMediamtxSource(const std::string& yml_path,
+                         const std::string& path_name,
+                         const std::string& source, std::string* error) {
+  std::ifstream in(yml_path);
+  if (!in) {
+    if (error) *error = "打不开 " + yml_path;
+    return false;
+  }
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(in, line)) lines.push_back(line);
+
+  std::string current;
+  const std::string want = path_name + ":";
+  bool found = false;
+  for (auto& raw : lines) {
+    const std::string t = Trim(raw);
+    if (!t.empty() && t.back() == ':' && t.find(' ') == std::string::npos) {
+      current = t;
+    }
+    if (current != want) continue;
+    if (t.compare(0, 7, "source:") != 0) continue;
+    const size_t indent = raw.find_first_not_of(" \t");
+    raw = (indent == std::string::npos ? std::string() : raw.substr(0, indent)) +
+          "source: " + source;
+    found = true;
+    break;
+  }
+  if (!found) {
+    if (error) *error = yml_path + " 里没有 " + path_name + " 的 source";
+    return false;
+  }
+
+  const std::string tmp = yml_path + ".tmp";
+  FILE* f = std::fopen(tmp.c_str(), "w");
+  bool atomic = f != nullptr;
+  if (f == nullptr) {
+    // ProtectSystem=strict 时 /opt/x30 目录不可写，.tmp 建不出来。
+    // 已经存在的 yml 若在 ReadWritePaths 里，可以就地覆盖。
+    f = std::fopen(yml_path.c_str(), "w");
+  }
+  if (f == nullptr) {
+    if (error) *error = "写不了 " + yml_path;
+    return false;
+  }
+  for (size_t i = 0; i < lines.size(); ++i) {
+    std::fprintf(f, "%s\n", lines[i].c_str());
+  }
+  std::fclose(f);
+  if (atomic && ::rename(tmp.c_str(), yml_path.c_str()) != 0) {
+    if (error) *error = "替换 " + yml_path + " 失败";
+    ::unlink(tmp.c_str());
+    return false;
+  }
+  return true;
+}
+
+std::string EscapeRtspJson(const std::string& in) {
+  std::string out;
+  out.reserve(in.size() + 8);
+  for (char c : in) {
+    if (c == '\\' || c == '"') out.push_back('\\');
+    out.push_back(c);
+  }
+  return out;
+}
+
+bool PatchMediamtxSourceApi(const std::string& path_name,
+                            const std::string& source) {
+  char cmd[2048];
+  const int n = std::snprintf(
+      cmd, sizeof(cmd),
+      "curl -sS --connect-timeout 0.5 --max-time 2 "
+      "-X PATCH -H 'Content-Type: application/json' "
+      "-d '{\"source\":\"%s\"}' "
+      "'http://127.0.0.1:9997/v3/config/paths/patch/%s' >/dev/null 2>&1",
+      EscapeRtspJson(source).c_str(), path_name.c_str());
+  if (n < 0 || static_cast<size_t>(n) >= sizeof(cmd)) return false;
+  return std::system(cmd) == 0;
+}
+
+bool ApplyPtzRtspToMediamtx(const std::string& yml_path,
+                            const GatewaySettings& s, std::string* error,
+                            bool* wrote) {
+  if (wrote) *wrote = false;
+  if (yml_path.empty()) return true;
+  {
+    std::ifstream probe(yml_path);
+    if (!probe) return true;
+  }
+  struct Item {
+    const char* main;
+    const char* sub;
+    const std::string& url;
+  };
+  const Item items[] = {{"ptz_vis_main", "ptz_vis_sub", s.ptz_vis_rtsp},
+                        {"ptz_ir_main", "ptz_ir_sub", s.ptz_ir_rtsp}};
+  for (const auto& it : items) {
+    if (it.url.empty()) continue;
+    std::string sub = DeriveHikSubRtsp(it.url);
+    if (sub.empty()) sub = it.url;
+    const bool file_same = ReadMediamtxSource(yml_path, it.main) == it.url &&
+                           ReadMediamtxSource(yml_path, it.sub) == sub;
+
+    std::string file_err;
+    bool file_ok = file_same;
+    if (!file_same) {
+      file_ok = PatchMediamtxSource(yml_path, it.main, it.url, &file_err);
+      if (file_ok) {
+        std::string ignore;
+        PatchMediamtxSource(yml_path, it.sub, sub, &ignore);
+      }
+    }
+
+    const bool api_ok = PatchMediamtxSourceApi(it.main, it.url) &&
+                        PatchMediamtxSourceApi(it.sub, sub);
+    if (!file_ok && !api_ok) {
+      if (error) *error = file_err.empty() ? "MediaMTX 拉流地址没写上" : file_err;
+      return false;
+    }
+    // 文件写上了但 API 没通，才需要重启 MediaMTX 去读文件。
+    // API 已经改过的话重启反而会用旧文件把地址冲掉。
+    if (wrote && file_ok && !file_same && !api_ok) *wrote = true;
+  }
+  return true;
+}
+
+std::string InferRtspCodec(const std::string& url) {
+  std::string rest = url;
+  if (rest.size() >= 7 && rest.compare(0, 7, "rtsp://") == 0) rest = rest.substr(7);
+  const size_t slash = rest.find('/');
+  if (slash == std::string::npos) return "";
+  std::string path = rest.substr(slash);
+  for (char& c : path) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (path.find("h265") != std::string::npos ||
+      path.find("hevc") != std::string::npos) {
+    return "h265";
+  }
+  if (path.find("h264") != std::string::npos) return "h264";
+  return "";
+}
+
+std::string EffectivePtzCodec(const std::string& configured,
+                              const std::string& rtsp_url) {
+  if (!configured.empty()) return configured;
+  return InferRtspCodec(rtsp_url);
 }
 
 }  // namespace x30

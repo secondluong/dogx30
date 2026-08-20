@@ -16,6 +16,17 @@ const media = {
 
 const playingPath = new Map();
 
+// Chrome 把 H.265 列进 getCapabilities，不代表 WebRTC 能解出色度。
+// 桌面浏览器（Linux / 不少 Windows 核显）常见结果就是白光整幅发绿，
+// 同一台球机的 H.264 热成像子码流却是正常的。安卓壳走 SoC 硬解，可以继续用。
+function webH265Ok() {
+  if (typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('shell-app')) {
+    return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // 编解码能力探测
 // ---------------------------------------------------------------------------
@@ -63,14 +74,20 @@ async function reportCaps(sendFn) {
   media.caps = probeCodecsSync();
   const confirmed = await confirmH265();
   if (confirmed !== null) media.caps.h265 = confirmed;
+  // 桌面端宁可退到 H.264 子码流，也不要把一张绿图当「已支持」。
+  if (!webH265Ok()) media.caps.h265 = false;
 
   sendFn({ t: 'media_caps', h264: media.caps.h264, h265: media.caps.h265 });
 
   const el = document.getElementById('codec-note');
   if (el) {
-    el.textContent = media.caps.h265
-      ? 'H.265 可用'
-      : 'H.265 不可用，将使用 H.264（画质相同则占用约两倍带宽）';
+    if (media.caps.h265) {
+      el.textContent = 'H.265 可用';
+    } else if (!webH265Ok()) {
+      el.textContent = '桌面浏览器 H.265 容易整幅发绿，白光改走 H.264';
+    } else {
+      el.textContent = 'H.265 不可用，将使用 H.264（画质相同则占用约两倍带宽）';
+    }
     el.classList.toggle('warn', !media.caps.h265);
   }
 }
@@ -161,7 +178,13 @@ function setIdle(id, on) {
 
 function pathFor(tile, plan) {
   const src = plan.sources.find((s) => s.id === tile.id);
-  if (src && src.available && src.path) return src.path;
+  if (src && src.available && src.path) {
+    // 网关若仍按旧能力下发了 H.265 主码流，桌面端自己改走子码流。
+    if (src.codec === 'h265' && !webH265Ok() && tile.fallback) {
+      return tile.fallback;
+    }
+    return src.path;
+  }
   return tile.fallback;
 }
 

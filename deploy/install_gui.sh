@@ -350,9 +350,7 @@ ${B}═════════════════════════�
   重启     systemctl restart x30-gateway
 
   以后改地址、端口、点云开关不用再上命令行，控制台右上角有「设置」。
-  它要管理令牌，就是下面这串（也可以随时用 sudo bash deploy/checkup.sh --token 取）：
-
-    ${B}$(bash "$SRC/deploy/checkup.sh" --token 2>/dev/null || echo '（取不到，用 sudo bash deploy/checkup.sh --token）')${N}
+  设置密码是 ${B}54longqr${N}。
 
 EOF
 

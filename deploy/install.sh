@@ -226,12 +226,9 @@ cat <<EOF
 遥控端连同一个网段后，浏览器打开上面的地址即可。
 
 地址、端口、点云这些参数以后可以直接在控制台的「设置」里改，不用再上命令行：
-改完网关会自己重启，一两秒后恢复。要用管理令牌，看一眼：
+改完网关会自己重启，一两秒后恢复。设置密码是 54longqr。
 
-  sudo bash deploy/checkup.sh --token
-
-令牌在 ${TOKEN_FILE}（600 root，所以要 sudo），配置在 ${CONF}。手工改配置文件也行，
-改完 systemctl restart x30-gateway。
+配置在 ${CONF}。手工改配置文件也行，改完 systemctl restart x30-gateway。
 EOF
 
 if [[ "$MEDIA" == "1" ]]; then

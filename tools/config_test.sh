@@ -61,9 +61,7 @@ PERCEPTION_IP="127.0.0.2"
 HTTP_PORT="$PORT"
 BIND_ADDR="127.0.0.1"
 write_gateway_conf "$CONF"
-gen_admin_token > "$TOKEN_FILE"
-chmod 600 "$TOKEN_FILE"
-TOKEN=$(cat "$TOKEN_FILE")
+TOKEN="54longqr"
 
 start_gateway() {   # start_gateway <日志> [额外环境…]
   local log=$1
@@ -137,11 +135,10 @@ cleanup
 
 # ---------------------------------------------------------------------------
 echo
-echo "== 没有令牌文件时一律拒绝（失败关闭）=="
+echo "== 密码不对时一律拒绝 =="
 # ---------------------------------------------------------------------------
 
-# 部署里漏了这一步的话，改配置的口子就对所有人敞开了。
-# 所以缺令牌必须是"谁都改不了"，不能是"谁都能改"。
+# 密码不对必须拒，不能谁都能改监听地址。
 conf_defaults
 ROBOT_IP="127.0.0.1"
 PERCEPTION_IP="127.0.0.2"
@@ -151,7 +148,7 @@ write_gateway_conf "$CONF"
 rm -f "$TOKEN_FILE"
 
 if start_gateway "$TMP/gw3.log"; then
-  OUT=$(python3 - "$PORT" "$TOKEN" <<'PY'
+  OUT=$(python3 - "$PORT" "wrong-password" <<'PY'
 import sys, os
 sys.path.insert(0, os.path.join(os.getcwd(), "tools"))
 from ws_probe import WsClient
@@ -164,10 +161,10 @@ print(c.wait_for("error", timeout=5).get("code", ""))
 c.close()
 PY
 )
-  if [[ "$OUT" == "no_admin_token" ]]; then
-    pass "没有令牌文件时改配置被拒（no_admin_token）"
+  if [[ "$OUT" == "bad_admin_token" ]]; then
+    pass "密码不对时改配置被拒（bad_admin_token）"
   else
-    fail "没有令牌文件时的回应不对" "实得: $OUT"
+    fail "密码不对时的回应不对" "实得: $OUT"
   fi
   if grep -q "robot_ip = 127.0.0.1" "$CONF"; then
     pass "被拒之后文件没被动过"
@@ -175,7 +172,7 @@ PY
     fail "被拒了却改了文件" "$(grep robot_ip "$CONF")"
   fi
 else
-  fail "缺令牌时网关起不来" "缺令牌只该禁掉改配置，不该拖垮服务"
+  fail "密码校验那段网关起不来" "密码错只该拒改配置，不该拖垮服务"
 fi
 cleanup
 
@@ -187,9 +184,7 @@ echo "== systemd 托管时才自己退出重启 =="
 # 手工在终端里跑的话，退出就真的没了 —— 上面那组已经验过它不退。
 # 由 systemd 托管时相反：必须干净退出，让 Restart=always 带着新配置把它拉回来。
 # 用 INVOCATION_ID 判断，那是 systemd 给每个服务实例设的环境变量。
-gen_admin_token > "$TOKEN_FILE"
-chmod 600 "$TOKEN_FILE"
-TOKEN=$(cat "$TOKEN_FILE")
+TOKEN="54longqr"
 
 python3 -u "$ROOT/tools/x30_sim.py" > "$TMP/sim.log" 2>&1 &
 SIM_PID=$!

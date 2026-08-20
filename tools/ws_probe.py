@@ -590,7 +590,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--token", default="", help="config 场景用的管理令牌")
+    parser.add_argument("--token", default="54longqr", help="config 场景用的设置密码")
     parser.add_argument("--conf", default="", help="config 场景用的配置文件路径")
     parser.add_argument(
         "--scenario",

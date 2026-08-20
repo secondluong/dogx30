@@ -384,12 +384,8 @@ systemctl status x30-gateway
 等第 18 节确定了遥控链路走哪个网卡，再把监听范围收紧。
 
 这些参数写进 `/opt/x30/conf/gateway.conf`，systemd 单元只指向它。装完之后
-**在控制台的「设置」里就能改**，不用再重装，也不用编辑 systemd 单元。改配置要
-管理令牌，现在先记下来（重装不会换）：
-
-```bash
-sudo bash deploy/checkup.sh --token
-```
+**在控制台的「设置」里就能改**，不用再重装，也不用编辑 systemd 单元。设置密码是
+`54longqr`。
 
 装完立刻跑一遍体检：
 
@@ -526,7 +522,7 @@ sudo bash deploy/install.sh --robot-ip 192.168.1.103 --bind 192.168.1.120
 绑定不存在的地址不会导致启动失败（代码里开了 `IP_FREEBIND`），
 所以不用担心开机时网关比网络配置先就绪。
 
-改配置本身要管理令牌（`sudo bash deploy/checkup.sh --token`）。这道门就是为
+改配置本身要密码（`54longqr`）。这道门就是为
 这一步存在的：否则任何能连上 8080 的人都可以把监听地址改回 `0.0.0.0`，
 上面所有的收紧动作就白做了。
 

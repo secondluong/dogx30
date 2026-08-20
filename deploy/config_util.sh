@@ -47,6 +47,10 @@ conf_defaults() {
   CLOUD_TOPIC="/lidar_points"
   CLOUD_HZ="2"
   CLOUD_POINTS="20000"
+  PTZ_VIS_RTSP=""
+  PTZ_IR_RTSP=""
+  PTZ_VIS_CODEC=""
+  PTZ_IR_CODEC=""
 }
 
 # 从已有配置文件覆盖这组变量。文件里没有的键保持原值，
@@ -67,6 +71,10 @@ conf_load() {
   v=$(conf_get "$file" cloud_topic);     [[ -n $v ]] && CLOUD_TOPIC=$v
   v=$(conf_get "$file" cloud_hz);        [[ -n $v ]] && CLOUD_HZ=$v
   v=$(conf_get "$file" cloud_points);    [[ -n $v ]] && CLOUD_POINTS=$v
+  v=$(conf_get "$file" ptz_vis_rtsp);    [[ -n $v ]] && PTZ_VIS_RTSP=$v
+  v=$(conf_get "$file" ptz_ir_rtsp);     [[ -n $v ]] && PTZ_IR_RTSP=$v
+  v=$(conf_get "$file" ptz_vis_codec);   [[ -n $v ]] && PTZ_VIS_CODEC=$v
+  v=$(conf_get "$file" ptz_ir_codec);    [[ -n $v ]] && PTZ_IR_CODEC=$v
   return 0
 }
 
@@ -142,6 +150,11 @@ ros_host = $ROS_HOST
 cloud_topic = $CLOUD_TOPIC
 cloud_hz = $CLOUD_HZ
 cloud_points = $CLOUD_POINTS
+
+ptz_vis_rtsp = $PTZ_VIS_RTSP
+ptz_ir_rtsp = $PTZ_IR_RTSP
+ptz_vis_codec = $PTZ_VIS_CODEC
+ptz_ir_codec = $PTZ_IR_CODEC
 EOF
   mv -f "$file.tmp" "$file"
 }

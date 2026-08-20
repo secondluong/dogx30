@@ -98,7 +98,7 @@ void PtzClient::Send(int pan, int tilt, int zoom) {
   const int st = std::system(cmd);
   if (st != 0 && !warned_) {
     warned_ = true;
-    std::fprintf(stderr, "[ptz] 球机未响应（检查 media.json 的 ptz 地址和口令）\n");
+    std::fprintf(stderr, "[ptz] 球机未响应（检查设置里的白光/热成像 RTSP 口令）\n");
   }
 }
 

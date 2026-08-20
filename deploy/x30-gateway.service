@@ -42,8 +42,9 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 # conf/ 要可写，控制台的「设置」面板要往 gateway.conf 里写。
-# 只给这个子目录而不是整个 /opt/x30 —— 后者等于让网关能改自己的二进制。
-ReadWritePaths=/opt/x30/log /opt/x30/conf
+# mediamtx.yml 也要可写：改布控球 RTSP 时网关会改拉流地址。
+# 只给这些路径，不要放开整个 /opt/x30，否则网关能改自己的二进制。
+ReadWritePaths=/opt/x30/log /opt/x30/conf /opt/x30/mediamtx.yml
 
 [Install]
 WantedBy=multi-user.target

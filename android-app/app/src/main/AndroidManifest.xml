@@ -16,24 +16,19 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.X30">
 
+        <!-- 遥控界面锁横屏。自转屏会在操作中途重建 Activity，
+             WebSocket 断开、控制权丢失，机器狗会突然停下。
+             不再先登录：WiFi 不通也进这里，摇杆走已对频的 2.4G。 -->
         <activity
-            android:name=".ConnectActivity"
+            android:name=".ControlActivity"
             android:exported="true"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- 遥控界面锁横屏。自转屏会在操作中途重建 Activity，
-             WebSocket 断开、控制权丢失，机器狗会突然停下。 -->
-        <activity
-            android:name=".ControlActivity"
-            android:exported="false"
-            android:screenOrientation="sensorLandscape"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
 
     </application>
 </manifest>

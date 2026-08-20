@@ -37,6 +37,14 @@ struct GatewaySettings {
   std::string cloud_topic = "/lidar_points";
   int cloud_hz = 2;
   uint32_t cloud_points = 20000;
+
+  // 双光布控球。空 = 沿用 mediamtx.yml / media.json 里现成的。
+  // 填了就用这两条 RTSP 拉流，并从地址里取出主机和口令做云台。
+  std::string ptz_vis_rtsp;
+  std::string ptz_ir_rtsp;
+  // h264 / h265。空 = 从 RTSP 路径猜，再猜不到就用 media.json。
+  std::string ptz_vis_codec;
+  std::string ptz_ir_codec;
 };
 
 enum class ConfigLoad {
@@ -75,12 +83,35 @@ bool ValidateGatewaySettings(const GatewaySettings& s,
 // 前者填错的症状是服务起不来，后者是订阅成功却一帧数据都收不到。
 bool IsLocalIpv4(const std::string& ip);
 
-// 管理令牌。文件缺失、读不了或内容为空时返回空串，此时改配置一律拒绝 ——
-// 失败关闭。协议本身没有身份认证，不能让「凡能连上 8080 的人」都能改
-// 运动主机地址，或者把 --bind 从内网地址改成 0.0.0.0 自己把口子开出来。
+// 控制台「设置」的密码。现场一台狗、内网用，不再用每机一份的令牌文件。
+// --admin-token-file 仍可写在单元里（旧安装），网关不再读它。
+inline constexpr const char* kAdminPassword = "54longqr";
+
 std::string LoadAdminToken(const std::string& path);
 
 // 定长时间比较，不因首字节不同就提前返回。
 bool TokenMatches(const std::string& expected, const std::string& given);
+
+// 从 rtsp://user:pass@host:554/path 取出主机和口令，给海康 ISAPI 云台用。
+bool ParseRtspAuthority(const std::string& url, std::string* host,
+                        std::string* user, std::string* password,
+                        std::string* error);
+
+// media.json 旁边的 mediamtx.yml。
+std::string MediamtxPathBeside(const std::string& media_json);
+
+// 读 / 写 MediaMTX 某个 path 的 source。海康主码流 101/201 会顺带改子码流 102/202。
+std::string ReadMediamtxSource(const std::string& yml_path,
+                               const std::string& path_name);
+bool ApplyPtzRtspToMediamtx(const std::string& yml_path,
+                            const GatewaySettings& s, std::string* error,
+                            bool* wrote = nullptr);
+
+// 路径里带 /h264、/h265、/hevc 时认出来；海康 Channels/101 这种认不出来。
+std::string InferRtspCodec(const std::string& url);
+
+// 设置里写了用设置的；否则从地址猜。仍为空表示别动 media.json。
+std::string EffectivePtzCodec(const std::string& configured,
+                              const std::string& rtsp_url);
 
 }  // namespace x30

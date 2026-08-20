@@ -60,8 +60,7 @@ struct RobotServiceConfig {
   // 配置文件路径（--config）。为空表示没有可写回的地方。
   std::string config_path;
 
-  // 管理令牌文件（--admin-token-file）。协议没有身份认证，改配置这种能把
-  // 服务指向别处、或把监听面打开的操作必须单独设一道门。
+  // 旧安装仍可能带 --admin-token-file。网关不再读这个文件，改配置看固定密码。
   std::string admin_token_file;
 
   // 当前实际生效的配置。config_get 回显的是这份，而不是文件内容 ——

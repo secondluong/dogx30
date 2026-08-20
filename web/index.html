@@ -19,7 +19,7 @@
     <span class="chip" id="chip-link"><i class="dot"></i><span id="link-text">连接中</span></span>
     <span class="chip" id="chip-state">—</span>
     <span class="chip" id="chip-batt">—</span>
-    <span class="chip hidden" id="chip-stick">摇杆 · 狗</span>
+    <span class="chip hidden" id="chip-stick" title="点一下：摇杆改控布控球或改回控狗">摇杆 · 狗</span>
   </div>
 
   <div class="bar-right">
@@ -46,7 +46,7 @@
   </div>
 </header>
 
-<!-- 网关设置。改完要重启网关，所以既要令牌，也要求当前没人持有控制权。 -->
+<!-- 网关设置。改完要重启网关，所以既要密码，也要求当前没人持有控制权。 -->
 <div id="settings" class="set-mask hidden">
   <div class="set-panel">
     <div class="set-head">
@@ -54,19 +54,29 @@
       <button class="btn sm btn-ghost" id="set-close">关闭</button>
     </div>
 
-    <div id="set-unlock-box" class="set-unlock">
-      <p>改这些参数会让网关重启，遥控中断一两秒。需要管理令牌。</p>
-      <p class="set-hint">
-        令牌在板子上，执行 <code>sudo bash deploy/checkup.sh --token</code> 可以看到。
-        它存在 <code>/opt/x30/conf/admin.token</code>，只有 root 能读，所以要 sudo。
-      </p>
+    <div id="set-app-box" class="set-form hidden">
+      <div class="set-sect">本机连接网关</div>
+      <p class="set-sect-note">App 打开时连这个地址。WiFi 不通时摇杆走 2.4G，不经过这里。</p>
       <label class="set-row">
-        <span class="set-label">管理令牌</span>
+        <span class="set-label">服务 IP</span>
+        <input class="set-input" id="set-app-host" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="set-row">
+        <span class="set-label">服务端口</span>
+        <input class="set-input" id="set-app-port" type="number" autocomplete="off">
+      </label>
+      <button type="button" class="btn sm" id="set-app-save">保存并重新连接</button>
+    </div>
+
+    <div id="set-unlock-box" class="set-unlock">
+      <p>改这些参数会让网关重启，遥控中断一两秒。输入密码后解锁。</p>
+      <label class="set-row">
+        <span class="set-label">密码</span>
         <input class="set-input" type="password" id="set-token" autocomplete="off">
       </label>
       <label class="gp-check">
         <input type="checkbox" id="set-remember">
-        <span>在本机记住令牌（公用平板上别勾）</span>
+        <span>在本机记住密码（公用平板上别勾）</span>
       </label>
       <button class="btn" id="set-unlock">解锁</button>
     </div>
@@ -81,7 +91,7 @@
   </div>
 </div>
 
-<!-- 默认按趴下画：网页只露起立。站立后 app.js 加 dog-up，虚拟摇杆才出现。 -->
+<!-- 默认按趴下画：网页只藏步态菜单。虚拟摇杆由「摇杆」按钮开关。 -->
 <main class="stage-wrap dog-prone" id="stage-wrap">
   <div id="banner" class="banner hidden"></div>
 
@@ -240,7 +250,7 @@
     </section>
   </div>
 
-  <button type="button" class="btn sm hud-sticks-btn active" id="btn-sticks">摇杆</button>
+  <button type="button" class="btn sm hud-sticks-btn" id="btn-sticks">摇杆</button>
   <button type="button" class="btn sm hud-telem-btn" id="btn-telem">指标</button>
   <button type="button" class="btn sm hud-gas-btn" id="btn-gas">气体</button>
   <div id="gp-panel" class="panel hud-gp hidden">
@@ -315,7 +325,7 @@
     </div>
   </div>
 
-  <div class="hud-sticks" id="hud-sticks">
+  <div class="hud-sticks hidden" id="hud-sticks">
     <div class="stick-wrap stick-wrap-left">
       <div class="stick" id="stick-left"><div class="knob"></div><span class="stick-hint">前后 / 平移</span></div>
     </div>

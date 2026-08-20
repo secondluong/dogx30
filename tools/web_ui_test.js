@@ -246,7 +246,19 @@ check('App 壳藏掉网页摇杆和指标按钮',
       /html\.shell-app[\s\S]*?\.hud-sticks/.test(styleText) &&
       /html\.shell-app[\s\S]*?\.hud-telem-btn/.test(styleText) &&
       /html\.shell-app[\s\S]*?\.hud-gas-btn/.test(styleText));
-check('趴下才藏网页摇杆', /\.dog-prone\s+\.hud-sticks/.test(styleText));
+check('趴下不锁死网页摇杆',
+      !/\.dog-prone\s+\.hud-sticks/.test(styleText) &&
+      /id="btn-sticks"/.test(html) &&
+      /id="hud-sticks"/.test(html));
+check('控布控球时摇杆不看狗站没站',
+      /usable = ptz/.test(appJs) &&
+      /\? app\.hasControl/.test(appJs) &&
+      !/usable = app\.hasControl && app\.alive && controlChannel\(\) !== null/.test(appJs));
+var mediaJs = read('media.js');
+check('桌面网页不把 H.265 当可用',
+      /function webH265Ok/.test(mediaJs) &&
+      /media\.caps\.h265 = false/.test(mediaJs) &&
+      /src\.codec === 'h265' && !webH265Ok\(\)/.test(mediaJs));
 check('网页打开时指标默认隐藏',
       /telemetry[\s\S]*classList\.add\('hidden'\)/.test(appJs) &&
       /class="[^"]*\btelemetry\b[^"]*\bhidden\b/.test(html));
@@ -287,17 +299,13 @@ check('面板没有网关不认的字段', extra.length === 0, extra.join(', '))
 check('网关的字段面板都能改', absent.length === 0, absent.join(', '));
 
 // ---------------------------------------------------------------------------
-console.log('\n== 提示里的取令牌命令必须真的能用 ==');
+console.log('\n== 设置解锁用密码，不再去板子取令牌 ==');
 // ---------------------------------------------------------------------------
-// 令牌文件是 600 root，目录 750。提示里漏了 sudo 的话，普通用户照着敲会失败 ——
-// 说明书本身跑不通比少个功能更容易把人卡住。
 
-[['index.html', html], ['settings.js', read('settings.js')]].forEach(function (pair) {
-  var hits = pair[1].match(/[\w ]*deploy\/checkup\.sh --token/g) || [];
-  var bad = hits.filter(function (h) { return !/sudo/.test(h); });
-  check(pair[0] + ' 里的取令牌命令带 sudo', bad.length === 0,
-        bad.length ? '漏了 sudo：' + bad.join(' / ') : '（' + hits.length + ' 处）');
-});
+check('设置面板标签是密码', /set-label">密码</.test(html));
+check('设置面板不再提 checkup.sh --token',
+      html.indexOf('checkup.sh --token') === -1 &&
+      read('settings.js').indexOf('checkup.sh --token') === -1);
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
 process.exit(fail === 0 ? 0 : 1);

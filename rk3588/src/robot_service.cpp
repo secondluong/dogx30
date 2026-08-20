@@ -91,18 +91,57 @@ bool RobotService::Start(std::string* error) {
   // 媒体配置加载失败不阻止启动。视频是附加能力，控制才是本体 ——
   // 为了一个配错的相机地址让整个网关起不来是本末倒置。
   if (!cfg_.media_config.empty()) {
+    std::string yerr;
+    bool yml_wrote = false;
+    if (!ApplyPtzRtspToMediamtx(MediamtxPathBeside(cfg_.media_config),
+                                cfg_.settings, &yerr, &yml_wrote)) {
+      std::fprintf(stderr, "MediaMTX 拉流地址没写上: %s\n", yerr.c_str());
+    } else if (yml_wrote) {
+      if (std::system("systemctl try-restart x30-media >/dev/null 2>&1") == 0) {
+        std::printf("已按设置里的 RTSP 重启 x30-media\n");
+      }
+    }
     MediaConfig mc;
     std::string media_err;
     if (LoadMediaConfig(cfg_.media_config, &mc, &media_err)) {
+      struct CodecBind {
+        const char* id;
+        const std::string& configured;
+        const std::string& rtsp;
+      };
+      const CodecBind binds[] = {
+          {"ptz_vis", cfg_.settings.ptz_vis_codec, cfg_.settings.ptz_vis_rtsp},
+          {"ptz_ir", cfg_.settings.ptz_ir_codec, cfg_.settings.ptz_ir_rtsp},
+      };
+      for (const auto& b : binds) {
+        const std::string codec = EffectivePtzCodec(b.configured, b.rtsp);
+        if (codec.empty()) continue;
+        for (auto& src : mc.sources) {
+          if (src.id != b.id) continue;
+          src.main.codec = codec;
+          std::printf("视频源 %s 主码流按 %s 编排\n", b.id, codec.c_str());
+        }
+      }
       std::printf("媒体源 %zu 路，出口 %s\n", mc.sources.size(),
                   mc.webrtc_base.c_str());
-      if (!mc.ptz_host.empty()) {
-        PtzConfig pc;
-        pc.host = mc.ptz_host;
-        pc.port = mc.ptz_port;
-        pc.user = mc.ptz_user;
-        pc.password = mc.ptz_password;
-        pc.channel = mc.ptz_channel;
+      PtzConfig pc;
+      pc.host = mc.ptz_host;
+      pc.port = mc.ptz_port;
+      pc.user = mc.ptz_user;
+      pc.password = mc.ptz_password;
+      pc.channel = mc.ptz_channel;
+      const std::string rtsp = !cfg_.settings.ptz_vis_rtsp.empty()
+                                   ? cfg_.settings.ptz_vis_rtsp
+                                   : cfg_.settings.ptz_ir_rtsp;
+      if (!rtsp.empty()) {
+        std::string host, user, pass, perr;
+        if (ParseRtspAuthority(rtsp, &host, &user, &pass, &perr)) {
+          pc.host = host;
+          if (!user.empty()) pc.user = user;
+          if (!pass.empty()) pc.password = pass;
+        }
+      }
+      if (!pc.host.empty()) {
         ptz_ = std::make_unique<PtzClient>(std::move(pc));
         ptz_->Start();
       }
@@ -272,28 +311,36 @@ bool RobotService::ControlHeld() {
 }
 
 bool RobotService::CheckAdminToken(WsServer::ClientId id, const Json& msg) {
-  const std::string expected = LoadAdminToken(cfg_.admin_token_file);
-  if (expected.empty()) {
-    SendError(id, "no_admin_token",
-              "本机没有配置管理令牌，在线改配置已禁用。"
-              "重跑 deploy/install.sh 会生成一个。");
-    return false;
-  }
-  if (!TokenMatches(expected, msg.String("token"))) {
-    // 敏感操作的失败要留痕。现场若真有人在试，日志是唯一的线索。
-    std::printf("[配置] 客户端 %llu 管理令牌不符，已拒绝\n",
+  std::string given = msg.String("password");
+  if (given.empty()) given = msg.String("token");
+  if (!TokenMatches(kAdminPassword, given)) {
+    std::printf("[配置] 客户端 %llu 设置密码不符，已拒绝\n",
                 static_cast<unsigned long long>(id));
-    SendError(id, "bad_admin_token", "管理令牌不正确");
+    SendError(id, "bad_admin_token", "密码不正确");
     return false;
   }
   return true;
 }
 
 void RobotService::HandleConfigGet(WsServer::ClientId id) {
+  GatewaySettings shown = cfg_.settings;
+  const std::string yml = MediamtxPathBeside(cfg_.media_config);
+  if (shown.ptz_vis_rtsp.empty()) {
+    shown.ptz_vis_rtsp = ReadMediamtxSource(yml, "ptz_vis_main");
+  }
+  if (shown.ptz_ir_rtsp.empty()) {
+    shown.ptz_ir_rtsp = ReadMediamtxSource(yml, "ptz_ir_main");
+  }
+  if (shown.ptz_vis_codec.empty()) {
+    shown.ptz_vis_codec = EffectivePtzCodec("", shown.ptz_vis_rtsp);
+  }
+  if (shown.ptz_ir_codec.empty()) {
+    shown.ptz_ir_codec = EffectivePtzCodec("", shown.ptz_ir_rtsp);
+  }
   JsonWriter w;
   w.BeginObject()
       .Key("t", "config")
-      .Raw("settings", GatewaySettingsJson(cfg_.settings))
+      .Raw("settings", GatewaySettingsJson(shown))
       .Key("path", cfg_.config_path)
       // 遥控端据此决定保存后是「等它自己回来」还是「提示人去重启」。
       .Key("auto_restart", static_cast<bool>(cfg_.request_restart))
@@ -324,6 +371,16 @@ void RobotService::HandleConfigSet(WsServer::ClientId id, const Json& msg) {
   if (!SaveGatewaySettings(cfg_.config_path, next, &error)) {
     SendError(id, "config_write_failed", error.c_str());
     return;
+  }
+
+  const std::string yml = MediamtxPathBeside(cfg_.media_config);
+  bool yml_wrote = false;
+  if (!ApplyPtzRtspToMediamtx(yml, next, &error, &yml_wrote)) {
+    std::fprintf(stderr, "[配置] MediaMTX 拉流地址没写上：%s\n", error.c_str());
+  } else if (yml_wrote) {
+    if (std::system("systemctl try-restart x30-media >/dev/null 2>&1") == 0) {
+      std::printf("[配置] 已按新 RTSP 重启 x30-media\n");
+    }
   }
 
   cfg_.settings = next;
@@ -496,7 +553,7 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     return;
   }
 
-  // 改配置要单独的管理令牌，控制权在这里不作数：操控狗和改网关指向是两回事，
+  // 改配置要设置密码，控制权在这里不作数：操控狗和改网关指向是两回事，
   // 后者危险得多（能把服务指到别的主机上，也能把监听面从内网扩到全部网卡）。
   if (t == "config_get" || t == "config_set") {
     if (!ConfigEnabled()) {
@@ -599,6 +656,18 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     if (ptz_) {
       ptz_->Set(Clamp01(msg.Number("pan")), Clamp01(msg.Number("tilt")),
                 Clamp01(msg.Number("zoom")));
+    } else {
+      // 遥控端 20 Hz 在发，这里只说一次，避免横幅刷屏。
+      static bool told = false;
+      const float pan = Clamp01(msg.Number("pan"));
+      const float tilt = Clamp01(msg.Number("tilt"));
+      const float zoom = Clamp01(msg.Number("zoom"));
+      if (!told && (std::fabs(pan) > 0.08f || std::fabs(tilt) > 0.08f ||
+                    std::fabs(zoom) > 0.08f)) {
+        told = true;
+        SendError(id, "ptz_unconfigured",
+                  "布控球云台未配置，检查设置里的白光 RTSP");
+      }
     }
     return;
   }

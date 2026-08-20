@@ -150,14 +150,14 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 读写网关自己的运行参数：运动主机、感知主机、监听地址、点云开关等。
 控制台的「设置」面板走的就是这两条。
 
-**不看控制权，看管理令牌。** 操控机器狗和改网关指向是两回事，后者危险得多——
+**不看控制权，看设置密码。** 操控机器狗和改网关指向是两回事，后者危险得多——
 能把服务指到另一台主机上，也能把监听面从内网扩到全部网卡。而本协议
 [没有身份认证](#没有身份认证)，所以这一类操作单设一道门。
-令牌在板子上 `conf/admin.token`（600 root），`sudo bash deploy/checkup.sh --token` 可以取。
+密码是 `54longqr`（字段名仍是 `token`，也认 `password`）。
 
 ```json
-{"t":"config_get","token":"<管理令牌>"}
-{"t":"config_set","token":"<管理令牌>","settings":{"perception_ip":"192.168.1.205"}}
+{"t":"config_get","token":"54longqr"}
+{"t":"config_set","token":"54longqr","settings":{"perception_ip":"192.168.1.205"}}
 ```
 
 `settings` 里**只放要改的字段**，其余保持原值。可改的键与
@@ -172,6 +172,8 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 | `cloud_enabled` | 布尔 | 点云开关 |
 | `ros_master` / `ros_host` / `cloud_topic` | 字符串 | 点云的 ROS 参数 |
 | `cloud_hz` / `cloud_points` | 数字 | 点云下行帧率与单帧点数上限 |
+| `ptz_vis_rtsp` / `ptz_ir_rtsp` | 字符串 | 双光布控球白光 / 热成像 RTSP。可空。口令写在地址里，云台从白光地址取主机 |
+| `ptz_vis_codec` / `ptz_ir_codec` | 字符串 | `h264` 或 `h265`。可空：路径含 `/h264`、`/h265` 时按地址猜 |
 
 刻意**不含** `--web` / `--media` 这类文件路径：那些是装机时定的部署布局，
 从一个无 TLS 的网页去改服务端路径只会开出一条目录穿越的口子。
@@ -366,7 +368,7 @@ LIO 未就绪时仍下机体 `/lidar_points`。格式不变。
 
 `code` 取值：`no_control`、`bad_request`、`unknown_command`、
 `gait_busy`、`no_media`、`media_degraded`、`no_cloud`、
-`no_config`、`no_admin_token`、`bad_admin_token`、`bad_config`、
+`no_config`、`bad_admin_token`、`bad_config`、
 `busy_control`、`config_write_failed`。
 
 `media_degraded` 不是失败：视频照样能看，只是质量降了，
@@ -423,7 +425,7 @@ LIO 未就绪时仍下机体 `/lidar_points`。格式不变。
 **本协议目前不做身份认证。** 凡是能建立 WebSocket 连接的客户端都能申请控制权，
 进而驱动机器狗。上面三层兜底防的是链路故障，不是恶意接入。
 
-唯一的例外是 [`config_get` / `config_set`](#网关配置)：它们要一个管理令牌。
+唯一的例外是 [`config_get` / `config_set`](#网关配置)：它们要设置密码。
 不是因为那里做了认证，而是因为改配置能把网关指到别处、也能把监听面自己打开，
 放任不管等于让上面这条限制形同虚设。**其余所有消息一律没有身份校验。**
 

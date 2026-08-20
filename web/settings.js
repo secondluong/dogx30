@@ -6,9 +6,9 @@
 //
 // 三件事必须交代清楚，它们决定了这个面板为什么长这样：
 //
-// 一、要令牌。协议本身没有身份认证（见 README 安全设计），而改配置能把网关
+// 一、要密码。协议本身没有身份认证（见 README 安全设计），而改配置能把网关
 //     指到别的主机上，也能把监听面从内网扩到全部网卡 —— 比操控狗更值得设门。
-//     令牌在板子上，用 sudo deploy/checkup.sh --token 看（文件是 600 root）。
+//     密码是固定的 54longqr，不再去板子上取令牌。
 // 二、要重启。所有参数都在启动时装配（UDP 套接字、监听地址、ROS 节点），
 //     没有一条能热改。保存后网关会自己重启，遥控中断一两秒。
 // 三、要没人在操控。重启会中断遥控，狗正走着的时候不能发生，所以有人持有
@@ -67,6 +67,21 @@
           hint: '20000 点约 120 KB/帧。' },
       ],
     },
+    {
+      title: '双光布控球',
+      note: '网关用 MediaMTX 拉 RTSP，再转 WebRTC。编码必须和相机实际一致：' +
+            '标成 H.265 而遥控端解不了，就会退到子码流。云台口令从白光地址里取。',
+      fields: [
+        { key: 'ptz_vis_rtsp', label: '白光 RTSP', type: 'text',
+          hint: '例如 rtsp://admin:密码@192.168.1.206/h264' },
+        { key: 'ptz_vis_codec', label: '白光编码', type: 'text',
+          hint: 'h264 或 h265。地址路径里带 /h264、/h265 时会自动填。' },
+        { key: 'ptz_ir_rtsp', label: '热成像 RTSP', type: 'text',
+          hint: '例如 rtsp://admin:密码@192.168.1.205/h264' },
+        { key: 'ptz_ir_codec', label: '热成像编码', type: 'text',
+          hint: 'h264 或 h265，须与相机一致。' },
+      ],
+    },
   ];
 
   const state = {
@@ -84,6 +99,10 @@
   let noteEl = null;
 
   const $ = (id) => document.getElementById(id);
+
+  function isAppNative() {
+    return !!(window.X30Native && typeof window.X30Native.getGatewayHost === 'function');
+  }
 
   // -------------------------------------------------------------------------
   // 构建
@@ -160,7 +179,7 @@
       if (input.type === 'checkbox') {
         input.checked = !!s[key];
       } else {
-        input.value = s[key];
+        input.value = s[key] || '';
       }
       input.classList.remove('set-auto');
     });
@@ -182,7 +201,7 @@
       if (input.type === 'number') {
         const n = Number(raw);
         if (raw !== '' && !isNaN(n) && n !== state.current[key]) out[key] = n;
-      } else if (raw !== '' && raw !== state.current[key]) {
+      } else if (raw !== (state.current[key] || '')) {
         out[key] = raw;
       }
     });
@@ -216,10 +235,36 @@
     $('set-save').classList.toggle('hidden', locked);
   }
 
+  function fillAppGateway() {
+    if (!isAppNative()) return;
+    const box = $('set-app-box');
+    if (!box) return;
+    box.classList.remove('hidden');
+    $('set-app-host').value = window.X30Native.getGatewayHost() || '';
+    $('set-app-port').value = String(window.X30Native.getGatewayPort() || 8080);
+  }
+
+  function saveAppGateway() {
+    if (!isAppNative()) return;
+    const host = $('set-app-host').value.trim();
+    const port = Number($('set-app-port').value.trim());
+    if (!host) {
+      setNote('请填服务 IP。', 'bad');
+      return;
+    }
+    if (!port || port < 1 || port > 65535) {
+      setNote('服务端口不合法。', 'bad');
+      return;
+    }
+    setNote('正在按新地址重新连接…');
+    window.X30Native.setGateway(host, port);
+  }
+
   function open() {
-    if (!state.available) return;
+    if (!state.available && !isAppNative()) return;
     state.open = true;
     root.classList.remove('hidden');
+    fillAppGateway();
     if (state.current) {
       setLocked(false);
     } else {
@@ -255,7 +300,7 @@
   function unlock() {
     const token = $('set-token').value.trim();
     if (!token) {
-      setNote('请填管理令牌。在板子上执行 sudo bash deploy/checkup.sh --token 可以看到它。', 'bad');
+      setNote('请填密码。', 'bad');
       return;
     }
     state.token = token;
@@ -370,11 +415,12 @@
     state.available = !!msg.config;
     const btn = $('btn-settings');
     if (btn) {
-      btn.classList.toggle('can-config', state.available);
-      btn.title = state.available ? '打开网关设置' : '';
+      const can = state.available || isAppNative();
+      btn.classList.toggle('can-config', can);
+      btn.title = can ? '打开设置' : '';
     }
     if (!state.available) {
-      if (state.open) {
+      if (state.open && !isAppNative()) {
         setNote('本机未启用在线改配置（网关需要以 --config 启动）。', 'warn');
       }
       return;
@@ -391,6 +437,10 @@
     if (!root) return;
 
     buildForm($('set-form'));
+    fillAppGateway();
+    if ($('set-app-save')) {
+      $('set-app-save').addEventListener('click', saveAppGateway);
+    }
 
     $('btn-settings').addEventListener('click', open);
     $('set-close').addEventListener('click', close);

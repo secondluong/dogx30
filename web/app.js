@@ -24,6 +24,7 @@ const app = {
   clientId: 0,
   holder: 0,
   hasControl: false,
+  radioFallback: false,   // WiFi 断过：摇杆走 2.4G，恢复后不自动抢网关的权
   alive: false,
   basicState: 0,
   rlStanding: false,
@@ -99,6 +100,7 @@ function connect() {
 
   ws.onopen = () => {
     setLink(true);
+    app.wsWasOpen = true;
     // 重连后网关不记得订阅。本机还标着已订的话要重新发一次，
     // 不然 2×2 左上角会停在「未订阅」，画布上却还留着上一帧。
     if (window.X30Cloud && window.X30Cloud.resubscribe) {
@@ -107,10 +109,16 @@ function connect() {
   };
 
   ws.onclose = () => {
+    const dropFromLive = !!app.wsWasOpen;
+    app.wsWasOpen = false;
     setLink(false);
     app.hasControl = false;
     app.holder = 0;
     renderControl();
+    if (dropFromLive) {
+      app.radioFallback = true;
+      showBanner('WiFi 已断，网关已放手。请用 G20 摇杆走已对频的 2.4G（无画面）', 8000);
+    }
     setTimeout(connect, RECONNECT_MS);
   };
 
@@ -134,7 +142,10 @@ function connect() {
         app.hasControl = !!msg.control;
         renderControl();
         if (window.X30Settings) window.X30Settings.onHello(msg);
-        if (isAppShell) requestControl();
+        if (isAppShell && !app.radioFallback) requestControl();
+        else if (isAppShell && app.radioFallback) {
+          showBanner('WiFi 已恢复。2.4G 仍可用；要点「控制权」才改走网关', 8000);
+        }
         break;
       case 'config':
         if (window.X30Settings) window.X30Settings.onConfig(msg);
@@ -217,7 +228,8 @@ function requestControl() {
 function setLink(online) {
   const chip = $('chip-link');
   chip.classList.toggle('online', online);
-  $('link-text').textContent = online ? '已连接' : '重连中';
+  $('link-text').textContent = online ? '已连接'
+      : (app.radioFallback ? '2.4G' : '重连中');
   if ($('btn-settings')) $('btn-settings').classList.toggle('online', online);
   if (!online) {
     document.querySelector('.telemetry').classList.add('stale');
@@ -402,8 +414,13 @@ function toggleTelem() {
 }
 
 function updateStickAvailability() {
-  const usable = app.hasControl && app.alive && controlChannel() !== null &&
-                 !app.lioAligning;
+  // 云台不看狗有没有站起来。原先连 controlChannel()，坐下时摇杆被灰掉，
+  // 顶栏已经写着「摇杆 · 布控球」也推不动。
+  const ptz = stickTarget() === 'ptz';
+  const usable = ptz
+    ? app.hasControl
+    : (app.hasControl && app.alive && controlChannel() !== null &&
+       !app.lioAligning);
   document.querySelectorAll('.stick').forEach((s) => {
     s.classList.toggle('disabled', !usable);
   });
@@ -495,39 +512,61 @@ function activeChannels() {
   return touchChannels();
 }
 
+let webStickTarget = 'dog';
+
+function g20Live() {
+  const gp = window.X30Gamepad && window.X30Gamepad.channels
+    ? window.X30Gamepad.channels() : null;
+  return !!(gp && gp.source === 'g20');
+}
+
 function stickTarget() {
-  if (window.X30Gamepad && window.X30Gamepad.stickTarget) {
+  if (g20Live() && window.X30Gamepad.stickTarget) {
     return window.X30Gamepad.stickTarget();
   }
-  return 'dog';
+  return webStickTarget;
+}
+
+function updateStickHints(ptz) {
+  const left = document.querySelector('#stick-left .stick-hint');
+  const right = document.querySelector('#stick-right .stick-hint');
+  if (left) left.textContent = ptz ? '变倍' : '前后 / 平移';
+  if (right) right.textContent = ptz ? '水平 / 俯仰' : '转向 / 俯仰';
 }
 
 function paintStickChip() {
   const el = $('chip-stick');
   if (!el) return;
-  const gp = window.X30Gamepad && window.X30Gamepad.channels
-    ? window.X30Gamepad.channels() : null;
-  const g20 = gp && gp.source === 'g20';
-  if (!isAppShell && !g20) {
-    el.classList.add('hidden');
-    return;
-  }
   const ptz = stickTarget() === 'ptz';
   el.classList.remove('hidden');
   el.textContent = ptz ? '摇杆 · 布控球' : '摇杆 · 狗';
   el.classList.toggle('online', ptz);
+  updateStickHints(ptz);
+  updateStickAvailability();
 }
+
+let ptzNeedControlAt = 0;
 
 setInterval(() => {
   paintStickChip();
-  if (!app.hasControl) return;
   const c = activeChannels();
   if (stickTarget() === 'ptz') {
+    if (!app.hasControl) {
+      const moving = !!(c.engaged || c.fwd || c.lat || c.turn || c.tilt ||
+                        c.look);
+      const now = Date.now();
+      if (moving && now - ptzNeedControlAt > 4000) {
+        ptzNeedControlAt = now;
+        showBanner('转云台请先点右上角「控制权」');
+      }
+      return;
+    }
     send({ t: 'vel', vx: 0, vy: 0, wz: 0 });
     const look = typeof c.look === 'number' ? c.look : c.tilt;
-    send({ t: 'ptz', pan: -c.turn, tilt: look, zoom: c.fwd });
+    send({ t: 'ptz', pan: -c.turn, tilt: -look, zoom: c.fwd });
     return;
   }
+  if (!app.hasControl) return;
   const channel = controlChannel();
   if (channel === 'vel') {
     if (app.lioAligning) {
@@ -552,7 +591,13 @@ setInterval(() => send({ t: 'ping', id: ++pingSeq }), HEARTBEAT_MS);
 // ---------------------------------------------------------------------------
 
 $('btn-control').addEventListener('click', () => {
-  send(app.hasControl ? { t: 'yield' } : { t: 'claim' });
+  if (app.hasControl) {
+    app.radioFallback = true;
+    send({ t: 'yield' });
+  } else {
+    app.radioFallback = false;
+    send({ t: 'claim' });
+  }
 });
 
 // 急停不检查控制权，任何客户端任何时候都能按。
@@ -657,6 +702,18 @@ $('btn-gas').addEventListener('click', () => {
   toggleGas();
 });
 
+$('chip-stick').addEventListener('click', () => {
+  if (g20Live()) return;
+  webStickTarget = webStickTarget === 'ptz' ? 'dog' : 'ptz';
+  if (webStickTarget === 'dog' && app.hasControl) {
+    send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
+  }
+  if (webStickTarget === 'ptz' && !app.hasControl) {
+    showBanner('转云台请先点右上角「控制权」');
+  }
+  paintStickChip();
+});
+
 $('btn-sticks').addEventListener('click', () => {
   $('hud-sticks').classList.toggle('hidden');
   const shown = !$('hud-sticks').classList.contains('hidden');
@@ -669,6 +726,9 @@ $('btn-sticks').addEventListener('click', () => {
     document.querySelectorAll('.stick .knob').forEach((k) => {
       k.style.transform = 'translate(0px, 0px)';
     });
+    if (stickTarget() === 'ptz' && app.hasControl) {
+      send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
+    }
   }
 });
 
@@ -846,7 +906,7 @@ document.addEventListener('visibilitychange', () => {
   }
   // 切去原厂 App 时心跳会被节流，3 秒租约一过权就没了。
   // 手持壳回到前台自动再要一次，否则横幅只剩「请先发送 claim」。
-  if (!document.hidden && isAppShell) requestControl();
+  if (!document.hidden && isAppShell && !app.radioFallback) requestControl();
   // 点云订阅不要跟着显隐走：切标签、缩窗口、平板分屏都会把
   // document.hidden 置上，退订后再回来要重新点，操作员会以为订不住。
 });
