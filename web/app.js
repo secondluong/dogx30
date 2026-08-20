@@ -444,7 +444,7 @@ function applyRadioPath(announce) {
       }
       setTimeout(() => {
         if (radioDirect() && hasNativeRadio() && !nativeRadioLinkOk()) {
-          showBanner('2.4G 数传还没连上天空端，按键到不了狗。请确认 G20 已对频', 8000);
+          showBanner('G20 数传管道没连上。请关掉云卓助手和云深处 App，并确认已对频', 8000);
         }
       }, 1500);
     } else if (announce) {
