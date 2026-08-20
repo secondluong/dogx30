@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">X30 遥控台</string>
 
-    <string name="connect_subtitle">连接机器狗上的 RK3588 网关 · App 0.3.6 · 云卓 G20</string>
+    <string name="connect_subtitle">连接机器狗上的 RK3588 网关 · App 0.3.7 · 云卓 G20</string>
     <string name="radio_mesh">MESH</string>
     <string name="radio_24g">2.4G</string>
     <string name="radio_stat_title">2.4G 链路原文</string>

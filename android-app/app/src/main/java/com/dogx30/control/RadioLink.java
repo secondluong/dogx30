@@ -10,6 +10,8 @@ import android.net.NetworkRequest;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.system.Os;
+import android.system.OsConstants;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
@@ -30,6 +32,9 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.InterfaceAddress;
+import java.io.FileDescriptor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -37,8 +42,8 @@ import java.util.Enumeration;
 
 /**
  * 厂家拓扑：手柄 --2.4G--> 接收机 --交换机--> 运动主机 192.168.1.103:43893。
- * CSDK 负责开射频、拉起 G20 的 192.168.144 USB 网。0x21 只走 IP 到 .103。
- * G12G20 串口管道通了也不算通：那是天空端 UART，运动主机收不到。
+ * G20 射频起来后是虚口 ar_net0，系统 ConnectivityManager 看不见。
+ * Java UDP 必须 SO_BINDTODEVICE，否则全是 Network unreachable。
  */
 final class RadioLink {
 
@@ -89,6 +94,9 @@ final class RadioLink {
     private boolean pipeOk;
     private boolean rfOn;
     private String status = "off";
+    private String lastErr = "";
+    private String ifaceName = "";
+    private int ifacePrefix;
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
     @Nullable private InetAddress robotAddr;
@@ -113,7 +121,7 @@ final class RadioLink {
     /** CSDK 连上遥控器后 USB 网才稳定，再开 socket / 管道。 */
     synchronized void onRcReady() {
         if (!enabled) return;
-        status = "rc-up";
+        if (udp == null && !pipeOk) status = "rc-up";
         openUdp();
         openSdkUdp();
     }
@@ -123,7 +131,7 @@ final class RadioLink {
     }
 
     synchronized boolean isLinkReady() {
-        return enabled && (pipeOk || udp != null);
+        return enabled && sentOk > 0;
     }
 
     synchronized String statusJson() {
@@ -137,8 +145,11 @@ final class RadioLink {
             o.put("rf", rfOn);
             o.put("air", airNet != null);
             o.put("local", boundLocal != null ? boundLocal.getHostAddress() : airLocalIp());
+            o.put("iface", ifaceName);
+            o.put("prefix", ifacePrefix);
             o.put("nets", allV4());
             o.put("ifaces", osIfaces());
+            o.put("err", lastErr);
             o.put("sentOk", sentOk);
             o.put("sentFail", sentFail);
             o.put("standing", standing);
@@ -157,6 +168,7 @@ final class RadioLink {
         if (!local.isEmpty()) sb.append(" 本机").append(local);
         String ifaces = osIfaces();
         if (!ifaces.isEmpty()) sb.append(" ").append(ifaces);
+        if (!lastErr.isEmpty() && sentOk == 0) sb.append(" ").append(lastErr);
         sb.append(" ok").append(sentOk).append("/fail").append(sentFail);
         return sb.toString();
     }
@@ -289,6 +301,7 @@ final class RadioLink {
         tick = 0;
         sentOk = 0;
         sentFail = 0;
+        lastErr = "";
         status = "starting";
         enableRf(true);
         requestEthernet();
@@ -302,41 +315,54 @@ final class RadioLink {
 
     private synchronized void openUdp() {
         try {
-            InetAddress local = findAirLocal();
+            AirIf air = findAirIf();
             Network net = findAirlink();
-            if (local == null && net == null) {
+            if (air == null && net == null) {
                 if (udp == null) status = "no-usb-net";
                 Log.w(TAG, "no-usb-net ifaces=" + osIfaces());
                 return;
             }
+            InetAddress local = air != null ? air.addr : null;
+            String name = air != null ? air.name : "";
             if (udp != null && boundLocal != null && boundLocal.equals(local)
+                    && name.equals(ifaceName)
                     && (net == null || net.equals(airNet))) {
                 return;
             }
             closeSocketOnly();
             airNet = net;
             boundLocal = local;
+            ifaceName = name;
+            ifacePrefix = air != null ? air.prefix : 0;
             ConnectivityManager cm = connectivity();
             if (cm != null && net != null) {
                 cm.bindProcessToNetwork(net);
             }
             robotAddr = net != null ? resolve(net, ROBOT_IP) : InetAddress.getByName(ROBOT_IP);
-            if (local != null) {
-                udp = new DatagramSocket(new InetSocketAddress(local, 0));
-            } else {
-                udp = new DatagramSocket();
-            }
+            udp = new DatagramSocket((java.net.SocketAddress) null);
+            udp.setReuseAddress(true);
+            udp.bind(new InetSocketAddress(0));
             if (net != null) {
                 try {
                     net.bindSocket(udp);
                 } catch (Exception e) {
                     Log.w(TAG, "bindSocket", e);
                 }
+            } else if (!name.isEmpty()) {
+                try {
+                    bindToDevice(udp, name);
+                } catch (Exception e) {
+                    lastErr = "bind:" + brief(e);
+                    Log.w(TAG, "bindToDevice", e);
+                }
             }
             status = "udp-" + ROBOT_IP;
-            Log.i(TAG, status + " local=" + (local != null ? local.getHostAddress() : "-"));
+            lastErr = "";
+            Log.i(TAG, status + " " + name + "=" + (local != null ? local.getHostAddress() : "-")
+                    + "/" + ifacePrefix);
         } catch (Exception e) {
             status = "udp-fail";
+            lastErr = brief(e);
             Log.w(TAG, "udp", e);
             closeSocketOnly();
         }
@@ -357,9 +383,10 @@ final class RadioLink {
 
     private synchronized void openSdkUdp() {
         if (pipeOk && udpPipe != null) return;
-        if (udpPipe == null) {
-            udpPipe = openPipe(LOCAL_PORT, ROBOT_IP, "udp103");
+        if (udpPipe != null) {
+            closeSdkUdp();
         }
+        udpPipe = openPipe(LOCAL_PORT, ROBOT_IP, "udp103");
     }
 
     @Nullable
@@ -391,6 +418,7 @@ final class RadioLink {
             @Override
             public void onConnectFail(@Nullable SkyException e) {
                 if (udpKind) pipeOk = false;
+                if (e != null) lastErr = "pipe " + e;
                 Log.w(TAG, tag + " fail " + e);
             }
 
@@ -457,10 +485,21 @@ final class RadioLink {
         }
     }
 
+    private static final class AirIf {
+        final String name;
+        final InetAddress addr;
+        final int prefix;
+        AirIf(String name, InetAddress addr, int prefix) {
+            this.name = name;
+            this.addr = addr;
+            this.prefix = prefix;
+        }
+    }
+
     @Nullable
-    private InetAddress findAirLocal() {
-        InetAddress n144 = null;
-        InetAddress wired1 = null;
+    private AirIf findAirIf() {
+        AirIf n144 = null;
+        AirIf wired1 = null;
         try {
             Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
             if (en == null) return null;
@@ -475,8 +514,9 @@ final class RadioLink {
                     int a0 = v[0] & 0xff;
                     int a1 = v[1] & 0xff;
                     int a2 = v[2] & 0xff;
-                    if (a0 == 192 && a1 == 168 && a2 == 144) n144 = a;
-                    else if (a0 == 192 && a1 == 168 && a2 == 1) wired1 = a;
+                    AirIf cur = new AirIf(ni.getName(), a, ia.getNetworkPrefixLength());
+                    if (a0 == 192 && a1 == 168 && a2 == 144) n144 = cur;
+                    else if (a0 == 192 && a1 == 168 && a2 == 1) wired1 = cur;
                 }
             }
         } catch (Exception ignored) {
@@ -503,7 +543,8 @@ final class RadioLink {
                     InetAddress a = ia.getAddress();
                     if (!(a instanceof Inet4Address)) continue;
                     if (sb.length() > 0) sb.append(',');
-                    sb.append(ni.getName()).append('=').append(a.getHostAddress());
+                    sb.append(ni.getName()).append('=').append(a.getHostAddress())
+                            .append('/').append(ia.getNetworkPrefixLength());
                 }
             }
         } catch (Exception ignored) {
@@ -608,6 +649,8 @@ final class RadioLink {
         airNet = null;
         boundLocal = null;
         robotAddr = null;
+        ifaceName = "";
+        ifacePrefix = 0;
         if (udp != null) {
             udp.close();
             udp = null;
@@ -645,8 +688,8 @@ final class RadioLink {
         handler.postDelayed(loop, TICK_MS);
         if (tick % 50 == 0) {
             if (udp == null) openUdp();
-            if (!pipeOk) openSdkUdp();
         }
+        if (!pipeOk && tick % 150 == 0) openSdkUdp();
         G20Rc.Snapshot snap = G20Rc.get().snapshot();
         if (tick % HB_EVERY == 0) {
             sendSimple(HEARTBEAT);
@@ -749,13 +792,54 @@ final class RadioLink {
     }
 
     private boolean sendUdp(byte[] pkt, @Nullable InetAddress dest) {
-        if (dest == null || udp == null) return false;
+        if (dest == null || udp == null) {
+            if (dest == null) lastErr = "no-dest";
+            return false;
+        }
         try {
             udp.send(new DatagramPacket(pkt, pkt.length, dest, ROBOT_PORT));
+            if (!lastErr.isEmpty()) lastErr = "";
             return true;
         } catch (Exception e) {
+            lastErr = brief(e);
             Log.w(TAG, "udp send " + dest, e);
             return false;
         }
+    }
+
+    private static String brief(Throwable e) {
+        String m = e.getMessage();
+        if (m == null || m.isEmpty()) return e.getClass().getSimpleName();
+        return e.getClass().getSimpleName() + ":" + m;
+    }
+
+    private static void bindToDevice(DatagramSocket sock, String ifname) throws Exception {
+        FileDescriptor fd = fdOf(sock);
+        int opt = 25;
+        try {
+            Field f = OsConstants.class.getField("SO_BINDTODEVICE");
+            opt = f.getInt(null);
+        } catch (Throwable ignored) {
+        }
+        Os.setsockoptIfreq(fd, OsConstants.SOL_SOCKET, opt, ifname);
+        Log.i(TAG, "bind " + ifname);
+    }
+
+    private static FileDescriptor fdOf(DatagramSocket sock) throws Exception {
+        try {
+            Method m = DatagramSocket.class.getDeclaredMethod("getFileDescriptor$");
+            m.setAccessible(true);
+            FileDescriptor fd = (FileDescriptor) m.invoke(sock);
+            if (fd != null) return fd;
+        } catch (Throwable ignored) {
+        }
+        Field implF = DatagramSocket.class.getDeclaredField("impl");
+        implF.setAccessible(true);
+        Object impl = implF.get(sock);
+        Method getFd = impl.getClass().getDeclaredMethod("getFileDescriptor");
+        getFd.setAccessible(true);
+        FileDescriptor fd = (FileDescriptor) getFd.invoke(impl);
+        if (fd == null) throw new IllegalStateException("no-fd");
+        return fd;
     }
 }
