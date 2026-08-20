@@ -90,6 +90,7 @@ final class RadioLink {
     private boolean prevStand;
     private boolean prevSit;
     private boolean prevEstop;
+    private boolean buttonsPrimed;
     private int tick;
     private int sentOk;
     private int sentFail;
@@ -325,6 +326,7 @@ final class RadioLink {
 
     private synchronized void start() {
         confirmed = false;
+        buttonsPrimed = false;
         tick = 0;
         sentOk = 0;
         sentFail = 0;
@@ -700,6 +702,7 @@ final class RadioLink {
         standing = false;
         clearWalk();
         confirmed = false;
+        buttonsPrimed = false;
         status = "off";
         closeSdkUdp();
         closeSocketOnly();
@@ -742,20 +745,40 @@ final class RadioLink {
     }
 
     private void handleButtons(int[] ch) {
+        if (ch.length <= 12 || !rcLive(ch)) return;
         boolean stand = pressed(ch, 10);
         boolean sit = pressed(ch, 6);
         boolean estop = pressed(ch, 12);
-        if (stand && !prevStand) command("stand_up");
-        if (sit && !prevSit) command("sit_down");
-        if (estop && !prevEstop) command("estop");
+        // 首帧只记档。上电通道常是 0，会被当成急停按下，狗会动一下并锁关节。
+        if (!buttonsPrimed) {
+            prevStand = stand;
+            prevSit = sit;
+            prevEstop = estop;
+            buttonsPrimed = true;
+            return;
+        }
+        if (stand && !prevStand) commandOnRadio("stand_up");
+        if (sit && !prevSit) commandOnRadio("sit_down");
+        if (estop && !prevEstop) commandOnRadio("estop");
         prevStand = stand;
         prevSit = sit;
         prevEstop = estop;
     }
 
+    private static boolean rcLive(int[] ch) {
+        int ok = 0;
+        int n = Math.min(ch.length, 8);
+        for (int i = 0; i < n; i++) {
+            if (ch[i] >= 900 && ch[i] <= 2100) ok++;
+        }
+        return ok >= 4;
+    }
+
     private static boolean pressed(int[] ch, int index) {
         if (index < 0 || index >= ch.length) return false;
-        return ch[index] <= 1275;
+        int v = ch[index];
+        if (v < 900 || v > 2100) return false;
+        return v <= 1275;
     }
 
     private void sendAxes(int[] ch) {

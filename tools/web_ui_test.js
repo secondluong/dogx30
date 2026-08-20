@@ -295,6 +295,8 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /HandlerThread/.test(radioJava) &&
       /radio-udp/.test(radioJava) &&
       /drainRx/.test(radioJava) &&
+      /buttonsPrimed/.test(radioJava) &&
+      /rcLive/.test(radioJava) &&
       /LOCAL_PORT/.test(radioJava) &&
       /192\.168\.1\.103/.test(radioJava) &&
       !/192\.168\.144\.10/.test(radioJava) &&
