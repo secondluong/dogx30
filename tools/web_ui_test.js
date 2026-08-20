@@ -263,6 +263,7 @@ check('断网时不把人堵在控制权上',
 check('App 顶栏有 2.4G/MESH 切换',
       !!htmlIds['btn-radio'] &&
       /function setRadioPath/.test(appJs) &&
+      /function adoptRadioPath/.test(appJs) &&
       /html\.shell-app #btn-radio/.test(styleText) &&
       /html\.shell-app #btn-control/.test(styleText));
 check('切 2.4G 不经网关下发',
@@ -296,17 +297,21 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge) &&
       /radioStatus/.test(radioBridge));
+var radioLayout = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'res',
+            'layout', 'activity_control.xml'), 'utf8');
 check('链路只跟顶栏 MESH/2.4G 按钮',
       /function setRadioPath/.test(appJs) &&
-      /function toggleRadioPath/.test(appJs) &&
-      /function nativeCall/.test(appJs) &&
+      /function adoptRadioPath/.test(appJs) &&
       /function meshWsUrl/.test(appJs) &&
-      /getRadioPath/.test(appJs) &&
+      /X30Native\.setRadioPath/.test(appJs) &&
+      !/nativeCall/.test(appJs) &&
+      !/onclick=/.test(html.match(/id="btn-radio"[\s\S]*?>/)[0]) &&
+      /btn_radio_path/.test(radioLayout) &&
+      /void toggleRadioPath\(/.test(radioBridge) &&
       /saveRadioPath/.test(radioBridge) &&
-      /String getRadioPath/.test(radioBridge) &&
       /android_asset\/web\/index\.html/.test(radioBridge) &&
       !/gatewayReachable/.test(radioBridge) &&
-      !/meshWifiOn/.test(radioBridge) &&
       !/已自动切到 2\.4G/.test(appJs));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));

@@ -31,6 +31,7 @@ import androidx.appcompat.app.AppCompatActivity;
 public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
+    private Button btnRadioPath;
     private LinearLayout overlay;
     private TextView overlayMsg;
     private EditText overlayHost;
@@ -79,19 +80,24 @@ public class ControlActivity extends AppCompatActivity {
         // 工业平板上的手柄常常只走系统 KeyEvent，不进浏览器 Gamepad API。
         web.addJavascriptInterface(nativeBridge, "X30Native");
 
+        btnRadioPath = findViewById(R.id.btn_radio_path);
+        btnRadioPath.setOnClickListener(v -> toggleRadioPath());
+        paintNativeRadioBtn();
+
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String u) {
                 hideOverlay();
                 view.requestFocus();
-                // file:// 常丢掉 ?shell=app，进包装页就按 App 壳画。
+                String path = GatewayStore.radioPath(ControlActivity.this);
                 view.evaluateJavascript(
-                        "document.documentElement.classList.add('shell-app');",
+                        "document.documentElement.classList.add('shell-app');"
+                                + "if(window.app&&app.adoptRadioPath)app.adoptRadioPath('"
+                                + path + "');",
                         null);
             }
         });
 
-        // 始终用包装页。去拉网关 HTML 会跑到狗上的旧脚本，顶栏按钮点了也不切 2.4G。
         G20Rc.get().setBackupRadio("radio".equals(GatewayStore.radioPath(this)));
         loadLocalConsole();
 
@@ -142,6 +148,26 @@ public class ControlActivity extends AppCompatActivity {
     private void loadLocalConsole() {
         hideOverlay();
         web.loadUrl("file:///android_asset/web/index.html?shell=app");
+    }
+
+    private void toggleRadioPath() {
+        String next = "radio".equals(GatewayStore.radioPath(this)) ? "mesh" : "radio";
+        GatewayStore.saveRadioPath(this, next);
+        G20Rc.get().setBackupRadio("radio".equals(next));
+        paintNativeRadioBtn();
+        if (web != null) {
+            web.evaluateJavascript(
+                    "window.app&&app.adoptRadioPath&&app.adoptRadioPath('" + next + "')",
+                    null);
+        }
+    }
+
+    private void paintNativeRadioBtn() {
+        if (btnRadioPath == null) return;
+        boolean radio = "radio".equals(GatewayStore.radioPath(this));
+        btnRadioPath.setText(radio ? R.string.radio_24g : R.string.radio_mesh);
+        btnRadioPath.setBackgroundColor(radio ? 0xFFD29922 : 0xFF1C2230);
+        btnRadioPath.setTextColor(radio ? 0xFF1A1400 : 0xFFE6EDF3);
     }
 
     private void showOverlay(String text) {
@@ -206,6 +232,7 @@ public class ControlActivity extends AppCompatActivity {
         public void setRadioPath(String path) {
             GatewayStore.saveRadioPath(ControlActivity.this, path);
             G20Rc.get().setBackupRadio(path != null && path.equals("radio"));
+            runOnUiThread(ControlActivity.this::paintNativeRadioBtn);
         }
 
         @JavascriptInterface

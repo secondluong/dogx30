@@ -871,12 +871,7 @@ html.shell-app .hud-gp,
 html.shell-app .hud-sticks,
 html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
-html.shell-app #btn-radio {
-  display: inline-block;
-  position: relative;
-  z-index: 30;
-  pointer-events: auto;
-}
+html.shell-app #btn-radio { display: none !important; }
 html.shell-app #btn-control { display: none !important; }
 html.shell-app #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }

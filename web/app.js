@@ -27,18 +27,11 @@ if (isAppShell) document.documentElement.classList.add('shell-app');
 
 const RADIO_STORE = 'x30.radioPath';
 
-function nativeCall(name, arg) {
-  try {
-    const fn = window.X30Native[name];
-    return arguments.length > 1 ? fn.call(window.X30Native, arg) : fn.call(window.X30Native);
-  } catch (e) {
-    return undefined;
-  }
-}
-
 function nativeRadioPath() {
-  const v = nativeCall('getRadioPath');
-  if (v === 'radio' || v === 'mesh') return v;
+  try {
+    const v = window.X30Native.getRadioPath();
+    if (v === 'radio' || v === 'mesh') return v;
+  } catch (e) { /* 网页没有原生桥 */ }
   return '';
 }
 
@@ -133,11 +126,13 @@ function paintWalkButtons() {
 // ---------------------------------------------------------------------------
 
 function meshWsUrl() {
-  if (isAppShell) {
-    const host = String(nativeCall('getGatewayHost') || '').trim();
-    const port = Number(nativeCall('getGatewayPort')) || 8080;
-    if (host) return 'ws://' + host + ':' + port + '/ws';
-  }
+  try {
+    if (isAppShell) {
+      const host = String(window.X30Native.getGatewayHost() || '').trim();
+      const port = Number(window.X30Native.getGatewayPort()) || 8080;
+      if (host) return 'ws://' + host + ':' + port + '/ws';
+    }
+  } catch (e) { /* 用当前页地址 */ }
   if (location.protocol === 'file:') return '';
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return proto + '//' + location.host + '/ws';
@@ -328,9 +323,12 @@ function radioHint(kind) {
 app.radioHint = radioHint;
 
 function nativeRadioCmd(name) {
-  if (!hasNativeRadio()) return false;
-  nativeCall('radioCmd', String(name));
-  return true;
+  try {
+    window.X30Native.radioCmd(String(name));
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 app.nativeRadioCmd = nativeRadioCmd;
 
@@ -339,21 +337,27 @@ function hasRadioStanding() {
 }
 
 function nativeRadioLinkOk() {
-  return !!nativeCall('radioLinkOk');
+  try {
+    return !!window.X30Native.radioLinkOk();
+  } catch (e) {
+    return false;
+  }
 }
 
 function nativeRadioStatus() {
   try {
-    return JSON.parse(nativeCall('radioStatus') || '{}');
+    return JSON.parse(window.X30Native.radioStatus() || '{}');
   } catch (e) {
     return null;
   }
 }
 
 function nativeRadioStanding() {
-  if (!hasNativeRadio()) return app.rlStanding;
-  const v = nativeCall('radioStanding');
-  return v === undefined ? app.rlStanding : !!v;
+  try {
+    return !!window.X30Native.radioStanding();
+  } catch (e) {
+    return app.rlStanding;
+  }
 }
 
 
@@ -463,7 +467,9 @@ function paintRadioBtn() {
 }
 
 function notifyNativeRadio() {
-  nativeCall('setRadioPath', app.radioPath);
+  try {
+    window.X30Native.setRadioPath(app.radioPath);
+  } catch (e) { /* 网页没有原生桥 */ }
 }
 
 function applyRadioPath(announce) {
@@ -503,23 +509,29 @@ function applyRadioPath(announce) {
   paintRadioBtn();
 }
 
-function setRadioPath(path) {
-  app.radioPath = path === 'radio' ? 'radio' : 'mesh';
+function adoptRadioPath(path, announce) {
+  const next = path === 'radio' ? 'radio' : 'mesh';
+  const changed = app.radioPath !== next;
+  app.radioPath = next;
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
-  notifyNativeRadio();
+  if (changed) notifyNativeRadio();
   if (app.radioPath === 'radio') {
     const ws = app.ws;
     app.ws = null;
     if (ws) {
       try { ws.close(); } catch (e) { /* 关掉即可 */ }
     }
-  } else {
+  } else if (changed) {
     connect();
   }
-  applyRadioPath(true);
+  applyRadioPath(!!announce);
   renderControl();
 }
+function setRadioPath(path) {
+  adoptRadioPath(path, true);
+}
 app.setRadioPath = setRadioPath;
+app.adoptRadioPath = adoptRadioPath;
 
 // 手持壳连上就要权：关掉原厂 App 不会把权交过来，操作员也不该再点一次。
 // 网页控制台仍是观察者，避免笔记本开着就把手柄的权抢走。
@@ -970,10 +982,11 @@ function toggleRadioPath() {
 }
 app.toggleRadioPath = toggleRadioPath;
 if ($('btn-radio')) {
-  $('btn-radio').onclick = function (e) {
-    if (e) e.preventDefault();
+  $('btn-radio').addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     toggleRadioPath();
-  };
+  });
 }
 
 // 急停不检查控制权，任何客户端任何时候都能按。
