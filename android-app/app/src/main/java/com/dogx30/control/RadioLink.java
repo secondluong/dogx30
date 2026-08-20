@@ -60,16 +60,13 @@ final class RadioLink {
     private boolean running;
     private boolean confirmed;
     private boolean standing;
+    private boolean torqued;
+    private boolean stepping;
     private boolean emergency;
     private boolean prevStand;
     private boolean prevSit;
     private boolean prevEstop;
     private int tick;
-    private float screenFwd;
-    private float screenLat;
-    private float screenTurn;
-    private boolean haveScreen;
-    private boolean needStep;
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
     @Nullable private InetAddress robotAddr;
@@ -91,11 +88,13 @@ final class RadioLink {
         return standing;
     }
 
+    // 旧网页曾用虚拟摇杆灌轴。起立后发轴会把狗锁进踏步，这里直接丢掉。
     synchronized void setScreenAxes(float fwd, float lat, float turn) {
-        screenFwd = fwd;
-        screenLat = lat;
-        screenTurn = turn;
-        haveScreen = true;
+    }
+
+    private void clearWalk() {
+        torqued = false;
+        stepping = false;
     }
 
     synchronized void command(String name) {
@@ -106,54 +105,66 @@ final class RadioLink {
                     sendSimple(UNLOAD);
                     emergency = false;
                     standing = false;
-                    needStep = false;
+                    clearWalk();
                 } else {
                     sendSimple(STAND);
                     standing = true;
-                    needStep = true;
+                    clearWalk();
                 }
                 break;
             case "sit":
             case "sit_down":
                 sendSimple(SIT);
                 standing = false;
-                needStep = false;
+                clearWalk();
                 break;
             case "stand":
                 if (emergency) {
                     sendSimple(UNLOAD);
                     emergency = false;
                     standing = false;
-                    needStep = false;
+                    clearWalk();
                 } else if (standing) {
                     sendSimple(SIT);
                     standing = false;
-                    needStep = false;
+                    clearWalk();
                 } else {
                     sendSimple(STAND);
                     standing = true;
-                    needStep = true;
+                    clearWalk();
                 }
                 break;
             case "unload":
                 sendSimple(UNLOAD);
                 emergency = false;
                 standing = false;
-                needStep = false;
+                clearWalk();
                 break;
             case "torque":
-                sendSimple(TORQUE);
-                needStep = false;
+                if (stepping) {
+                    sendSimple(STEP);
+                    stepping = false;
+                } else {
+                    sendSimple(TORQUE);
+                }
+                torqued = true;
                 break;
             case "step":
-                sendSimple(STEP);
-                needStep = false;
+                if (!standing) break;
+                if (!torqued) {
+                    sendSimple(TORQUE);
+                    torqued = true;
+                }
+                if (!stepping) {
+                    sendSimple(STEP);
+                    stepping = true;
+                }
                 break;
             case "estop":
                 sendSimple(ESTOP);
                 emergency = true;
                 standing = false;
-                needStep = false;
+                clearWalk();
                 break;
             case "manual":
             case "mode":
@@ -271,9 +282,8 @@ final class RadioLink {
     private void stop() {
         running = false;
         handler.removeCallbacks(loop);
-        haveScreen = false;
-        needStep = false;
         standing = false;
+        clearWalk();
         confirmed = false;
         if (udp != null) {
             udp.close();
@@ -296,34 +306,17 @@ final class RadioLink {
         if (snap.ch != null && snap.ch.length > 0) {
             handleButtons(snap.ch);
         }
-        boolean g20 = snap.ch != null && snap.ch.length > 0;
-        if (g20 && !screenMoving()) {
-            sendAxes(snap.ch);
-        } else if (haveScreen) {
-            maybeStep(screenFwd, screenLat, screenTurn);
-            sendSimple(AXIS_LY, bits(screenFwd));
-            sendSimple(AXIS_LX, bits(-screenLat));
-            sendSimple(AXIS_RX, bits(-screenTurn));
-        } else {
-            sendSimple(AXIS_LY, 0);
-            sendSimple(AXIS_LX, 0);
-            sendSimple(AXIS_RX, 0);
+        // 轴只能在力控/踏步里发。起立后就灌零轴，主机会当成压身高，再点
+        // 力控/起步就会原地踏步，坐下和步态也被冲掉。
+        if (torqued || stepping) {
+            if (snap.ch != null && snap.ch.length > 0) {
+                sendAxes(snap.ch);
+            } else if (stepping) {
+                sendSimple(AXIS_LY, 0);
+                sendSimple(AXIS_LX, 0);
+                sendSimple(AXIS_RX, 0);
+            }
         }
-    }
-
-    private boolean screenMoving() {
-        return haveScreen && (Math.abs(screenFwd) > 0.05f
-                || Math.abs(screenLat) > 0.05f
-                || Math.abs(screenTurn) > 0.05f);
-    }
-
-    private void maybeStep(float fwd, float lat, float turn) {
-        if (!needStep || !standing) return;
-        if (Math.abs(fwd) < 0.12f && Math.abs(lat) < 0.12f && Math.abs(turn) < 0.12f) {
-            return;
-        }
-        sendSimple(STEP);
-        needStep = false;
     }
 
     private void handleButtons(int[] ch) {
@@ -347,7 +340,6 @@ final class RadioLink {
         float fwd = axis(ch, 2, false);
         float lat = axis(ch, 3, true);
         float turn = axis(ch, 0, true);
-        maybeStep(fwd, lat, turn);
         sendSimple(AXIS_LY, bits(fwd));
         sendSimple(AXIS_LX, bits(-lat));
         sendSimple(AXIS_RX, bits(-turn));

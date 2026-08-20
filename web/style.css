@@ -864,12 +864,12 @@ body {
 html.shell-app .hud-layout-bar,
 html.shell-app #hud-layout,
 html.shell-app .hud-gp-btn,
+html.shell-app .hud-sticks-btn,
 html.shell-app .hud-telem-btn,
 html.shell-app .hud-gas-btn,
 html.shell-app .hud-gp,
+html.shell-app .hud-sticks,
 html.shell-app .pane-actions { display: none !important; }
-html.shell-app:not(.radio-24) .hud-sticks-btn,
-html.shell-app:not(.radio-24) .hud-sticks { display: none !important; }
 html.shell-app .bar-view { display: block; }
 html.shell-app #btn-radio { display: inline-block; }
 html.shell-app #btn-control { display: none !important; }

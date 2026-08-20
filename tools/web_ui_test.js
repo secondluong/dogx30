@@ -284,18 +284,17 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /0x21010222/.test(radioJava) &&
       /0x21010201/.test(radioJava) &&
       /bindToAirlink/.test(radioJava) &&
-      /setScreenAxes/.test(radioJava) &&
-      /maybeStep/.test(radioJava) &&
+      /torqued \|\| stepping/.test(radioJava) &&
+      !/maybeStep/.test(radioJava) &&
       !/createUDPPipeline/.test(radioJava) &&
       !/createG12G20Pipeline/.test(radioJava) &&
       /void command\(String name\)/.test(radioJava) &&
-      /radioVel/.test(radioBridge) &&
       /radioStanding/.test(radioBridge));
 check('2.4G 起立按钮按 App 自己的起趴状态切换',
       /if \(radioDirect\(\)\) return 'stand'/.test(appJs) &&
-      /nativeRadioVel/.test(appJs) &&
       /syncRadioStanding/.test(appJs) &&
-      /html\.shell-app:not\(\.radio-24\) \.hud-sticks/.test(styleText));
+      /html\.shell-app \.hud-sticks/.test(styleText) &&
+      !/nativeRadioVel/.test(appJs));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));
 var mediaJs = read('media.js');

@@ -300,15 +300,6 @@ function nativeRadioStanding() {
   return app.rlStanding;
 }
 
-function nativeRadioVel(vx, vy, wz) {
-  try {
-    if (window.X30Native && typeof window.X30Native.radioVel === 'function') {
-      window.X30Native.radioVel(vx, vy, wz);
-      return true;
-    }
-  } catch (e) { /* 旧包没有摇杆直达 */ }
-  return false;
-}
 
 function syncRadioStanding() {
   if (!radioDirect()) return;
@@ -363,11 +354,13 @@ function applyRadioPose(name) {
   if (name === 'stand_up' || name === 'stand') {
     app.emergencyLocked = false;
     app.rlStanding = true;
+    app.walkMode = null;
     if (wrap) {
       wrap.classList.add('dog-up');
       wrap.classList.remove('dog-prone');
     }
     paintStandButton();
+    paintWalkButtons();
     return;
   }
   if (name === 'torque') {
@@ -431,26 +424,14 @@ function applyRadioPath(announce) {
         app.hasControl = false;
         send({ t: 'yield' });
       }
-      const sticks = $('hud-sticks');
-      if (sticks) {
-        sticks.classList.remove('hidden');
-        if ($('btn-sticks')) $('btn-sticks').classList.add('active');
-      }
       if (announce) {
-        showBanner('已切到 2.4G。起立/趴下/行走直达运动主机，不经网关');
+        showBanner('已切到 2.4G。先起立，再力控，再起步；走 G20 摇杆');
       }
     } else if (announce) {
       showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
     }
     paintRadioBtn();
     return;
-  }
-  if (isAppShell) {
-    const sticks = $('hud-sticks');
-    if (sticks) {
-      sticks.classList.add('hidden');
-      if ($('btn-sticks')) $('btn-sticks').classList.remove('active');
-    }
   }
   if (linkOpen()) requestControl();
   if (announce) {
@@ -846,8 +827,6 @@ setInterval(() => {
   const c = activeChannels();
   if (radioDirect() && hasNativeRadio()) {
     syncRadioStanding();
-    if (stickTarget() === 'ptz') nativeRadioVel(0, 0, 0);
-    else nativeRadioVel(c.fwd || 0, c.lat || 0, c.turn || 0);
     return;
   }
   if (stickTarget() === 'ptz') {
