@@ -281,6 +281,7 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /0x21010222/.test(radioJava) &&
       /0x21010201/.test(radioJava) &&
       /bindToAirlink/.test(radioJava) &&
+      /createG12G20Pipeline/.test(radioJava) &&
       !/createUDPPipeline/.test(radioJava) &&
       /void command\(String name\)/.test(radioJava));
 check('网页不出现链路切换按钮',
