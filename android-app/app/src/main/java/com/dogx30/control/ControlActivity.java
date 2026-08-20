@@ -38,6 +38,7 @@ public class ControlActivity extends AppCompatActivity {
     private EditText overlayHost;
     private EditText overlayPort;
     private String url;
+    private boolean usingLocalConsole;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
 
@@ -70,6 +71,7 @@ public class ControlActivity extends AppCompatActivity {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(true);
         s.setMediaPlaybackRequiresUserGesture(false);  // 后续视频自动播放
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -89,8 +91,8 @@ public class ControlActivity extends AppCompatActivity {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request,
                                         WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    showOverlay(getString(R.string.load_failed_radio, url));
+                if (request.isForMainFrame() && !usingLocalConsole) {
+                    loadLocalConsole();
                 }
             }
         });
@@ -136,10 +138,18 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     void reloadGateway() {
+        usingLocalConsole = false;
         url = GatewayStore.consoleUrl(this);
         overlayHost.setText(GatewayStore.host(this));
         overlayPort.setText(String.valueOf(GatewayStore.port(this)));
         web.loadUrl(url);
+    }
+
+    private void loadLocalConsole() {
+        usingLocalConsole = true;
+        hideOverlay();
+        G20Rc.get().setBackupRadio(true);
+        web.loadUrl("file:///android_asset/web/index.html?shell=app&offline=1");
     }
 
     private void showOverlay(String text) {
@@ -214,6 +224,11 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public boolean radioStanding() {
             return RadioLink.get().isStanding();
+        }
+
+        @JavascriptInterface
+        public boolean radioLinkOk() {
+            return RadioLink.get().isLinkReady();
         }
 
         @JavascriptInterface

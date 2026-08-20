@@ -13,6 +13,11 @@ import android.util.Log;
 
 import androidx.annotation.Nullable;
 
+import com.skydroid.rcsdk.PipelineManager;
+import com.skydroid.rcsdk.comm.CommListener;
+import com.skydroid.rcsdk.common.error.SkyException;
+import com.skydroid.rcsdk.common.pipeline.Pipeline;
+
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
@@ -22,7 +27,9 @@ import java.nio.ByteOrder;
 
 /**
  * 仅在操作员明确切到 2.4G 时，把 0x21 直发运动主机。
- * 不碰云卓 Pipeline / 射频开关：那两条会把 G20 画面一起掐掉。
+ * MESH/WiFi 到不了 .103。指令走 G20 {@code createUDPPipeline}；
+ * 本机 UDP 只绑 USB/网口，绝不回退到网关 WiFi。
+ * 不开关射频，也不开串口数传管道，那两条会把画面掐掉。
  */
 final class RadioLink {
 
@@ -67,9 +74,12 @@ final class RadioLink {
     private boolean prevSit;
     private boolean prevEstop;
     private int tick;
+    private boolean pipeOk;
+    private boolean boundUsb;
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
     @Nullable private InetAddress robotAddr;
+    @Nullable private Pipeline pipe;
 
     private final Runnable loop = this::onTick;
 
@@ -86,6 +96,10 @@ final class RadioLink {
 
     synchronized boolean isStanding() {
         return standing;
+    }
+
+    synchronized boolean isLinkReady() {
+        return enabled && (pipeOk || boundUsb);
     }
 
     // 旧网页曾用虚拟摇杆灌轴。起立后发轴会把狗锁进踏步，这里直接丢掉。
@@ -208,6 +222,7 @@ final class RadioLink {
         confirmed = false;
         tick = 0;
         openUdp();
+        openSdkUdp();
         if (!running) {
             running = true;
             handler.post(loop);
@@ -229,12 +244,12 @@ final class RadioLink {
     }
 
     private void bindToAirlink(DatagramSocket sock) {
+        boundUsb = false;
         if (appCtx == null) return;
         ConnectivityManager cm = (ConnectivityManager)
                 appCtx.getSystemService(Context.CONNECTIVITY_SERVICE);
         if (cm == null) return;
         Network pick = null;
-        Network wifiLan = null;
         for (Network n : cm.getAllNetworks()) {
             NetworkCapabilities caps = cm.getNetworkCapabilities(n);
             LinkProperties lp = cm.getLinkProperties(n);
@@ -243,16 +258,61 @@ final class RadioLink {
                 pick = n;
                 break;
             }
-            if (wifiLan == null) wifiLan = n;
         }
-        if (pick == null) pick = wifiLan;
         if (pick == null) return;
         try {
             pick.bindSocket(sock);
-            Log.i(TAG, "udp bound " + pick);
+            boundUsb = true;
+            Log.i(TAG, "udp bound usb " + pick);
         } catch (Exception e) {
             Log.w(TAG, "bindSocket", e);
         }
+    }
+
+    private synchronized void openSdkUdp() {
+        closeSdkUdp();
+        try {
+            pipe = PipelineManager.INSTANCE.createUDPPipeline(ROBOT_IP, ROBOT_PORT);
+            if (pipe == null) {
+                Log.w(TAG, "createUDPPipeline null");
+                return;
+            }
+            pipe.setOnCommListener(new CommListener() {
+                @Override
+                public void onConnectSuccess() {
+                    pipeOk = true;
+                    Log.i(TAG, "udp pipeline up");
+                }
+
+                @Override
+                public void onConnectFail(@Nullable SkyException e) {
+                    pipeOk = false;
+                    Log.w(TAG, "udp pipeline fail " + e);
+                }
+
+                @Override
+                public void onDisconnect() {
+                    pipeOk = false;
+                }
+
+                @Override
+                public void onReadData(@Nullable byte[] data) {
+                }
+            });
+            PipelineManager.INSTANCE.connectPipeline(pipe);
+        } catch (Throwable t) {
+            Log.w(TAG, "openSdkUdp", t);
+        }
+    }
+
+    private void closeSdkUdp() {
+        pipeOk = false;
+        if (pipe == null) return;
+        try {
+            PipelineManager.INSTANCE.disconnectPipeline(pipe);
+        } catch (Throwable ignored) {
+        }
+        pipe = null;
     }
 
     private static boolean isWired(@Nullable NetworkCapabilities caps) {
@@ -285,6 +345,8 @@ final class RadioLink {
         standing = false;
         clearWalk();
         confirmed = false;
+        closeSdkUdp();
+        boundUsb = false;
         if (udp != null) {
             udp.close();
             udp = null;
@@ -295,6 +357,9 @@ final class RadioLink {
         if (!running || !enabled) return;
         handler.postDelayed(loop, TICK_MS);
         G20Rc.Snapshot snap = G20Rc.get().snapshot();
+        if (tick % 50 == 0 && !pipeOk) {
+            openSdkUdp();
+        }
         if (tick % HB_EVERY == 0) {
             sendSimple(HEARTBEAT);
             if (!confirmed) {
@@ -375,7 +440,16 @@ final class RadioLink {
         buf.putInt(value);
         buf.putInt(0);
         byte[] pkt = buf.array();
-        if (udp != null && robotAddr != null) {
+        // 只走一条路。两条一起发时，起步这种切换指令会被打两次抵消。
+        if (pipe != null && pipeOk) {
+            try {
+                pipe.writeData(pkt);
+            } catch (Throwable t) {
+                Log.w(TAG, "pipe send", t);
+            }
+            return;
+        }
+        if (boundUsb && udp != null && robotAddr != null) {
             try {
                 udp.send(new DatagramPacket(pkt, pkt.length, robotAddr, ROBOT_PORT));
             } catch (Exception e) {
