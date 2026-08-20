@@ -128,6 +128,13 @@ body {
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 .btn-ghost.held { background: var(--ok); border-color: var(--ok); color: #06210d; font-weight: 600; }
+#btn-radio { display: none; min-width: 4.6em; }
+#btn-radio.radio-on {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #1a1400;
+  font-weight: 700;
+}
 
 .btn-estop {
   background: var(--danger);
@@ -864,7 +871,9 @@ html.shell-app .hud-gp,
 html.shell-app .hud-sticks,
 html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
-html.shell-app #chip-link,
+html.shell-app #btn-radio { display: inline-block; }
+html.shell-app #btn-control { display: none !important; }
+html.shell-app #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }
 html.shell-app .brand-wrap { gap: 8px; }
 html.shell-app .brand {

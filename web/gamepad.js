@@ -459,8 +459,16 @@
 
     function dispatch(key) {
       var app = getApp();
+      function radioPose(cmd) {
+        if (!(app.radioOnly && app.radioOnly())) return false;
+        if (!app.nativeRadioCmd) return false;
+        app.nativeRadioCmd(cmd);
+        if (app.applyRadioPose) app.applyRadioPose(cmd);
+        return true;
+      }
+
       if (key === 'estop') {
-        send({ t: 'cmd', name: 'estop' });
+        if (!radioPose('estop')) send({ t: 'cmd', name: 'estop' });
         showBanner('已发送软急停（手柄）');
         return;
       }
@@ -490,6 +498,11 @@
       }
       if (key === 'dog' || key === 'ptz') return;
       if (key === 'claim') {
+        if (app.radioOnly ? app.radioOnly() : (!app.hasControl && app.radioFallback)) {
+          if (app.radioHint) app.radioHint('g20');
+          else showBanner('网关未连，请用 G20 摇杆走已对频的 2.4G，不必点控制权');
+          return;
+        }
         if (!app.hasControl) send({ t: 'claim' });
         return;
       }
@@ -497,7 +510,33 @@
         if (app.hasControl) send({ t: 'yield' });
         return;
       }
+      if (app.radioOnly && app.radioOnly()) {
+        if (key === 'stand_up' || key === 'sit_down' || key === 'stand') {
+          if (app.emergencyLocked) {
+            if (radioPose('unload')) return;
+          } else if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) {
+            return;
+          } else if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) {
+            return;
+          } else if (radioPose(key === 'stand' ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up') : key)) {
+            return;
+          }
+        } else if (key === 'torque' || key === 'step') {
+          if (radioPose(key)) return;
+        } else if (key === 'gait_up' || key === 'gait_dn') {
+          if (app.gaitPending) return;
+          if (radioPose(nextGait(app.gait, key === 'gait_up' ? 1 : -1))) return;
+        }
+        if (app.radioHint) app.radioHint('g20');
+        else showBanner('当前 2.4G：按键走无线电，不经网关');
+        return;
+      }
       if (!app.hasControl) {
+        if (app.radioFallback) {
+          if (app.radioHint) app.radioHint('g20');
+          else showBanner('当前 2.4G：按键走无线电，不经网关');
+          return;
+        }
         showBanner('请先申请控制权');
         return;
       }

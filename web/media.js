@@ -8,6 +8,7 @@
 const media = {
   plan: null,
   main: null,          // 当前主视图的 source id
+  layout: null,        // 遥控台当前布局，App 只拉 layout.main 那一路
   pcs: new Map(),      // sourceId -> RTCPeerConnection
   talkPc: null,
   talkStream: null,
@@ -16,15 +17,16 @@ const media = {
 
 const playingPath = new Map();
 
+function isAppShell() {
+  return typeof document !== 'undefined' &&
+    document.documentElement.classList.contains('shell-app');
+}
+
 // Chrome 把 H.265 列进 getCapabilities，不代表 WebRTC 能解出色度。
 // 桌面浏览器（Linux / 不少 Windows 核显）常见结果就是白光整幅发绿，
 // 同一台球机的 H.264 热成像子码流却是正常的。安卓壳走 SoC 硬解，可以继续用。
 function webH265Ok() {
-  if (typeof document !== 'undefined' &&
-      document.documentElement.classList.contains('shell-app')) {
-    return true;
-  }
-  return false;
+  return isAppShell();
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +141,13 @@ async function whepPlay(baseUrl, path, videoEl) {
   return pc;
 }
 
+// 网页一主三小 / 2×2 会同时拉这三路。App 只有一张底图，syncTiles 只留当前主画面。
+const VIDEO_TILES = [
+  { id: 'dog_cam', video: 'media-video', idle: 'media-idle', fallback: 'dog_cam_main' },
+  { id: 'ptz_vis', video: 'media-video-ptz-vis', idle: 'media-idle-ptz-vis', fallback: 'ptz_vis_sub' },
+  { id: 'ptz_ir', video: 'media-video-ptz-ir', idle: 'media-idle-ptz-ir', fallback: 'ptz_ir_sub' },
+];
+
 function stopSource(id) {
   const pc = media.pcs.get(id);
   if (pc) {
@@ -146,30 +155,15 @@ function stopSource(id) {
     media.pcs.delete(id);
   }
   playingPath.delete(id);
+  const tile = VIDEO_TILES.find((t) => t.id === id);
+  if (!tile) return;
+  const el = document.getElementById(tile.video);
+  if (el) el.srcObject = null;
 }
 
 function stopAll() {
   for (const id of Array.from(media.pcs.keys())) stopSource(id);
 }
-
-// ---------------------------------------------------------------------------
-// 媒体计划
-// ---------------------------------------------------------------------------
-
-function onMediaPlan(plan, showBanner) {
-  media.plan = plan;
-  media.main = plan.main || null;
-  renderMediaPanel(plan, showBanner);
-}
-
-// 四宫格/一主三小都要把三路视频拉起来。机身相机没有子码流，
-// 网关计划里不选它就 available=false —— 这里仍用登记路径去拉，
-// 否则点成小窗就黑了。布控球优先子码流，减轻同时三路的带宽。
-const VIDEO_TILES = [
-  { id: 'dog_cam', video: 'media-video', idle: 'media-idle', fallback: 'dog_cam_main' },
-  { id: 'ptz_vis', video: 'media-video-ptz-vis', idle: 'media-idle-ptz-vis', fallback: 'ptz_vis_sub' },
-  { id: 'ptz_ir', video: 'media-video-ptz-ir', idle: 'media-idle-ptz-ir', fallback: 'ptz_ir_sub' },
-];
 
 function setIdle(id, on) {
   const el = document.getElementById(id);
@@ -260,10 +254,32 @@ function renderMediaPanel(plan, showBanner) {
     }
   }
 
-  for (const tile of VIDEO_TILES) playTile(plan, tile, showBanner);
+  syncTiles(plan, showBanner);
+}
+
+// App 只有一张底图，没露出来的路不要占带宽。网页一主三小 / 2×2 仍同时拉。
+function wantedTiles(plan) {
+  if (!isAppShell()) return VIDEO_TILES;
+  const main = (media.layout && media.layout.main) || plan.main;
+  if (!main || main === 'cloud') return [];
+  return VIDEO_TILES.filter((t) => t.id === main);
+}
+
+function syncTiles(plan, showBanner) {
+  const wanted = new Set(wantedTiles(plan).map((t) => t.id));
+  for (const tile of VIDEO_TILES) {
+    if (wanted.has(tile.id)) {
+      playTile(plan, tile, showBanner);
+    } else {
+      stopSource(tile.id);
+      setIdle(tile.idle, true);
+    }
+  }
 }
 
 function onLayout(layout) {
+  media.layout = layout || null;
+  if (media.plan) syncTiles(media.plan, talkBanner);
   if (!layout || !layout.main || layout.main === 'cloud') return;
   // 桌面布控球只看 H.264 子码流，不要占掉全码率槽位，否则 App 反而拿不到 1080p。
   if (!webH265Ok() && (layout.main === 'ptz_vis' || layout.main === 'ptz_ir')) {

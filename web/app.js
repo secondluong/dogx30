@@ -15,6 +15,16 @@ const $ = (id) => document.getElementById(id);
 const isAppShell = new URLSearchParams(location.search).get('shell') === 'app';
 if (isAppShell) document.documentElement.classList.add('shell-app');
 
+const RADIO_STORE = 'x30.radioPath';
+function loadRadioPath() {
+  if (!isAppShell) return 'mesh';
+  try {
+    const v = window.localStorage.getItem(RADIO_STORE);
+    if (v === 'radio' || v === 'mesh') return v;
+  } catch (e) { /* 无 storage 时按 MESH */ }
+  return 'mesh';
+}
+
 // ---------------------------------------------------------------------------
 // 状态
 // ---------------------------------------------------------------------------
@@ -24,7 +34,8 @@ const app = {
   clientId: 0,
   holder: 0,
   hasControl: false,
-  radioFallback: false,   // WiFi 断过：摇杆走 2.4G，恢复后不自动抢网关的权
+  radioPath: loadRadioPath(),
+  radioFallback: false,   // radioPath==='radio' 的别名，手柄分支沿用
   alive: false,
   basicState: 0,
   rlStanding: false,
@@ -38,6 +49,7 @@ const app = {
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
 };
+app.radioFallback = app.radioPath === 'radio';
 
 // 踏步态才走速度通道，力控站立走姿态通道。其余状态下摇杆无意义，直接禁用，
 // 免得用户对着没反应的摇杆反复推。
@@ -111,13 +123,17 @@ function connect() {
   ws.onclose = () => {
     const dropFromLive = !!app.wsWasOpen;
     app.wsWasOpen = false;
-    setLink(false);
+    if (dropFromLive && !isAppShell) app.radioFallback = true;
     app.hasControl = false;
     app.holder = 0;
+    setLink(false);
     renderControl();
     if (dropFromLive) {
-      app.radioFallback = true;
-      showBanner('WiFi 已断，网关已放手。请用 G20 摇杆走已对频的 2.4G（无画面）', 8000);
+      showBanner(isAppShell
+        ? (app.radioPath === 'radio'
+          ? '网关已断，继续走 2.4G 备份无线电'
+          : 'MESH 已断。要备份请切到 2.4G，用已对频手柄')
+        : 'WiFi 已断，网关已放手。请用原厂 2.4G 手柄直达（无画面）', 8000);
     }
     setTimeout(connect, RECONNECT_MS);
   };
@@ -142,9 +158,9 @@ function connect() {
         app.hasControl = !!msg.control;
         renderControl();
         if (window.X30Settings) window.X30Settings.onHello(msg);
-        if (isAppShell && !app.radioFallback) requestControl();
-        else if (isAppShell && app.radioFallback) {
-          showBanner('WiFi 已恢复。2.4G 仍可用；要点「控制权」才改走网关', 8000);
+        if (isAppShell && app.radioPath === 'mesh') requestControl();
+        else if (isAppShell && app.radioPath === 'radio' && app.hasControl) {
+          send({ t: 'yield' });
         }
         break;
       case 'config':
@@ -205,15 +221,191 @@ function onGaitResult(msg) {
 }
 
 function send(obj) {
+  if (!obj) return;
+  // 2.4G 是备份无线电，运动指令不得再走网关。急停若网关还在，仍发一条兜底。
+  if (isAppShell && app.radioPath === 'radio') {
+    const t = obj.t;
+    if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'ptz') return;
+    if (t === 'cmd' && obj.name !== 'estop') return;
+  }
   if (app.ws && app.ws.readyState === WebSocket.OPEN) {
     app.ws.send(JSON.stringify(obj));
   }
 }
 
+function linkOpen() {
+  return !!(app.ws && app.ws.readyState === WebSocket.OPEN);
+}
+app.linkOpen = linkOpen;
+
+function radioOnly() {
+  if (isAppShell && app.radioPath === 'radio') return true;
+  return !linkOpen() || (app.radioFallback && !app.hasControl);
+}
+app.radioOnly = radioOnly;
+
+function radioHint(kind) {
+  if (isAppShell && app.radioPath === 'radio') {
+    showBanner(kind === 'g20'
+      ? '当前 2.4G：起立/趴下/行走直达运动主机，不经网关'
+      : '当前 App 还发不出 2.4G 姿态，请重装含 RadioLink 的安装包');
+    return;
+  }
+  showBanner(kind === 'g20'
+    ? '网关未连。要备份链路请切到 2.4G，用已对频手柄'
+    : '网关未连，屏幕按钮走不了。备份请切到 2.4G');
+}
+app.radioHint = radioHint;
+
+function nativeRadioCmd(name) {
+  try {
+    if (window.X30Native && typeof window.X30Native.radioCmd === 'function') {
+      window.X30Native.radioCmd(String(name));
+      return true;
+    }
+  } catch (e) { /* 网页没有原生桥 */ }
+  return false;
+}
+app.nativeRadioCmd = nativeRadioCmd;
+
+// 2.4G 没有网关遥测时，本地先把起立后的步态/身高菜单亮出来。
+function applyRadioPose(name) {
+  const wrap = $('stage-wrap');
+  if (name === 'estop') {
+    app.emergencyLocked = true;
+    app.rlStanding = false;
+    app.walkMode = null;
+    if (wrap) {
+      wrap.classList.remove('dog-up');
+      wrap.classList.add('dog-prone');
+    }
+    paintStandButton();
+    return;
+  }
+  if (name === 'unload') {
+    app.emergencyLocked = false;
+    app.rlStanding = false;
+    app.walkMode = null;
+    if (wrap) {
+      wrap.classList.remove('dog-up');
+      wrap.classList.add('dog-prone');
+    }
+    paintStandButton();
+    return;
+  }
+  if (name === 'sit' || name === 'sit_down') {
+    app.rlStanding = false;
+    app.walkMode = null;
+    if (wrap) {
+      wrap.classList.remove('dog-up');
+      wrap.classList.add('dog-prone');
+    }
+    paintStandButton();
+    paintWalkButtons();
+    closeAccordions();
+    return;
+  }
+  if (name === 'stand_up' || name === 'stand') {
+    app.emergencyLocked = false;
+    app.rlStanding = true;
+    if (wrap) {
+      wrap.classList.add('dog-up');
+      wrap.classList.remove('dog-prone');
+    }
+    paintStandButton();
+    return;
+  }
+  if (name === 'torque') {
+    app.walkMode = 'torque';
+    paintWalkButtons();
+    return;
+  }
+  if (name === 'step') {
+    app.walkMode = 'step';
+    paintWalkButtons();
+    return;
+  }
+  if (name === 'manual' || name === 'auto') {
+    app.modePick = name;
+    paintModes();
+    return;
+  }
+  if (name === 'height_low' || name === 'height_normal') {
+    document.querySelectorAll('[data-height]').forEach((b) => {
+      b.classList.toggle('active',
+        (name === 'height_low' && b.dataset.height === 'crawl') ||
+        (name === 'height_normal' && b.dataset.height === 'normal'));
+    });
+    return;
+  }
+  const gaits = ['walk', 'slope', 'offroad', 'lwalk', 'mountain', 'silent',
+                 'stair', 'stairmulti', 'stair45'];
+  if (gaits.indexOf(name) >= 0) {
+    app.gait = name;
+    document.querySelectorAll('[data-gait]').forEach((b) => {
+      b.classList.toggle('active', b.dataset.gait === name);
+    });
+  }
+}
+app.applyRadioPose = applyRadioPose;
+
+function paintRadioBtn() {
+  const btn = $('btn-radio');
+  if (!btn) return;
+  const radio = app.radioPath === 'radio';
+  btn.textContent = radio ? '2.4G' : 'MESH';
+  btn.classList.toggle('radio-on', radio);
+  btn.classList.toggle('held', !radio && app.hasControl);
+}
+
+function notifyNativeRadio() {
+  try {
+    if (window.X30Native && typeof window.X30Native.setRadioPath === 'function') {
+      window.X30Native.setRadioPath(app.radioPath);
+    }
+  } catch (e) { /* 网页没有原生桥 */ }
+}
+
+function applyRadioPath(announce) {
+  app.radioFallback = app.radioPath === 'radio';
+  notifyNativeRadio();
+  if (app.radioPath === 'radio') {
+    if (app.hasControl) {
+      app.hasControl = false;
+      send({ t: 'yield' });
+    }
+    if (announce) {
+      showBanner('已切到 2.4G。起立/趴下/行走直达运动主机，不经网关');
+    }
+    paintRadioBtn();
+    return;
+  }
+  if (linkOpen()) requestControl();
+  if (announce) {
+    showBanner(linkOpen()
+      ? '已切到 MESH，网关接管'
+      : '已选 MESH，等网关连上后自动接管');
+  }
+  paintRadioBtn();
+}
+
+function setRadioPath(path) {
+  app.radioPath = path === 'radio' ? 'radio' : 'mesh';
+  try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
+  applyRadioPath(true);
+  renderControl();
+}
+app.setRadioPath = setRadioPath;
+
 // 手持壳连上就要权：关掉原厂 App 不会把权交过来，操作员也不该再点一次。
 // 网页控制台仍是观察者，避免笔记本开着就把手柄的权抢走。
 function requestControl() {
   if (app.hasControl) return;
+  if (isAppShell && app.radioPath === 'radio') return;
+  if (!linkOpen()) {
+    radioHint();
+    return;
+  }
   if (app.holder && app.holder !== app.clientId) {
     showBanner('控制权被 #' + app.holder + ' 占用');
     return;
@@ -246,12 +438,15 @@ function renderControl() {
   tag.classList.toggle('held', app.hasControl);
   if (app.hasControl) {
     tag.textContent = '控制中';
+  } else if (!linkOpen()) {
+    tag.textContent = app.radioFallback ? '2.4G' : '未连接';
   } else if (app.holder) {
     tag.textContent = `被 #${app.holder} 占用`;
   } else {
     tag.textContent = '观察者';
   }
 
+  paintRadioBtn();
   updateStickAvailability();
 }
 
@@ -554,6 +749,7 @@ setInterval(() => {
     const moving = !!(c.engaged || c.fwd || c.lat || c.turn || c.tilt ||
                       c.look);
     if (!app.hasControl) {
+      if (radioOnly() || !linkOpen()) return;
       const now = Date.now();
       if (moving && now - ptzClaimedAt > 1500) {
         ptzClaimedAt = now;
@@ -601,6 +797,10 @@ setInterval(() => send({ t: 'ping', id: ++pingSeq }), HEARTBEAT_MS);
 // ---------------------------------------------------------------------------
 
 $('btn-control').addEventListener('click', () => {
+  if (!linkOpen()) {
+    radioHint();
+    return;
+  }
   if (app.hasControl) {
     app.radioFallback = true;
     send({ t: 'yield' });
@@ -610,8 +810,18 @@ $('btn-control').addEventListener('click', () => {
   }
 });
 
+if ($('btn-radio')) {
+  $('btn-radio').addEventListener('click', () => {
+    setRadioPath(app.radioPath === 'radio' ? 'mesh' : 'radio');
+  });
+}
+
 // 急停不检查控制权，任何客户端任何时候都能按。
 $('btn-estop').addEventListener('click', () => {
+  if (isAppShell && app.radioPath === 'radio') {
+    nativeRadioCmd('estop');
+    applyRadioPose('estop');
+  }
   send({ t: 'cmd', name: 'estop' });
   app.emergencyLocked = true;
   app.rlStanding = false;
@@ -622,8 +832,35 @@ $('btn-estop').addEventListener('click', () => {
   showBanner('急停后关节已锁，请先点卸力，再起立');
 });
 
+function radioCmdFromEl(el) {
+  if (!el || !el.dataset) return '';
+  if (el.dataset.cmd) {
+    if (el.dataset.cmd === 'stand') {
+      if (app.emergencyLocked) return 'unload';
+      return isStandingUi() ? 'sit_down' : 'stand_up';
+    }
+    return el.dataset.cmd;
+  }
+  if (el.dataset.gait) return el.dataset.gait;
+  if (el.dataset.height === 'crawl') return 'height_low';
+  if (el.dataset.height) return 'height_normal';
+  if (el.dataset.mode && el.dataset.mode !== 'assist') return el.dataset.mode;
+  return '';
+}
+
 function guarded(fn) {
   return (ev) => {
+    if (isAppShell && app.radioPath === 'radio') {
+      const name = radioCmdFromEl(ev && ev.currentTarget);
+      if (name && nativeRadioCmd(name)) {
+        applyRadioPose(name);
+        markPending(ev.currentTarget);
+        return;
+      }
+      radioHint();
+      return;
+    }
+    if (radioOnly() || !linkOpen()) { radioHint(); return; }
     if (!app.hasControl) { showBanner('请先申请控制权'); return; }
     fn(ev);
   };
@@ -926,7 +1163,7 @@ document.addEventListener('visibilitychange', () => {
   }
   // 切去原厂 App 时心跳会被节流，3 秒租约一过权就没了。
   // 手持壳回到前台自动再要一次，否则横幅只剩「请先发送 claim」。
-  if (!document.hidden && isAppShell && !app.radioFallback) requestControl();
+  if (!document.hidden && isAppShell && app.radioPath === 'mesh') requestControl();
   // 点云订阅不要跟着显隐走：切标签、缩窗口、平板分屏都会把
   // document.hidden 置上，退订后再回来要重新点，操作员会以为订不住。
 });
@@ -941,6 +1178,8 @@ if ($('gas-panel')) {
   if ($('btn-gas')) $('btn-gas').classList.remove('active');
 }
 if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
+paintRadioBtn();
+notifyNativeRadio();
 
 connect();
 

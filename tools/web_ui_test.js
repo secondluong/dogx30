@@ -256,6 +256,32 @@ check('控布控球时摇杆不看狗站没站',
       /usable = ptz/.test(appJs) &&
       /\? true/.test(appJs) &&
       !/usable = app\.hasControl && app\.alive && controlChannel\(\) !== null/.test(appJs));
+check('断网时不把人堵在控制权上',
+      /function linkOpen/.test(appJs) &&
+      /function radioHint/.test(appJs) &&
+      /radioOnly\(\) \|\| !linkOpen\(\)/.test(appJs));
+check('App 顶栏有 2.4G/MESH 切换',
+      !!htmlIds['btn-radio'] &&
+      /function setRadioPath/.test(appJs) &&
+      /html\.shell-app #btn-radio/.test(styleText) &&
+      /html\.shell-app #btn-control/.test(styleText));
+check('切 2.4G 不经网关下发',
+      /radioPath === 'radio'/.test(appJs) &&
+      /t === 'claim' \|\| t === 'vel'/.test(appJs) &&
+      /已切到 2.4G/.test(appJs) &&
+      /nativeRadioCmd/.test(appJs) &&
+      /radioCmdFromEl/.test(appJs) &&
+      /applyRadioPose/.test(appJs));
+var radioJava = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+            'com', 'dogx30', 'control', 'RadioLink.java'), 'utf8');
+check('2.4G RadioLink 含起立趴下行走指令',
+      /0x21010223/.test(radioJava) &&
+      /0x21010222/.test(radioJava) &&
+      /0x21010201/.test(radioJava) &&
+      /void command\(String name\)/.test(radioJava));
+check('网页不出现链路切换按钮',
+      /#btn-radio \{[^}]*display:\s*none/.test(styleText));
 var mediaJs = read('media.js');
 check('桌面网页大屏也走布控球子码流',
       /function webH265Ok/.test(mediaJs) &&
@@ -265,6 +291,10 @@ check('桌面网页大屏也走布控球子码流',
 check('点大布控球时摇杆改控云台',
       /webStickTarget = 'ptz'/.test(appJs) &&
       /viewLayout\.main === 'ptz_vis'/.test(appJs));
+check('App 壳只拉当前大屏那一路视频',
+      /function wantedTiles/.test(mediaJs) &&
+      /isAppShell\(\)/.test(mediaJs) &&
+      /main === 'cloud'/.test(mediaJs));
 check('网页打开时指标默认隐藏',
       /telemetry[\s\S]*classList\.add\('hidden'\)/.test(appJs) &&
       /class="[^"]*\btelemetry\b[^"]*\bhidden\b/.test(html));

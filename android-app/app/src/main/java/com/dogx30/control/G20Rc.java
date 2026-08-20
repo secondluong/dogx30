@@ -11,8 +11,10 @@ import androidx.annotation.Nullable;
 import com.skydroid.rcsdk.KeyManager;
 import com.skydroid.rcsdk.RCSDKManager;
 import com.skydroid.rcsdk.SDKManagerCallBack;
+import com.skydroid.rcsdk.common.callback.CompletionCallback;
 import com.skydroid.rcsdk.common.callback.CompletionCallbackWith;
 import com.skydroid.rcsdk.common.error.SkyException;
+import com.skydroid.rcsdk.key.AirLinkKey;
 import com.skydroid.rcsdk.key.RemoteControllerKey;
 import com.skydroid.rcsdk.utils.RCSDKUtils;
 
@@ -80,6 +82,7 @@ public final class G20Rc {
     private boolean started;
     private boolean connected;
     private boolean polling;
+    private boolean backupRadio;
     private String device = "";
     private String error = "";
     private int[] ch = new int[0];
@@ -161,6 +164,26 @@ public final class G20Rc {
 
     public synchronized String pollJson() {
         return snapshot().toJson();
+    }
+
+    /** 2.4G 备份：打开射频，通道由已对频接收机直收，不经网关。 */
+    public void setBackupRadio(boolean on) {
+        backupRadio = on;
+        RadioLink.get().setEnabled(on);
+        if (!on) return;
+        try {
+            KeyManager.INSTANCE.set(
+                    AirLinkKey.INSTANCE.getKeyRCRFEnable(),
+                    Boolean.TRUE,
+                    new CompletionCallback() {
+                        @Override
+                        public void onResult(@Nullable SkyException e) {
+                            if (e != null) Log.w(TAG, "KeyRCRFEnable: " + e);
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.w(TAG, "KeyRCRFEnable", t);
+        }
     }
 
     private void ensurePolling() {

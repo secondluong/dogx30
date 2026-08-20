@@ -495,7 +495,13 @@ check('浏览器分支下暴露了 initGamepad', typeof B.initGamepad === 'funct
 
 var sent = [];
 var banners = [];
-var appState = { hasControl: false, gait: 'walk', gaitPending: false };
+var appState = {
+  hasControl: false,
+  gait: 'walk',
+  gaitPending: false,
+  radioFallback: false,
+  radioOnly: function () { return this.radioFallback && !this.hasControl; },
+};
 
 function pump(n) {
   for (var i = 0; i < (n || 1); i++) {
@@ -553,6 +559,32 @@ check('无控制权时按键不下发指令', sent.length === 0, JSON.stringify(
 check('无控制权时给出提示',
       banners.length === 1 && banners[0].indexOf('控制权') >= 0,
       JSON.stringify(banners));
+
+appState.radioFallback = true;
+sent = []; banners = [];
+pads = [makePad([0, 0, 0, 0], [])];
+pump(1);
+pads = [makePad([0, 0, 0, 0], [0])];
+pump(1);
+check('2.4G 回退时按键不经网关',
+      sent.length === 0 &&
+      banners.length === 1 && banners[0].indexOf('2.4G') >= 0,
+      JSON.stringify({ sent: sent, banners: banners }));
+
+var radioCmds = [];
+appState.nativeRadioCmd = function (n) { radioCmds.push(n); return true; };
+appState.applyRadioPose = function () {};
+sent = []; banners = []; radioCmds = [];
+pads = [makePad([0, 0, 0, 0], [])];
+pump(1);
+pads = [makePad([0, 0, 0, 0], [0])];
+pump(1);
+check('2.4G 回退时起立走无线电',
+      sent.length === 0 && radioCmds.indexOf('stand_up') >= 0,
+      JSON.stringify({ sent: sent, radioCmds: radioCmds }));
+delete appState.nativeRadioCmd;
+delete appState.applyRadioPose;
+appState.radioFallback = false;
 
 // 拿到控制权后同一个键要能下发
 appState.hasControl = true;

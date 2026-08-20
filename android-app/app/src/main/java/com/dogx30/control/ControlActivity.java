@@ -196,6 +196,17 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public void setRadioPath(String path) {
+            G20Rc.get().setBackupRadio(path != null && path.equals("radio"));
+        }
+
+        @JavascriptInterface
+        public void radioCmd(String name) {
+            if (name == null) return;
+            RadioLink.get().command(name);
+        }
+
+        @JavascriptInterface
         public void setGateway(String host, int port) {
             if (host == null) return;
             host = host.trim();

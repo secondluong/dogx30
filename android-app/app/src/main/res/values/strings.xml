@@ -17,7 +17,7 @@
 
     <string name="loading">正在加载遥控台…</string>
     <string name="load_failed">加载失败：%1$s\n\n请检查网关服务是否运行，以及平板是否连在机器狗的网络上。</string>
-    <string name="load_failed_radio">网关未连通（%1$s）\nG20 摇杆已走已对频的 2.4G，无需 WiFi。\n要改服务地址，改下面两项后点重试。</string>
+    <string name="load_failed_radio">网关未连通（%1$s）\nG20 摇杆已走已对频的 2.4G，不必点控制权。\n要改服务地址，改下面两项后点重试。</string>
     <string name="retry">保存并重试</string>
 
     <string name="exit_title">退出遥控</string>
