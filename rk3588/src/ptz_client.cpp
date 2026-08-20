@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 namespace x30 {
 namespace {
@@ -80,19 +81,31 @@ void PtzClient::Loop() {
   }
 }
 
+std::string ShellSingle(const std::string& s) {
+  std::string out = "'";
+  for (char c : s) {
+    if (c == '\'') out += "'\\''";
+    else out += c;
+  }
+  out += "'";
+  return out;
+}
+
 void PtzClient::Send(int pan, int tilt, int zoom) {
   if (cfg_.host.empty()) return;
-  char cmd[768];
+  const std::string user = ShellSingle(cfg_.user);
+  const std::string pass = ShellSingle(cfg_.password);
+  char cmd[1024];
   const int n = std::snprintf(
       cmd, sizeof(cmd),
       "curl -sS --connect-timeout 0.4 --max-time 0.7 --anyauth "
-      "-u '%s:%s' -X PUT -H 'Content-Type: application/xml' "
+      "-u %s:%s -X PUT -H 'Content-Type: application/xml' "
       "--data-binary "
       "'<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
       "<PTZData><pan>%d</pan><tilt>%d</tilt><zoom>%d</zoom></PTZData>' "
       "'http://%s:%u/ISAPI/PTZCtrl/channels/%d/continuous' "
       ">/dev/null 2>&1",
-      cfg_.user.c_str(), cfg_.password.c_str(), pan, tilt, zoom,
+      user.c_str(), pass.c_str(), pan, tilt, zoom,
       cfg_.host.c_str(), static_cast<unsigned>(cfg_.port), cfg_.channel);
   if (n < 0 || static_cast<size_t>(n) >= sizeof(cmd)) return;
   const int st = std::system(cmd);

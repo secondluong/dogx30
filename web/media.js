@@ -177,14 +177,13 @@ function setIdle(id, on) {
 }
 
 function pathFor(tile, plan) {
-  const src = plan.sources.find((s) => s.id === tile.id);
-  if (src && src.available && src.path) {
-    // 网关若仍按旧能力下发了 H.265 主码流，桌面端自己改走子码流。
-    if (src.codec === 'h265' && !webH265Ok() && tile.fallback) {
-      return tile.fallback;
-    }
-    return src.path;
+  // 桌面端点成大屏时网关会改发 H.265 主码流，色度解不出来就整幅发绿。
+  // 小窗之所以正常，正是因为它走子码流。大屏也锁在子码流上。
+  if (!webH265Ok() && tile.fallback && tile.id !== 'dog_cam') {
+    return tile.fallback;
   }
+  const src = plan.sources.find((s) => s.id === tile.id);
+  if (src && src.available && src.path) return src.path;
   return tile.fallback;
 }
 
@@ -266,6 +265,10 @@ function renderMediaPanel(plan, showBanner) {
 
 function onLayout(layout) {
   if (!layout || !layout.main || layout.main === 'cloud') return;
+  // 桌面布控球只看 H.264 子码流，不要占掉全码率槽位，否则 App 反而拿不到 1080p。
+  if (!webH265Ok() && (layout.main === 'ptz_vis' || layout.main === 'ptz_ir')) {
+    return;
+  }
   if (sendRef) sendRef({ t: 'media_select', id: layout.main });
 }
 

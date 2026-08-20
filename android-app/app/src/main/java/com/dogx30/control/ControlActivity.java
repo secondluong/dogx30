@@ -2,7 +2,6 @@ package com.dogx30.control;
 
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
-import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.InputDevice;
@@ -81,11 +80,6 @@ public class ControlActivity extends AppCompatActivity {
         web.addJavascriptInterface(nativeBridge, "X30Native");
 
         web.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageStarted(WebView view, String u, Bitmap favicon) {
-                showOverlay(getString(R.string.loading));
-            }
-
             @Override
             public void onPageFinished(WebView view, String u) {
                 hideOverlay();

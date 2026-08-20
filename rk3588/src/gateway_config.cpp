@@ -590,6 +590,33 @@ bool TokenMatches(const std::string& expected, const std::string& given) {
 // 布控球 RTSP
 // ---------------------------------------------------------------------------
 
+std::string PercentDecode(const std::string& in) {
+  std::string out;
+  out.reserve(in.size());
+  for (size_t i = 0; i < in.size(); ++i) {
+    if (in[i] == '%' && i + 2 < in.size()) {
+      const auto hex = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+      };
+      const int hi = hex(in[i + 1]), lo = hex(in[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        out.push_back(static_cast<char>((hi << 4) | lo));
+        i += 2;
+        continue;
+      }
+    }
+    if (in[i] == '+') {
+      out.push_back(' ');
+      continue;
+    }
+    out.push_back(in[i]);
+  }
+  return out;
+}
+
 bool ParseRtspAuthority(const std::string& url, std::string* host,
                         std::string* user, std::string* password,
                         std::string* error) {
@@ -614,10 +641,13 @@ bool ParseRtspAuthority(const std::string& url, std::string* host,
     const std::string cred = ahead.substr(0, at);
     hostport = ahead.substr(at + 1);
     const size_t colon = cred.find(':');
-    if (user) *user = (colon == std::string::npos) ? cred : cred.substr(0, colon);
-    if (password) {
-      *password = (colon == std::string::npos) ? "" : cred.substr(colon + 1);
-    }
+    const std::string raw_user =
+        (colon == std::string::npos) ? cred : cred.substr(0, colon);
+    const std::string raw_pass =
+        (colon == std::string::npos) ? "" : cred.substr(colon + 1);
+    // RTSP 地址里口令常写成 p%40ss，MediaMTX 会解码，ISAPI 必须解成 p@ss。
+    if (user) *user = PercentDecode(raw_user);
+    if (password) *password = PercentDecode(raw_pass);
   } else {
     if (user) user->clear();
     if (password) password->clear();

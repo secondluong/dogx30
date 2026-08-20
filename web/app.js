@@ -414,11 +414,10 @@ function toggleTelem() {
 }
 
 function updateStickAvailability() {
-  // 云台不看狗有没有站起来。原先连 controlChannel()，坐下时摇杆被灰掉，
-  // 顶栏已经写着「摇杆 · 布控球」也推不动。
+  // 云台不看狗有没有站起来。没拿到控制权时也让推，推杆会去申请。
   const ptz = stickTarget() === 'ptz';
   const usable = ptz
-    ? app.hasControl
+    ? true
     : (app.hasControl && app.alive && controlChannel() !== null &&
        !app.lioAligning);
   document.querySelectorAll('.stick').forEach((s) => {
@@ -546,24 +545,35 @@ function paintStickChip() {
 }
 
 let ptzNeedControlAt = 0;
+let ptzClaimedAt = 0;
 
 setInterval(() => {
   paintStickChip();
   const c = activeChannels();
   if (stickTarget() === 'ptz') {
+    const moving = !!(c.engaged || c.fwd || c.lat || c.turn || c.tilt ||
+                      c.look);
     if (!app.hasControl) {
-      const moving = !!(c.engaged || c.fwd || c.lat || c.turn || c.tilt ||
-                        c.look);
       const now = Date.now();
+      if (moving && now - ptzClaimedAt > 1500) {
+        ptzClaimedAt = now;
+        requestControl();
+      }
       if (moving && now - ptzNeedControlAt > 4000) {
         ptzNeedControlAt = now;
-        showBanner('转云台请先点右上角「控制权」');
+        if (app.holder && app.holder !== app.clientId) {
+          showBanner('控制权被占用，转不了云台');
+        } else {
+          showBanner('正在申请控制权以转云台');
+        }
       }
       return;
     }
     send({ t: 'vel', vx: 0, vy: 0, wz: 0 });
     const look = typeof c.look === 'number' ? c.look : c.tilt;
-    send({ t: 'ptz', pan: -c.turn, tilt: -look, zoom: c.fwd });
+    // 通道约定上推为正；协议 tilt 也是上为正。海康 ISAPI 同样上为正。
+    // 这里再取负会把俯仰拧反。turn 左为正、pan 右为正，所以水平仍取负。
+    send({ t: 'ptz', pan: -c.turn, tilt: look, zoom: c.fwd });
     return;
   }
   if (!app.hasControl) return;
@@ -709,7 +719,10 @@ $('chip-stick').addEventListener('click', () => {
     send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
   }
   if (webStickTarget === 'ptz' && !app.hasControl) {
-    showBanner('转云台请先点右上角「控制权」');
+    requestControl();
+    showBanner(app.holder && app.holder !== app.clientId
+      ? '控制权被占用，转不了云台'
+      : '已申请控制权，推杆转云台');
   }
   paintStickChip();
 });
@@ -764,6 +777,13 @@ function applyLayout() {
     window.X30Cloud.setWanted(cloudVisible);
   }
   syncViewPick();
+  // 点小窗放大布控球时，摇杆跟着改控云台。芯片仍可再切回控狗。
+  if (!g20Live() &&
+      (viewLayout.main === 'ptz_vis' || viewLayout.main === 'ptz_ir')) {
+    webStickTarget = 'ptz';
+    if (!app.hasControl) requestControl();
+  }
+  paintStickChip();
   requestAnimationFrame(() => {
     if (window.X30Cloud && window.X30Cloud.resize) window.X30Cloud.resize();
     if (window.X30Media && window.X30Media.onLayout) window.X30Media.onLayout(viewLayout);

@@ -222,6 +222,8 @@ js.forEach(function (f) {
 check('顶栏有背景按钮', /id="btn-view">背景<\/button>/.test(html));
 check('左下只有一个姿态按钮', /id="btn-stand"/.test(html) && html.indexOf('btn-unload') === -1);
 check('点标题打开设置', /id="btn-settings"[^>]*>\s*X30 遥控台/.test(html));
+check('设置面板在 CSS 到来前就藏着',
+      /<style>\s*\.hidden\s*\{\s*display\s*:\s*none\s*!important/.test(html));
 check('没有单独的订阅点云按钮', html.indexOf('订阅点云') === -1 && !htmlIds['btn-cloud']);
 check('点云画面有设置按钮', !!htmlIds['btn-cloud-settings']);
 check('点云菜单有显控按钮', !!htmlIds['btn-cloud-vis']);
@@ -252,13 +254,17 @@ check('趴下不锁死网页摇杆',
       /id="hud-sticks"/.test(html));
 check('控布控球时摇杆不看狗站没站',
       /usable = ptz/.test(appJs) &&
-      /\? app\.hasControl/.test(appJs) &&
+      /\? true/.test(appJs) &&
       !/usable = app\.hasControl && app\.alive && controlChannel\(\) !== null/.test(appJs));
 var mediaJs = read('media.js');
-check('桌面网页不把 H.265 当可用',
+check('桌面网页大屏也走布控球子码流',
       /function webH265Ok/.test(mediaJs) &&
       /media\.caps\.h265 = false/.test(mediaJs) &&
-      /src\.codec === 'h265' && !webH265Ok\(\)/.test(mediaJs));
+      /tile\.id !== 'dog_cam'/.test(mediaJs) &&
+      /ptz_vis_sub/.test(mediaJs));
+check('点大布控球时摇杆改控云台',
+      /webStickTarget = 'ptz'/.test(appJs) &&
+      /viewLayout\.main === 'ptz_vis'/.test(appJs));
 check('网页打开时指标默认隐藏',
       /telemetry[\s\S]*classList\.add\('hidden'\)/.test(appJs) &&
       /class="[^"]*\btelemetry\b[^"]*\bhidden\b/.test(html));
