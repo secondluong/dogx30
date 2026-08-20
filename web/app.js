@@ -498,8 +498,11 @@ function applyRadioPath(announce) {
       showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
     }
     paintRadioBtn();
+    paintRadioChip();
     return;
   }
+  const chip = $('chip-link');
+  if (chip) chip.classList.remove('radio-stat');
   if (linkOpen()) requestControl();
   if (announce) {
     showBanner(linkOpen()
@@ -553,11 +556,37 @@ function requestControl() {
 // 渲染
 // ---------------------------------------------------------------------------
 
+function radioStatusLine() {
+  const st = nativeRadioStatus() || {};
+  const bits = [st.ready ? '2.4G通' : '2.4G断'];
+  if (st.status) bits.push(st.status);
+  if (st.local) bits.push(st.local);
+  else if (st.nets) bits.push(st.nets);
+  bits.push('ok' + (st.sentOk || 0) + '/fail' + (st.sentFail || 0));
+  return bits.join(' ');
+}
+
+function paintRadioChip() {
+  if (!radioDirect()) return;
+  const chip = $('chip-link');
+  if (!chip) return;
+  const st = nativeRadioStatus() || {};
+  chip.classList.toggle('online', !!st.ready);
+  chip.classList.add('radio-stat');
+  const text = $('link-text');
+  if (text) text.textContent = radioStatusLine();
+  if (!st.ready && hasNativeRadio()) {
+    const why = st.status === 'no-usb-net'
+      ? '接收机还没接到平板（G20 USB 网没起来）。请确认已对频，并关掉云卓助手/云深处'
+      : ('2.4G 还没到运动主机 192.168.1.103（' + (st.status || 'unknown') + '）');
+    showBanner(why, 0, 'wait');
+  }
+}
+
 function setLink(online) {
   const chip = $('chip-link');
   if (radioDirect()) {
-    chip.classList.toggle('online', true);
-    $('link-text').textContent = '2.4G';
+    paintRadioChip();
   } else {
     chip.classList.toggle('online', online && app.alive);
     $('link-text').textContent = online
@@ -711,11 +740,14 @@ function renderState(s) {
 }
 
 let bannerTimer = null;
-function showBanner(text, holdMs) {
+function showBanner(text, holdMs, kind) {
   const el = $('banner');
+  if (!el) return;
   el.textContent = text;
+  el.classList.toggle('banner-wait', kind === 'wait');
   el.classList.remove('hidden');
   clearTimeout(bannerTimer);
+  if (holdMs === 0) return;
   bannerTimer = setTimeout(() => el.classList.add('hidden'), holdMs || 4000);
 }
 
@@ -907,6 +939,7 @@ let ptzClaimedAt = 0;
 
 setInterval(() => {
   paintStickChip();
+  if (radioDirect() && hasNativeRadio()) paintRadioChip();
   const c = activeChannels();
   if (radioDirect() && hasNativeRadio()) {
     syncRadioStanding();

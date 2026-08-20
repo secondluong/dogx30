@@ -873,8 +873,14 @@ html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
 html.shell-app #btn-radio { display: none !important; }
 html.shell-app #btn-control { display: none !important; }
-html.shell-app #chip-link.online,
+html.shell-app:not(.radio-24) #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }
+html.shell-app #chip-link.radio-stat {
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 html.shell-app .brand-wrap { gap: 8px; }
 html.shell-app .brand {
   font-size: 14px;

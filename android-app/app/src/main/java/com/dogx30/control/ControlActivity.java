@@ -4,6 +4,8 @@ import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -32,6 +34,9 @@ public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
     private TextView btnRadioPath;
+    private TextView txtRadioStat;
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable radioStatTick = this::tickRadioStat;
     private LinearLayout overlay;
     private TextView overlayMsg;
     private EditText overlayHost;
@@ -82,6 +87,8 @@ public class ControlActivity extends AppCompatActivity {
 
         btnRadioPath = findViewById(R.id.btn_radio_path);
         btnRadioPath.setOnClickListener(v -> toggleRadioPath());
+        txtRadioStat = findViewById(R.id.txt_radio_stat);
+        txtRadioStat.setOnClickListener(v -> showRadioStatDialog());
         paintNativeRadioBtn();
 
         web.setWebViewClient(new WebViewClient() {
@@ -171,6 +178,31 @@ public class ControlActivity extends AppCompatActivity {
         btnRadioPath.setTypeface(btnRadioPath.getTypeface(), radio
                 ? android.graphics.Typeface.BOLD
                 : android.graphics.Typeface.NORMAL);
+        paintRadioStat();
+    }
+
+    private void tickRadioStat() {
+        paintRadioStat();
+        uiHandler.postDelayed(radioStatTick, 1000);
+    }
+
+    private void paintRadioStat() {
+        if (txtRadioStat == null) return;
+        boolean radio = "radio".equals(GatewayStore.radioPath(this));
+        if (!radio) {
+            txtRadioStat.setVisibility(View.GONE);
+            return;
+        }
+        txtRadioStat.setVisibility(View.VISIBLE);
+        txtRadioStat.setText(RadioLink.get().statusLine());
+    }
+
+    private void showRadioStatDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.radio_stat_title)
+                .setMessage(RadioLink.get().statusJson())
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
     }
 
     private void showOverlay(String text) {
@@ -386,6 +418,7 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        uiHandler.removeCallbacks(radioStatTick);
         G20Rc.get().removeListener(rcToJs);
         super.onPause();
         // 切后台时页面里的 visibilitychange 会发 release 停车，
@@ -398,6 +431,8 @@ public class ControlActivity extends AppCompatActivity {
         super.onResume();
         G20Rc.get().addListener(rcToJs);
         web.onResume();
+        uiHandler.removeCallbacks(radioStatTick);
+        uiHandler.post(radioStatTick);
     }
 
     @Override

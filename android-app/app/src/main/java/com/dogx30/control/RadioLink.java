@@ -127,6 +127,8 @@ final class RadioLink {
             o.put("pipe", pipeOk);
             o.put("g20", g20Ok);
             o.put("air", airNet != null);
+            o.put("local", airLocalIp());
+            o.put("nets", allV4());
             o.put("sentOk", sentOk);
             o.put("sentFail", sentFail);
             o.put("standing", standing);
@@ -134,6 +136,19 @@ final class RadioLink {
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    /** 钉在顶栏，不用翻黄条。 */
+    synchronized String statusLine() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(isLinkReady() ? "2.4G 已通 " : "2.4G 未通 ");
+        sb.append(status);
+        String local = airLocalIp();
+        if (!local.isEmpty()) sb.append(" 本机").append(local);
+        String nets = allV4();
+        if (!nets.isEmpty() && !nets.equals(local)) sb.append(" 网卡").append(nets);
+        sb.append(" ok").append(sentOk).append("/fail").append(sentFail);
+        return sb.toString();
     }
 
     synchronized void setScreenAxes(float fwd, float lat, float turn) {
@@ -417,6 +432,36 @@ final class RadioLink {
         if (n144 != null) return n144;
         if (lan1 != null) return lan1;
         return wired;
+    }
+
+    private String airLocalIp() {
+        ConnectivityManager cm = connectivity();
+        if (cm == null || airNet == null) return "";
+        return firstV4(cm.getLinkProperties(airNet));
+    }
+
+    private String allV4() {
+        ConnectivityManager cm = connectivity();
+        if (cm == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Network n : cm.getAllNetworks()) {
+            String ip = firstV4(cm.getLinkProperties(n));
+            if (ip.isEmpty()) continue;
+            if (sb.length() > 0) sb.append(',');
+            sb.append(ip);
+        }
+        return sb.toString();
+    }
+
+    private static String firstV4(@Nullable LinkProperties lp) {
+        if (lp == null) return "";
+        for (LinkAddress la : lp.getLinkAddresses()) {
+            InetAddress a = la.getAddress();
+            if (a instanceof Inet4Address && !a.isLoopbackAddress()) {
+                return a.getHostAddress();
+            }
+        }
+        return "";
     }
 
     @Nullable

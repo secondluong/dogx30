@@ -309,6 +309,8 @@ check('链路只跟顶栏 MESH/2.4G 按钮',
       !/nativeCall/.test(appJs) &&
       !/onclick=/.test(html.match(/id="btn-radio"[\s\S]*?>/)[0]) &&
       /btn_radio_path/.test(radioLayout) &&
+      /txt_radio_stat/.test(radioLayout) &&
+      /statusLine/.test(radioJava) &&
       /void toggleRadioPath\(/.test(radioBridge) &&
       /saveRadioPath/.test(radioBridge) &&
       /android_asset\/web\/index\.html/.test(radioBridge) &&
