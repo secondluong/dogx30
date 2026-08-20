@@ -125,6 +125,15 @@ function paintWalkButtons() {
 // ---------------------------------------------------------------------------
 
 function connect() {
+  // 本地包装页没有网关。硬连 ws 只会狂报错，顶栏一直像 MESH「重连中」。
+  if (offlineRadio || location.protocol === 'file:') {
+    app.radioPath = 'radio';
+    app.radioFallback = true;
+    applyRadioPath(false);
+    setLink(false);
+    renderControl();
+    return;
+  }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/ws`;
   const ws = new WebSocket(url);
@@ -152,9 +161,13 @@ function connect() {
       showBanner(isAppShell
         ? (app.radioPath === 'radio'
           ? '网关已断，当前仍是 2.4G 直达'
-          : 'MESH 已断。画面还在就先切回 MESH 重连；要备份再切 2.4G')
+          : 'MESH 已断。已自动切到 2.4G')
         : 'WiFi 已断，网关已放手。请用原厂 2.4G 手柄直达（无画面）', 8000);
     }
+    if (isAppShell && app.radioPath !== 'radio') {
+      setRadioPath('radio');
+    }
+    if (offlineRadio || location.protocol === 'file:') return;
     setTimeout(connect, RECONNECT_MS);
   };
 
@@ -474,6 +487,15 @@ function applyRadioPath(announce) {
 }
 
 function setRadioPath(path) {
+  // 没网关时切回 MESH 等于把自己锁死。
+  if (path !== 'radio' && (offlineRadio || location.protocol === 'file:')) {
+    app.radioPath = 'radio';
+    try { window.localStorage.setItem(RADIO_STORE, 'radio'); } catch (e) { /* ignore */ }
+    applyRadioPath(true);
+    renderControl();
+    showBanner('当前没有网关，只能走 2.4G', 4000);
+    return;
+  }
   app.radioPath = path === 'radio' ? 'radio' : 'mesh';
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
   applyRadioPath(true);

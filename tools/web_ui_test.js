@@ -294,14 +294,15 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /void command\(String name\)/.test(radioJava) &&
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge));
-check('2.4G 起立按钮按 App 自己的起趴状态切换',
-      /if \(radioDirect\(\)\) return 'stand'/.test(appJs) &&
-      /syncRadioStanding/.test(appJs) &&
-      /html\.shell-app \.hud-sticks/.test(styleText) &&
-      /offlineRadio/.test(appJs) &&
-      /detectAppShell/.test(appJs) &&
-      /android_asset/.test(appJs) &&
-      !/nativeRadioVel/.test(appJs));
+check('离线包装页强制 2.4G 不连网关 WS',
+      /offlineRadio \|\| location\.protocol === 'file:'/.test(appJs) &&
+      /只能走 2\.4G/.test(appJs) &&
+      /已自动切到 2\.4G/.test(appJs));
+check('App 网关不通立刻开本地页',
+      /void openConsole\(/.test(radioBridge) &&
+      /gatewayReachable/.test(radioBridge) &&
+      /hasIpNetwork/.test(radioBridge) &&
+      /setBackupRadio\(true\)/.test(radioBridge));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));
 var mediaJs = read('media.js');

@@ -2,8 +2,14 @@ package com.dogx30.control;
 
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -23,6 +29,11 @@ import android.widget.TextView;
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 /**
  * 遥控页。
  *
@@ -41,6 +52,8 @@ public class ControlActivity extends AppCompatActivity {
     private boolean usingLocalConsole;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
@@ -86,6 +99,12 @@ public class ControlActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String u) {
                 hideOverlay();
                 view.requestFocus();
+                if (usingLocalConsole) {
+                    view.evaluateJavascript(
+                            "document.documentElement.classList.add('shell-app');"
+                                    + "if(window.app&&app.setRadioPath)app.setRadioPath('radio');",
+                            null);
+                }
             }
 
             @Override
@@ -97,7 +116,9 @@ public class ControlActivity extends AppCompatActivity {
             }
         });
 
-        web.loadUrl(url);
+        // WiFi 关着还硬拉网关会卡很久，onReceivedError 也不一定马上到。
+        // 先探测：不通就立刻开包装里的 App 页，并强制 2.4G。
+        openConsole();
 
         // 误触返回键会直接退出遥控页，机器狗随即失去控制指令。必须二次确认。
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
@@ -142,10 +163,76 @@ public class ControlActivity extends AppCompatActivity {
         url = GatewayStore.consoleUrl(this);
         overlayHost.setText(GatewayStore.host(this));
         overlayPort.setText(String.valueOf(GatewayStore.port(this)));
-        web.loadUrl(url);
+        openConsole();
+    }
+
+    private void openConsole() {
+        if (!hasIpNetwork()) {
+            loadLocalConsole();
+            return;
+        }
+        final String probe = url;
+        io.execute(() -> {
+            final boolean ok = gatewayReachable(probe);
+            mainHandler.post(() -> {
+                if (isFinishing()) return;
+                if (ok) {
+                    usingLocalConsole = false;
+                    web.loadUrl(probe);
+                } else {
+                    loadLocalConsole();
+                }
+            });
+        });
+        // 探网卡太久时先给本地页，避免黑屏；探通了再切回网关。
+        mainHandler.postDelayed(() -> {
+            if (!usingLocalConsole && web != null
+                    && (web.getUrl() == null || web.getUrl().equals("about:blank"))) {
+                loadLocalConsole();
+            }
+        }, 1800);
+    }
+
+    private boolean hasIpNetwork() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return false;
+        for (Network n : cm.getAllNetworks()) {
+            NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+            if (caps == null) continue;
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    || caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    || (Build.VERSION.SDK_INT >= 31
+                        && caps.hasTransport(NetworkCapabilities.TRANSPORT_USB))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean gatewayReachable(String consoleUrl) {
+        HttpURLConnection c = null;
+        try {
+            URL u = new URL(consoleUrl);
+            c = (HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(1200);
+            c.setReadTimeout(1200);
+            c.setInstanceFollowRedirects(false);
+            c.setRequestMethod("GET");
+            int code = c.getResponseCode();
+            return code >= 200 && code < 500;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     private void loadLocalConsole() {
+        if (usingLocalConsole) {
+            String cur = web != null ? web.getUrl() : null;
+            if (cur != null && cur.contains("android_asset")) return;
+        }
         usingLocalConsole = true;
         hideOverlay();
         G20Rc.get().setBackupRadio(true);
@@ -368,6 +455,7 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        io.shutdownNow();
         if (web != null) {
             web.loadUrl("about:blank");
             web.destroy();
