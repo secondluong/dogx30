@@ -31,7 +31,7 @@ import androidx.appcompat.app.AppCompatActivity;
 public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
-    private Button btnRadioPath;
+    private TextView btnRadioPath;
     private LinearLayout overlay;
     private TextView overlayMsg;
     private EditText overlayHost;
@@ -166,8 +166,11 @@ public class ControlActivity extends AppCompatActivity {
         if (btnRadioPath == null) return;
         boolean radio = "radio".equals(GatewayStore.radioPath(this));
         btnRadioPath.setText(radio ? R.string.radio_24g : R.string.radio_mesh);
-        btnRadioPath.setBackgroundColor(radio ? 0xFFD29922 : 0xFF1C2230);
+        btnRadioPath.setBackgroundResource(radio ? R.drawable.btn_radio_on : R.drawable.btn_radio);
         btnRadioPath.setTextColor(radio ? 0xFF1A1400 : 0xFFE6EDF3);
+        btnRadioPath.setTypeface(btnRadioPath.getTypeface(), radio
+                ? android.graphics.Typeface.BOLD
+                : android.graphics.Typeface.NORMAL);
     }
 
     private void showOverlay(String text) {
@@ -243,6 +246,7 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public void radioCmd(String name) {
             if (name == null) return;
+            RadioLink.get().setEnabled(true);
             RadioLink.get().command(name);
         }
 

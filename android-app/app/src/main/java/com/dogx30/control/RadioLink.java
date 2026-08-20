@@ -28,16 +28,15 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * 2.4G 控狗跟云深处同一条路：CSDK 连上 G20 后出现 USB 网，
- * 再把 0x21 UDP 发到运动主机 192.168.1.103:43893。
- *
- * 不要用 G12/G20 串口数传管道发运动指令——那是天空端飞控口，
- * 管道会显示已连接，包却到不了运动主机。
+ * 2.4G 控狗跟云卓/云深处同一条 CSDK 路：
+ * createUDPPipeline(本地端口, "192.168.144.10", 43893) 再 writeData。
+ * 平板 USB 网只有 192.168.144.0/24，直接打 192.168.1.103 常常没有路由。
  */
 final class RadioLink {
 
     private static final String TAG = "RadioLink";
     private static final String ROBOT_IP = "192.168.1.103";
+    private static final String AIR_IP = "192.168.144.10";
     private static final int ROBOT_PORT = 43893;
     private static final int LOCAL_PORT = 43897;
     private static final int TICK_MS = 20;
@@ -81,12 +80,15 @@ final class RadioLink {
     private int sentOk;
     private int sentFail;
     private boolean pipeOk;
+    private boolean g20Ok;
     private String status = "off";
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
+    @Nullable private InetAddress airAddr;
     @Nullable private InetAddress robotAddr;
     @Nullable private Network airNet;
     @Nullable private Pipeline udpPipe;
+    @Nullable private Pipeline g20Pipe;
 
     private final Runnable loop = this::onTick;
 
@@ -114,7 +116,7 @@ final class RadioLink {
     }
 
     synchronized boolean isLinkReady() {
-        return enabled && (udp != null || pipeOk);
+        return enabled && (pipeOk || g20Ok || udp != null);
     }
 
     synchronized String statusJson() {
@@ -125,6 +127,7 @@ final class RadioLink {
             o.put("status", status);
             o.put("udp", udp != null);
             o.put("pipe", pipeOk);
+            o.put("g20", g20Ok);
             o.put("air", airNet != null);
             o.put("sentOk", sentOk);
             o.put("sentFail", sentFail);
@@ -144,8 +147,12 @@ final class RadioLink {
     }
 
     synchronized void command(String name) {
-        if (!enabled || name == null) return;
-        if (udp == null && !pipeOk) {
+        if (name == null) return;
+        if (!enabled) {
+            enabled = true;
+            start();
+        }
+        if (udp == null && !pipeOk && !g20Ok) {
             openUdp();
             openSdkUdp();
         }
@@ -272,23 +279,23 @@ final class RadioLink {
         try {
             Network net = findAirlink();
             if (net == null) {
-                status = "no-usb-net";
-                Log.w(TAG, status);
+                if (udp == null) status = "no-usb-net";
+                Log.w(TAG, "no-usb-net");
                 return;
             }
             if (udp != null && airNet != null && airNet.equals(net)) return;
             closeSocketOnly();
             airNet = net;
-            // 只绑 socket，不绑整个进程，避免把 WebView 也锁死在 USB 网上。
-            robotAddr = InetAddress.getByName(ROBOT_IP);
-            try {
-                robotAddr = net.getByName(ROBOT_IP);
-            } catch (Exception ignored) {
+            ConnectivityManager cm = connectivity();
+            if (cm != null) {
+                cm.bindProcessToNetwork(net);
             }
+            airAddr = resolve(net, AIR_IP);
+            robotAddr = resolve(net, ROBOT_IP);
             udp = new DatagramSocket();
             net.bindSocket(udp);
-            status = "udp-" + linkLabel(net);
-            Log.i(TAG, status + " -> " + robotAddr);
+            status = "udp-" + AIR_IP;
+            Log.i(TAG, status + " / " + ROBOT_IP);
         } catch (Exception e) {
             status = "udp-fail";
             Log.w(TAG, "udp", e);
@@ -296,54 +303,102 @@ final class RadioLink {
         }
     }
 
-    private synchronized void openSdkUdp() {
-        if (pipeOk && udpPipe != null) return;
-        closeSdkUdp();
+    @Nullable
+    private static InetAddress resolve(Network net, String ip) {
         try {
-            // 和云深处一样：目标是运动主机，不是 192.168.144.10。
-            udpPipe = PipelineManager.INSTANCE.createUDPPipeline(
-                    LOCAL_PORT, ROBOT_IP, ROBOT_PORT);
-            if (udpPipe == null) {
-                Log.w(TAG, "createUDPPipeline null");
-                return;
+            return net.getByName(ip);
+        } catch (Exception e) {
+            try {
+                return InetAddress.getByName(ip);
+            } catch (Exception e2) {
+                return null;
             }
-            udpPipe.setOnCommListener(new CommListener() {
-                @Override
-                public void onConnectSuccess() {
-                    pipeOk = true;
-                    if (udp == null) status = "pipe-up";
-                    Log.i(TAG, "udp pipeline -> " + ROBOT_IP);
-                }
-
-                @Override
-                public void onConnectFail(@Nullable SkyException e) {
-                    pipeOk = false;
-                    Log.w(TAG, "udp pipeline fail " + e);
-                }
-
-                @Override
-                public void onDisconnect() {
-                    pipeOk = false;
-                }
-
-                @Override
-                public void onReadData(@Nullable byte[] data) {
-                }
-            });
-            PipelineManager.INSTANCE.connectPipeline(udpPipe);
-        } catch (Throwable t) {
-            Log.w(TAG, "openSdkUdp", t);
         }
+    }
+
+    private synchronized void openSdkUdp() {
+        if ((pipeOk && udpPipe != null) || (g20Ok && g20Pipe != null)) return;
+        if (udpPipe == null) {
+            udpPipe = openPipe(LOCAL_PORT, AIR_IP, "udp144");
+        }
+        if (g20Pipe == null) {
+            try {
+                g20Pipe = PipelineManager.INSTANCE.createG12G20Pipeline();
+                if (g20Pipe != null) {
+                    g20Pipe.setOnCommListener(pipeListener("g20", false));
+                    PipelineManager.INSTANCE.connectPipeline(g20Pipe);
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "g20 pipe", t);
+            }
+        }
+    }
+
+    @Nullable
+    private Pipeline openPipe(int localPort, String ip, String tag) {
+        try {
+            Pipeline p = PipelineManager.INSTANCE.createUDPPipeline(
+                    localPort, ip, ROBOT_PORT);
+            if (p == null) return null;
+            p.setOnCommListener(pipeListener(tag, true));
+            PipelineManager.INSTANCE.connectPipeline(p);
+            return p;
+        } catch (Throwable t) {
+            Log.w(TAG, tag, t);
+            return null;
+        }
+    }
+
+    private CommListener pipeListener(final String tag, final boolean udpKind) {
+        return new CommListener() {
+            @Override
+            public void onConnectSuccess() {
+                if (udpKind) {
+                    pipeOk = true;
+                    status = "pipe-" + AIR_IP;
+                } else {
+                    g20Ok = true;
+                    if (!pipeOk) status = "g20-up";
+                }
+                Log.i(TAG, tag + " up");
+            }
+
+            @Override
+            public void onConnectFail(@Nullable SkyException e) {
+                if (udpKind) pipeOk = false;
+                else g20Ok = false;
+                Log.w(TAG, tag + " fail " + e);
+            }
+
+            @Override
+            public void onDisconnect() {
+                if (udpKind) pipeOk = false;
+                else g20Ok = false;
+            }
+
+            @Override
+            public void onReadData(@Nullable byte[] data) {
+            }
+        };
     }
 
     private void closeSdkUdp() {
         pipeOk = false;
-        if (udpPipe == null) return;
-        try {
-            PipelineManager.INSTANCE.disconnectPipeline(udpPipe);
-        } catch (Throwable ignored) {
+        g20Ok = false;
+        if (udpPipe != null) {
+            try {
+                PipelineManager.INSTANCE.disconnectPipeline(udpPipe);
+            } catch (Throwable ignored) {
+            }
+            udpPipe = null;
         }
-        udpPipe = null;
+        if (g20Pipe != null) {
+            try {
+                PipelineManager.INSTANCE.disconnectPipeline(g20Pipe);
+            } catch (Throwable ignored) {
+            }
+            g20Pipe = null;
+        }
     }
 
     @Nullable
@@ -365,10 +420,6 @@ final class RadioLink {
         if (n144 != null) return n144;
         if (lan1 != null) return lan1;
         return wired;
-    }
-
-    private static String linkLabel(Network net) {
-        return String.valueOf(net);
     }
 
     @Nullable
@@ -415,10 +466,18 @@ final class RadioLink {
 
     private void closeSocketOnly() {
         airNet = null;
+        airAddr = null;
         robotAddr = null;
         if (udp != null) {
             udp.close();
             udp = null;
+        }
+        ConnectivityManager cm = connectivity();
+        if (cm != null) {
+            try {
+                cm.bindProcessToNetwork(null);
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -438,7 +497,7 @@ final class RadioLink {
         handler.postDelayed(loop, TICK_MS);
         if (tick % 50 == 0) {
             if (udp == null) openUdp();
-            if (!pipeOk) openSdkUdp();
+            if (!pipeOk && !g20Ok) openSdkUdp();
         }
         G20Rc.Snapshot snap = G20Rc.get().snapshot();
         if (tick % HB_EVERY == 0) {
@@ -519,25 +578,44 @@ final class RadioLink {
         buf.putInt(value);
         buf.putInt(0);
         byte[] pkt = buf.array();
-        boolean ok = false;
-        // 优先本机 UDP（与云深处相同）。管道只作备选，且目标必须是 .103。
-        if (udp != null && robotAddr != null) {
-            try {
-                udp.send(new DatagramPacket(pkt, pkt.length, robotAddr, ROBOT_PORT));
-                ok = true;
-            } catch (Exception e) {
-                Log.w(TAG, "udp send", e);
-            }
+        // 只走一条成功路径。起步/力控是切换指令，多路齐发会互相抵消。
+        if (pipeOk && udpPipe != null && writePipe(udpPipe, pkt)) {
+            sentOk++;
+            return;
         }
-        if (!ok && pipeOk && udpPipe != null) {
-            try {
-                udpPipe.writeData(pkt);
-                ok = true;
-            } catch (Throwable t) {
-                Log.w(TAG, "pipe send", t);
-            }
+        if (g20Ok && g20Pipe != null && writePipe(g20Pipe, pkt)) {
+            sentOk++;
+            return;
         }
-        if (ok) sentOk++;
-        else sentFail++;
+        if (udp != null && sendUdp(pkt, airAddr)) {
+            sentOk++;
+            return;
+        }
+        if (udp != null && sendUdp(pkt, robotAddr)) {
+            sentOk++;
+            return;
+        }
+        sentFail++;
+    }
+
+    private static boolean writePipe(Pipeline pipe, byte[] pkt) {
+        try {
+            pipe.writeData(pkt);
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "pipe send", t);
+            return false;
+        }
+    }
+
+    private boolean sendUdp(byte[] pkt, @Nullable InetAddress dest) {
+        if (dest == null || udp == null) return false;
+        try {
+            udp.send(new DatagramPacket(pkt, pkt.length, dest, ROBOT_PORT));
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "udp send " + dest, e);
+            return false;
+        }
     }
 }

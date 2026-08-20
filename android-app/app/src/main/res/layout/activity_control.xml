@@ -9,22 +9,21 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- 链路切换必须是原生按钮。WebView 里 HTML+JS 各绑一次会切过去再切回来，
-         看起来像点了没反应；JS 桥用 fn.call 也会静默失败。 -->
-    <Button
+    <TextView
         android:id="@+id/btn_radio_path"
         android:layout_width="wrap_content"
         android:layout_height="40dp"
         android:layout_gravity="top|end"
         android:layout_marginTop="8dp"
         android:layout_marginEnd="108dp"
-        android:background="#1C2230"
-        android:elevation="8dp"
-        android:minWidth="76dp"
+        android:background="@drawable/btn_radio"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:minWidth="72dp"
         android:paddingLeft="14dp"
         android:paddingRight="14dp"
         android:text="@string/radio_mesh"
-        android:textAllCaps="false"
         android:textColor="#E6EDF3"
         android:textSize="14sp" />
 

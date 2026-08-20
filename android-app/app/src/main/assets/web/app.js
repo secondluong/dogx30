@@ -1028,6 +1028,10 @@ function guarded(fn) {
     if (isAppShell && app.radioPath === 'radio') {
       const name = radioCmdFromEl(ev && ev.currentTarget);
       if (name && nativeRadioCmd(name)) {
+        const st = nativeRadioStatus() || {};
+        if (!st.ready) {
+          showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
+        }
         if (name === 'stand') {
           if (hasRadioStanding()) {
             syncRadioStanding();
