@@ -1,25 +1,28 @@
 package com.dogx30.control;
 
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
 
-import com.skydroid.rcsdk.PipelineManager;
-import com.skydroid.rcsdk.comm.CommListener;
-import com.skydroid.rcsdk.common.error.SkyException;
-import com.skydroid.rcsdk.common.pipeline.Pipeline;
-
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * 2.4G 备份：把起立/趴下/行走等 0x21 指令直发运动主机，不经网关。
- * UDP 走 192.168.1.103:43893；同时写入 G20 数传管道，网关 WiFi 不通时仍能到狗。
+ * 仅在操作员明确切到 2.4G 时，把 0x21 直发运动主机。
+ * 不碰云卓 Pipeline / 射频开关：那两条会把 G20 画面一起掐掉。
  */
 final class RadioLink {
 
@@ -62,11 +65,15 @@ final class RadioLink {
     private boolean prevSit;
     private boolean prevEstop;
     private int tick;
+    @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
     @Nullable private InetAddress robotAddr;
-    @Nullable private Pipeline pipe;
 
     private final Runnable loop = this::onTick;
+
+    synchronized void attach(Context ctx) {
+        if (ctx != null) appCtx = ctx.getApplicationContext();
+    }
 
     synchronized void setEnabled(boolean on) {
         if (enabled == on) return;
@@ -158,32 +165,76 @@ final class RadioLink {
     private void start() {
         confirmed = false;
         tick = 0;
-        try {
-            robotAddr = InetAddress.getByName(ROBOT_IP);
-            udp = new DatagramSocket();
-        } catch (Exception e) {
-            Log.w(TAG, "udp", e);
-        }
-        try {
-            pipe = PipelineManager.INSTANCE.createG12G20Pipeline();
-            if (pipe != null) {
-                pipe.setOnCommListener(new CommListener() {
-                    @Override public void onConnectSuccess() { }
-                    @Override public void onConnectFail(SkyException e) {
-                        Log.w(TAG, "pipe fail " + e);
-                    }
-                    @Override public void onDisconnect() { }
-                    @Override public void onReadData(byte[] data) { }
-                });
-                PipelineManager.INSTANCE.connectPipeline(pipe);
-            }
-        } catch (Throwable t) {
-            Log.w(TAG, "pipe", t);
-        }
+        openUdp();
         if (!running) {
             running = true;
             handler.post(loop);
         }
+    }
+
+    private synchronized void openUdp() {
+        try {
+            robotAddr = InetAddress.getByName(ROBOT_IP);
+            if (udp != null) {
+                udp.close();
+                udp = null;
+            }
+            udp = new DatagramSocket();
+            bindToAirlink(udp);
+        } catch (Exception e) {
+            Log.w(TAG, "udp", e);
+        }
+    }
+
+    private void bindToAirlink(DatagramSocket sock) {
+        if (appCtx == null) return;
+        ConnectivityManager cm = (ConnectivityManager)
+                appCtx.getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return;
+        Network pick = null;
+        Network wifiLan = null;
+        for (Network n : cm.getAllNetworks()) {
+            NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+            LinkProperties lp = cm.getLinkProperties(n);
+            if (lp == null || !hasLanV4(lp)) continue;
+            if (isWired(caps)) {
+                pick = n;
+                break;
+            }
+            if (wifiLan == null) wifiLan = n;
+        }
+        if (pick == null) pick = wifiLan;
+        if (pick == null) return;
+        try {
+            pick.bindSocket(sock);
+            Log.i(TAG, "udp bound " + pick);
+        } catch (Exception e) {
+            Log.w(TAG, "bindSocket", e);
+        }
+    }
+
+    private static boolean isWired(@Nullable NetworkCapabilities caps) {
+        if (caps == null) return false;
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return true;
+        if (Build.VERSION.SDK_INT >= 31
+                && caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean hasLanV4(LinkProperties lp) {
+        for (LinkAddress la : lp.getLinkAddresses()) {
+            InetAddress a = la.getAddress();
+            if (!(a instanceof Inet4Address) || a.isLoopbackAddress()) continue;
+            byte[] b = a.getAddress();
+            int a0 = b[0] & 0xff;
+            int a1 = b[1] & 0xff;
+            if (a0 == 192 && a1 == 168) return true;
+            if (a0 == 10) return true;
+            if (a0 == 172 && a1 >= 16 && a1 <= 31) return true;
+        }
+        return false;
     }
 
     private void stop() {
@@ -192,14 +243,6 @@ final class RadioLink {
         if (udp != null) {
             udp.close();
             udp = null;
-        }
-        if (pipe != null) {
-            try {
-                PipelineManager.INSTANCE.disconnectPipeline(pipe);
-            } catch (Throwable t) {
-                Log.w(TAG, "pipe close", t);
-            }
-            pipe = null;
         }
     }
 
@@ -282,13 +325,6 @@ final class RadioLink {
                 udp.send(new DatagramPacket(pkt, pkt.length, robotAddr, ROBOT_PORT));
             } catch (Exception e) {
                 Log.w(TAG, "udp send", e);
-            }
-        }
-        if (pipe != null) {
-            try {
-                if (pipe.isConnected()) pipe.writeData(pkt);
-            } catch (Throwable t) {
-                Log.w(TAG, "pipe send", t);
             }
         }
     }

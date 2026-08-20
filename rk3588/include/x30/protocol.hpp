@@ -214,16 +214,20 @@ inline bool IsStandSitTransient(BasicState s) {
   return s == BasicState::kSitToStand || s == BasicState::kStandToSit;
 }
 
+// 运动主机自己报的站立态。不含「我们记得 RL 已起立、遥测仍报坐下」。
+inline bool TelemUpright(BasicState s) {
+  return s == BasicState::kInitialStanding ||
+         s == BasicState::kTorqueStanding ||
+         s == BasicState::kStepping;
+}
+
 // 原厂 LIO 要求站稳再开。RL 起立后遥测仍报坐下，要看 rl_standing。
 // 起立中 / 坐下中身子在动，不开。
 inline bool StandingForLio(BasicState s, bool rl_standing = false) {
   if (IsStandSitTransient(s) || s == BasicState::kEmergencyOrFall) {
     return false;
   }
-  if (s == BasicState::kInitialStanding || s == BasicState::kTorqueStanding ||
-      s == BasicState::kStepping) {
-    return true;
-  }
+  if (TelemUpright(s)) return true;
   return rl_standing && s == BasicState::kSitting;
 }
 

@@ -112,6 +112,8 @@ class MotionClient {
   // 而不是假设发了就一定生效。
 
   void StandOrSit();        // 坐 <-> 站。发原厂手柄那对 RL 指令，不是文档里的旧切换
+  void StandUp();           // 只起立，不看记忆
+  void SitDown();           // 只趴下，不看记忆
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
   void EnterTorqueStand();  // 初始站立 -> 力控站立
   void ToggleStepping();    // 力控站立 <-> 踏步 切换

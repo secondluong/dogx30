@@ -588,6 +588,10 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
 
     if (name == "stand") {
       client_.StandOrSit();
+    } else if (name == "stand_up") {
+      client_.StandUp();
+    } else if (name == "sit_down" || name == "sit") {
+      client_.SitDown();
     } else if (name == "unload") {
       client_.UnloadForce();
     } else if (name == "torque") {
@@ -1034,7 +1038,9 @@ void RobotService::NoteLioSample(float x, float y, float yaw) {
 bool RobotService::WalkHold() const {
   if (!cloud_) return false;
   const RobotState s = client_.Snapshot();
-  if (!StandingForLio(s.basic_state, s.rl_standing)) return false;
+  // 拦走路只看运动主机自己报的站立。RL 记忆 + 遥测坐下时狗经常其实趴着，
+  // 这时还按「对准中」会把 MESH 摇杆和起步全锁死。
+  if (!TelemUpright(s.basic_state)) return false;
   std::lock_guard<std::mutex> lock(lio_mutex_);
   if (!lio_ready_) return true;
   return !lio_got_msg_ ||
@@ -1057,8 +1063,8 @@ std::string RobotService::BuildStateJson() const {
     lio_fresh = lio_got &&
                 Clock::now() - lio_last_msg_ < std::chrono::milliseconds(800);
   }
-  const bool standing = StandingForLio(s.basic_state, s.rl_standing);
-  const bool aligning = cloud_ && standing && !(lio_ready && lio_fresh);
+  const bool aligning =
+      cloud_ && TelemUpright(s.basic_state) && !(lio_ready && lio_fresh);
 
   // RL 起立后运动主机仍报「坐下」。芯片若跟着撒谎，人会以为没起来而连点起立。
   const char* state_text = ToString(s.basic_state);

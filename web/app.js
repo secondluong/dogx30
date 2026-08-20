@@ -19,6 +19,11 @@ const RADIO_STORE = 'x30.radioPath';
 function loadRadioPath() {
   if (!isAppShell) return 'mesh';
   try {
+    // 上一版开机就开数传/射频，G20 画面和控制一起没了。只清一次，回到 MESH。
+    if (!window.localStorage.getItem('x30.radioPath.restoreMesh')) {
+      window.localStorage.setItem(RADIO_STORE, 'mesh');
+      window.localStorage.setItem('x30.radioPath.restoreMesh', '1');
+    }
     const v = window.localStorage.getItem(RADIO_STORE);
     if (v === 'radio' || v === 'mesh') return v;
   } catch (e) { /* 无 storage 时按 MESH */ }
@@ -131,8 +136,8 @@ function connect() {
     if (dropFromLive) {
       showBanner(isAppShell
         ? (app.radioPath === 'radio'
-          ? '网关已断，继续走 2.4G 备份无线电'
-          : 'MESH 已断。要备份请切到 2.4G，用已对频手柄')
+          ? '网关已断，当前仍是 2.4G 直达'
+          : 'MESH 已断。画面还在就先切回 MESH 重连；要备份再切 2.4G')
         : 'WiFi 已断，网关已放手。请用原厂 2.4G 手柄直达（无画面）', 8000);
     }
     setTimeout(connect, RECONNECT_MS);
@@ -220,10 +225,18 @@ function onGaitResult(msg) {
   showBanner(msg.msg || '步态切换失败', 9000);
 }
 
+function hasNativeRadio() {
+  try {
+    return !!(window.X30Native && typeof window.X30Native.radioCmd === 'function');
+  } catch (e) {
+    return false;
+  }
+}
+
 function send(obj) {
   if (!obj) return;
-  // 2.4G 是备份无线电，运动指令不得再走网关。急停若网关还在，仍发一条兜底。
-  if (isAppShell && app.radioPath === 'radio') {
+  // 只有安装包真能直达时，2.4G 才停掉网关运动。否则切 2.4G 等于把 MESH 也掐死。
+  if (isAppShell && app.radioPath === 'radio' && hasNativeRadio()) {
     const t = obj.t;
     if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'ptz') return;
     if (t === 'cmd' && obj.name !== 'estop') return;
@@ -247,13 +260,13 @@ app.radioOnly = radioOnly;
 function radioHint(kind) {
   if (isAppShell && app.radioPath === 'radio') {
     showBanner(kind === 'g20'
-      ? '当前 2.4G：起立/趴下/行走直达运动主机，不经网关'
-      : '当前 App 还发不出 2.4G 姿态，请重装含 RadioLink 的安装包');
+      ? '当前 2.4G：起立/趴下/行走直达运动主机'
+      : '2.4G 姿态没发出去。请先切回 MESH 看画面，或重装 App');
     return;
   }
   showBanner(kind === 'g20'
-    ? '网关未连。要备份链路请切到 2.4G，用已对频手柄'
-    : '网关未连，屏幕按钮走不了。备份请切到 2.4G');
+    ? '网关未连。要备份请切到 2.4G'
+    : '网关未连，屏幕按钮走不了。请先恢复 MESH');
 }
 app.radioHint = radioHint;
 
@@ -370,12 +383,16 @@ function applyRadioPath(announce) {
   app.radioFallback = app.radioPath === 'radio';
   notifyNativeRadio();
   if (app.radioPath === 'radio') {
-    if (app.hasControl) {
-      app.hasControl = false;
-      send({ t: 'yield' });
-    }
-    if (announce) {
-      showBanner('已切到 2.4G。起立/趴下/行走直达运动主机，不经网关');
+    if (hasNativeRadio()) {
+      if (app.hasControl) {
+        app.hasControl = false;
+        send({ t: 'yield' });
+      }
+      if (announce) {
+        showBanner('已切到 2.4G。起立/趴下走无线电直达，不经网关');
+      }
+    } else if (announce) {
+      showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
     }
     paintRadioBtn();
     return;
@@ -419,8 +436,9 @@ function requestControl() {
 
 function setLink(online) {
   const chip = $('chip-link');
-  chip.classList.toggle('online', online);
-  $('link-text').textContent = online ? '已连接'
+  chip.classList.toggle('online', online && app.alive);
+  $('link-text').textContent = online
+      ? (app.alive ? '已连接' : '狗未接通')
       : (app.radioFallback ? '2.4G' : '重连中');
   if ($('btn-settings')) $('btn-settings').classList.toggle('online', online);
   if (!online) {
@@ -454,6 +472,12 @@ const fmt = (v, n = 2) => (typeof v === 'number' ? v.toFixed(n) : '—');
 
 function renderState(s) {
   app.alive = !!s.alive;
+  setLink(linkOpen());
+  if (linkOpen() && !s.alive && !app.warnedRobotDown) {
+    app.warnedRobotDown = true;
+    showBanner('网关在，但够不着狗。把板子 eth0 网线插回机身口，并确认狗已开机', 15000);
+  }
+  if (s.alive) app.warnedRobotDown = false;
   app.basicState = s.basic_state;
   app.rlStanding = !!s.rl_standing;
   app.emergencyLocked = s.basic_state === STATE_EMERGENCY || !!s.emergency_source;
@@ -877,6 +901,7 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
   b.addEventListener('click', guarded(() => {
     let name = b.dataset.cmd;
     if (name === 'stand' && app.emergencyLocked) name = 'unload';
+    else if (name === 'stand') name = isStandingUi() ? 'sit_down' : 'stand_up';
     send({ t: 'cmd', name });
     markPending(b);
     if (name === 'step' && app.lioAligning) {
@@ -889,7 +914,7 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
     } else if (name === 'step') {
       app.walkMode = 'step';
       paintWalkButtons();
-    } else if (name === 'stand' && isStandingUi()) {
+    } else if (name === 'sit_down') {
       app.walkMode = null;
       paintWalkButtons();
     }

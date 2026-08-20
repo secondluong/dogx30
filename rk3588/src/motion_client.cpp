@@ -414,6 +414,39 @@ void MotionClient::StandOrSit() {
   }
 }
 
+void MotionClient::StandUp() {
+  const RobotState s = Snapshot();
+  if (s.telemetry_alive && IsStandSitTransient(s.basic_state)) {
+    std::printf("[运动] 忽略起立：当前正在%s\n", ToString(s.basic_state));
+    return;
+  }
+  ReleaseAxes();
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    last_stand_sit_ = LastStandSit::kStood;
+    state_.rl_standing = true;
+  }
+  std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n", ToString(s.basic_state));
+  SendSimple(cmd::kRlStandUp);
+}
+
+void MotionClient::SitDown() {
+  const RobotState s = Snapshot();
+  if (s.telemetry_alive && IsStandSitTransient(s.basic_state)) {
+    std::printf("[运动] 忽略趴下：当前正在%s\n", ToString(s.basic_state));
+    return;
+  }
+  ReleaseAxes();
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    last_stand_sit_ = LastStandSit::kSat;
+    state_.rl_standing = false;
+    axes_unlocked_ = false;
+  }
+  std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n", ToString(s.basic_state));
+  SendSimple(cmd::kRlSitDown);
+}
+
 void MotionClient::UnloadForce() {
   // 软急停后关节自锁。原厂 App「卸力」、手柄 ⑤/㉑ 打的是 0x21010202，
   // 不是 RL 起/趴。现场急停后再发 0x21010223/22，主机不应，狗起不来。

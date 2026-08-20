@@ -11,10 +11,8 @@ import androidx.annotation.Nullable;
 import com.skydroid.rcsdk.KeyManager;
 import com.skydroid.rcsdk.RCSDKManager;
 import com.skydroid.rcsdk.SDKManagerCallBack;
-import com.skydroid.rcsdk.common.callback.CompletionCallback;
 import com.skydroid.rcsdk.common.callback.CompletionCallbackWith;
 import com.skydroid.rcsdk.common.error.SkyException;
-import com.skydroid.rcsdk.key.AirLinkKey;
 import com.skydroid.rcsdk.key.RemoteControllerKey;
 import com.skydroid.rcsdk.utils.RCSDKUtils;
 
@@ -135,6 +133,7 @@ public final class G20Rc {
     public synchronized void start(Context context) {
         if (started) return;
         started = true;
+        RadioLink.get().attach(context);
         try {
             RCSDKManager.INSTANCE.initSDK(context.getApplicationContext(), sdkCb);
             RCSDKManager.INSTANCE.setMainThreadCallBack(true);
@@ -166,24 +165,14 @@ public final class G20Rc {
         return snapshot().toJson();
     }
 
-    /** 2.4G 备份：打开射频，通道由已对频接收机直收，不经网关。 */
+    /** 只有顶栏明确切到 2.4G 才开直达。开机/断线不要动射频，否则 G20 画面会没。 */
     public void setBackupRadio(boolean on) {
         backupRadio = on;
         RadioLink.get().setEnabled(on);
-        if (!on) return;
-        try {
-            KeyManager.INSTANCE.set(
-                    AirLinkKey.INSTANCE.getKeyRCRFEnable(),
-                    Boolean.TRUE,
-                    new CompletionCallback() {
-                        @Override
-                        public void onResult(@Nullable SkyException e) {
-                            if (e != null) Log.w(TAG, "KeyRCRFEnable: " + e);
-                        }
-                    });
-        } catch (Throwable t) {
-            Log.w(TAG, "KeyRCRFEnable", t);
-        }
+    }
+
+    public void setWsDown(boolean down) {
+        // 网关断开不再自动开数传。上一版会把画面和控制一起掐死。
     }
 
     private void ensurePolling() {

@@ -201,6 +201,11 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public void setMotionDirect(boolean on) {
+            G20Rc.get().setWsDown(on);
+        }
+
+        @JavascriptInterface
         public void radioCmd(String name) {
             if (name == null) return;
             RadioLink.get().command(name);
