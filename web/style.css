@@ -129,6 +129,7 @@ body {
 
 .btn-ghost.held { background: var(--ok); border-color: var(--ok); color: #06210d; font-weight: 600; }
 #btn-radio { display: none; min-width: 4.6em; }
+.radio-slot { display: none; }
 #btn-radio.radio-on {
   background: var(--warn);
   border-color: var(--warn);
@@ -873,6 +874,12 @@ html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
 html.shell-app #btn-radio { display: none !important; }
 html.shell-app #btn-control { display: none !important; }
+html.shell-app #radio-slot {
+  display: inline-block;
+  width: 80px;
+  height: 40px;
+  flex: 0 0 80px;
+}
 html.shell-app:not(.radio-24) #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }
 html.shell-app #chip-link.radio-stat {
@@ -1062,7 +1069,8 @@ html.shell-app .hud-info {
 /* 网页：趴下只藏步态/踏面/身高。虚拟摇杆由「摇杆」按钮开关，
    趴着也能转布控球，不能用 dog-prone 把杆锁死。
    App 壳没有虚拟杆，由 html.shell-app 整块关掉。 */
-.dog-prone .hud-menus { display: none !important; }
+/* 2.4G 以手柄起/趴为准，页面 class 可能还没跟上，菜单仍要能点。 */
+html:not(.radio-24) .dog-prone .hud-menus { display: none !important; }
 
 .hud-sticks { position: absolute; inset: 0; z-index: 8; pointer-events: none; }
 .hud-sticks .stick-wrap { position: absolute; bottom: 88px; pointer-events: auto; }

@@ -372,6 +372,7 @@ function syncRadioStanding() {
     wrap.classList.toggle('dog-prone', !up);
   }
   paintStandButton();
+  paintWalkButtons();
 }
 
 // 2.4G 没有网关遥测时，本地先把起立后的步态/身高菜单亮出来。
@@ -1046,8 +1047,8 @@ function radioCmdFromEl(el) {
   if (el.dataset.cmd) {
     if (el.dataset.cmd === 'stand') {
       if (app.emergencyLocked) return 'unload';
-      // 2.4G 以 App 自己记的起/趴为准，不能看网关遥测，否则一直再发起立。
-      if (radioDirect()) return 'stand';
+      // 明确发起立或趴下。发「stand」会翻转，狗已经站着时页面按钮就把狗按趴。
+      if (radioDirect()) return nativeRadioStanding() ? 'sit_down' : 'stand_up';
       return isStandingUi() ? 'sit_down' : 'stand_up';
     }
     return el.dataset.cmd;
@@ -1068,16 +1069,7 @@ function guarded(fn) {
         if (!st.ready) {
           showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
         }
-        if (name === 'stand') {
-          if (hasRadioStanding()) {
-            syncRadioStanding();
-            applyRadioPose(app.rlStanding ? 'stand_up' : 'sit_down');
-          } else {
-            applyRadioPose(app.rlStanding ? 'sit_down' : 'stand_up');
-          }
-        } else {
-          applyRadioPose(name);
-        }
+        applyRadioPose(name);
         markPending(ev.currentTarget);
         return;
       }
