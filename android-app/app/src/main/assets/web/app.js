@@ -34,6 +34,9 @@ function loadRadioPath() {
   if (!isAppShell) return 'mesh';
   if (offlineRadio) return 'radio';
   try {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'radio';
+  } catch (e) { /* 当在线 */ }
+  try {
     // 上一版开机就开数传/射频，G20 画面和控制一起没了。只清一次，回到 MESH。
     if (!window.localStorage.getItem('x30.radioPath.restoreMesh')) {
       window.localStorage.setItem(RADIO_STORE, 'mesh');

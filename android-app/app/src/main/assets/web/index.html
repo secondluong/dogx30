@@ -5,10 +5,15 @@
 (function () {
   var href = String(location.href || '');
   var q = String(location.search || '');
-  if (q.indexOf('shell=app') !== -1 ||
-      location.protocol === 'file:' ||
-      href.indexOf('android_asset') !== -1) {
+  var local = location.protocol === 'file:' || href.indexOf('android_asset') !== -1;
+  if (q.indexOf('shell=app') !== -1 || local) {
     document.documentElement.classList.add('shell-app');
+  }
+  if (local) {
+    document.addEventListener('DOMContentLoaded', function () {
+      var b = document.getElementById('btn-radio');
+      if (b) b.textContent = '2.4G';
+    });
   }
 })();
 </script>
@@ -17,7 +22,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260820j">
+<link rel="stylesheet" href="style.css?v=20260820k">
 </head>
 <body>
 
@@ -357,6 +362,6 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="app.js?v=20260820j"></script>
+<script src="app.js?v=20260820k"></script>
 </body>
 </html>
