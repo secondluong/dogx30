@@ -1,9 +1,23 @@
 #include "x30/robot_service.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#if !defined(_WIN32)
+#include <sys/socket.h>
+#endif
 
 #include "x30/json.hpp"
+#include "x30/net_util.hpp"
+#include "x30/xmlrpc.hpp"
+
+#if !defined(_WIN32)
+#include <unistd.h>
+#define closesocket ::close
+#endif
 
 namespace x30 {
 namespace {
@@ -82,6 +96,16 @@ bool RobotService::Start(std::string* error) {
     if (LoadMediaConfig(cfg_.media_config, &mc, &media_err)) {
       std::printf("媒体源 %zu 路，出口 %s\n", mc.sources.size(),
                   mc.webrtc_base.c_str());
+      if (!mc.ptz_host.empty()) {
+        PtzConfig pc;
+        pc.host = mc.ptz_host;
+        pc.port = mc.ptz_port;
+        pc.user = mc.ptz_user;
+        pc.password = mc.ptz_password;
+        pc.channel = mc.ptz_channel;
+        ptz_ = std::make_unique<PtzClient>(std::move(pc));
+        ptz_->Start();
+      }
       media_ = std::make_unique<MediaRegistry>(std::move(mc));
     } else {
       std::fprintf(stderr, "媒体配置未加载（视频不可用）: %s\n",
@@ -93,8 +117,29 @@ bool RobotService::Start(std::string* error) {
   // 有遥控端订阅为止 —— 没人看的时候不该在机器狗的 ROS 上挂一个订阅者。
   if (cfg_.cloud_enabled) {
     cloud_ = std::make_unique<CloudBridge>(cfg_.cloud, server_);
-    std::printf("点云桥接已就绪：master %s，话题 %s\n",
-                cfg_.cloud.master_uri.c_str(), cfg_.cloud.topic.c_str());
+    cloud_->SetFrameHandler([this](const PointCloudFrame& f) {
+      const auto now = Clock::now();
+      if (last_scan_.time_since_epoch().count() != 0 &&
+          now - last_scan_ > std::chrono::seconds(5)) {
+        localizer_.Reset();
+      }
+      last_scan_ = now;
+      const RobotState s = client_.Snapshot();
+      if (!localizer_.seeded()) {
+        if (std::hypot(s.odom_x, s.odom_y) > 0.05f) {
+          localizer_.Seed(s.odom_x, s.odom_y, s.odom_yaw);
+        } else {
+          localizer_.Seed(0.0f, 0.0f, s.yaw * 0.0174532925f);
+        }
+      }
+      localizer_.SetImuYaw(s.yaw * 0.0174532925f);
+      if (!f.xyz.empty()) {
+        localizer_.Feed(f.xyz.data(), f.xyz.size() / 3);
+      }
+    });
+    std::printf("点云桥接已就绪：master %s，话题 %s / %s\n",
+                cfg_.cloud.master_uri.c_str(), cfg_.cloud.topic.c_str(),
+                cfg_.cloud.registered_topic.c_str());
   }
 
   server_.SetStaticRoot(cfg_.static_root);
@@ -108,6 +153,7 @@ bool RobotService::Start(std::string* error) {
 
   gaits_.Start();
   if (cloud_) cloud_->Start();
+  StartBatteryRos();
   running_.store(true);
   state_thread_ = std::thread(&RobotService::StateLoop, this);
   return true;
@@ -116,6 +162,8 @@ bool RobotService::Start(std::string* error) {
 void RobotService::Stop() {
   if (!running_.exchange(false)) return;
   if (state_thread_.joinable()) state_thread_.join();
+  if (ptz_) ptz_->Stop();
+  StopBatteryRos();
   if (cloud_) cloud_->Stop();
   gaits_.Stop();
   server_.Stop();
@@ -154,6 +202,7 @@ void RobotService::ReleaseControl(WsServer::ClientId id, bool zero_axes) {
   if (released && zero_axes) {
     // 控制端走了就立刻停车，不等看门狗那 300 ms。
     client_.ReleaseAxes();
+    if (ptz_) ptz_->StopMove();
   }
   if (released) {
     client_.SetCommanding(false);
@@ -482,9 +531,15 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
 
     if (name == "stand") {
       client_.StandOrSit();
+    } else if (name == "unload") {
+      client_.UnloadForce();
     } else if (name == "torque") {
       client_.EnterTorqueStand();
     } else if (name == "step") {
+      if (WalkHold()) {
+        SendError(id, "lio_wait", "LIO 还在对准，请站稳，不要走");
+        return;
+      }
       client_.ToggleStepping();
     } else if (name == "savedata") {
       client_.SaveData();
@@ -536,12 +591,28 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     return;
   }
 
+  if (t == "ptz") {
+    if (!HoldsControl(id)) {
+      SendError(id, "no_control", "未持有控制权，请先发送 claim");
+      return;
+    }
+    if (ptz_) {
+      ptz_->Set(Clamp01(msg.Number("pan")), Clamp01(msg.Number("tilt")),
+                Clamp01(msg.Number("zoom")));
+    }
+    return;
+  }
+
   if (t == "vel" || t == "pose" || t == "release") {
     if (!HoldsControl(id)) {
       SendError(id, "no_control", "未持有控制权，请先发送 claim");
       return;
     }
     if (t == "vel") {
+      if (WalkHold()) {
+        client_.SetVelocity(0, 0, 0);
+        return;
+      }
       client_.SetVelocity(Clamp01(msg.Number("vx")), Clamp01(msg.Number("vy")),
                           Clamp01(msg.Number("wz")));
     } else if (t == "pose") {
@@ -557,6 +628,351 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
 }
 
 // ---------------------------------------------------------------------------
+// 电池 / 里程计：运动 UDP 经常没有 0x21050F0A，RL 起立后腿式里程计
+// 也整段是 0。感知主机的 /battery/*、/leg_odom、/mileage/* 作后备。
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string LookupRosType(const std::string& master_uri, const std::string& topic) {
+  XmlRpcValue reply;
+  std::string err;
+  if (!XmlRpcCall(master_uri, "getTopicTypes", {XmlRpcValue::Str("/x30_batt")},
+                  &reply, &err, 2000)) {
+    return "";
+  }
+  if (reply.At(0).AsInt() != 1) return "";
+  const XmlRpcValue& list = reply.At(2);
+  for (size_t i = 0; i < list.Size(); ++i) {
+    if (list.At(i).At(0).AsString() == topic) return list.At(i).At(1).AsString();
+  }
+  return "";
+}
+
+bool DecodeRosFloat(const uint8_t* data, size_t len, float* out) {
+  if (len >= 8) {
+    double d = 0;
+    std::memcpy(&d, data, sizeof(d));
+    if (d > -1e6 && d < 1e6) {
+      *out = static_cast<float>(d);
+      return true;
+    }
+  }
+  if (len >= 4) {
+    std::memcpy(out, data, sizeof(float));
+    return true;
+  }
+  return false;
+}
+
+// UDP 0x0BAA0001 只是敲门。真正让 /lio_odom 出数的是 /lio_enable。
+bool CallLioEnable(const std::string& master_uri, bool on) {
+  XmlRpcValue reply;
+  std::string err;
+  if (!XmlRpcCall(master_uri, "lookupService",
+                  {XmlRpcValue::Str("/x30_lio"), XmlRpcValue::Str("/lio_enable")},
+                  &reply, &err, 2000)) {
+    return false;
+  }
+  if (reply.At(0).AsInt() != 1) return false;
+  const std::string uri = reply.At(2).AsString();
+  const auto pos = uri.rfind(':');
+  if (pos == std::string::npos) return false;
+  uint16_t port = static_cast<uint16_t>(std::atoi(uri.c_str() + pos + 1));
+  std::string host = uri;
+  const auto slash = host.find("://");
+  if (slash != std::string::npos) host = host.substr(slash + 3);
+  const auto colon = host.rfind(':');
+  if (colon != std::string::npos) host = host.substr(0, colon);
+  if (host == "host" || host == "localhost") host = "192.168.1.105";
+  const auto master_host_end = master_uri.find("://");
+  if ((host == "host" || host.empty()) && master_host_end != std::string::npos) {
+    host = "192.168.1.105";
+  }
+
+  const int fd = TcpConnectTimeout(host, port, 1500, 1500);
+  if (fd < 0) return false;
+
+  auto put_u32 = [](std::string* o, uint32_t v) {
+    o->push_back(static_cast<char>(v & 0xFF));
+    o->push_back(static_cast<char>((v >> 8) & 0xFF));
+    o->push_back(static_cast<char>((v >> 16) & 0xFF));
+    o->push_back(static_cast<char>((v >> 24) & 0xFF));
+  };
+  std::string fields;
+  auto add = [&](const std::string& kv) {
+    put_u32(&fields, static_cast<uint32_t>(kv.size()));
+    fields += kv;
+  };
+  add("callerid=/x30_lio");
+  add("service=/lio_enable");
+  add("type=std_srvs/SetBool");
+  add("md5sum=09fb03525b03e7ea1fd3992bafd87e16");
+  add("persistent=0");
+  std::string header;
+  put_u32(&header, static_cast<uint32_t>(fields.size()));
+  header += fields;
+  if (::send(fd, header.data(), header.size(), 0) !=
+      static_cast<ssize_t>(header.size())) {
+    closesocket(fd);
+    return false;
+  }
+  uint8_t lenb[4];
+  if (::recv(fd, lenb, 4, MSG_WAITALL) != 4) {
+    closesocket(fd);
+    return false;
+  }
+  uint32_t hlen = static_cast<uint32_t>(lenb[0]) |
+                  (static_cast<uint32_t>(lenb[1]) << 8) |
+                  (static_cast<uint32_t>(lenb[2]) << 16) |
+                  (static_cast<uint32_t>(lenb[3]) << 24);
+  if (hlen > 4096) {
+    closesocket(fd);
+    return false;
+  }
+  std::vector<uint8_t> hb(hlen);
+  if (hlen > 0 &&
+      ::recv(fd, hb.data(), hlen, MSG_WAITALL) != static_cast<ssize_t>(hlen)) {
+    closesocket(fd);
+    return false;
+  }
+  const uint8_t req[5] = {1, 0, 0, 0, static_cast<uint8_t>(on ? 1 : 0)};
+  if (::send(fd, req, 5, 0) != 5) {
+    closesocket(fd);
+    return false;
+  }
+  uint8_t ok = 0;
+  if (::recv(fd, &ok, 1, MSG_WAITALL) != 1) {
+    closesocket(fd);
+    return false;
+  }
+  closesocket(fd);
+  return ok == 1;
+}
+
+bool DecodeRosInt32(const uint8_t* data, size_t len, int32_t* out) {
+  if (len < 4) return false;
+  std::memcpy(out, data, sizeof(int32_t));
+  return true;
+}
+
+// nav_msgs/Odometry：跳过 Header / child_frame_id 两个变长字符串，
+// 再读 pose.position、orientation、跳过 36 元协方差，再读 twist。
+bool DecodeRosOdometry(const uint8_t* data, size_t len, float* x, float* y,
+                       float* yaw, float* vx, float* vy, float* wz) {
+  if (len < 4 + 8 + 4) return false;
+  size_t o = 4 + 8;
+  uint32_t flen = 0;
+  std::memcpy(&flen, data + o, 4);
+  o += 4;
+  if (flen > 256 || o + flen + 4 > len) return false;
+  o += flen;
+  uint32_t clen = 0;
+  std::memcpy(&clen, data + o, 4);
+  o += 4;
+  if (clen > 256 || o + clen + 7 * 8 + 36 * 8 + 6 * 8 > len) return false;
+  o += clen;
+  double px = 0, py = 0, qx = 0, qy = 0, qz = 0, qw = 0;
+  std::memcpy(&px, data + o, 8);
+  std::memcpy(&py, data + o + 8, 8);
+  o += 24;
+  std::memcpy(&qx, data + o, 8);
+  std::memcpy(&qy, data + o + 8, 8);
+  std::memcpy(&qz, data + o + 16, 8);
+  std::memcpy(&qw, data + o + 24, 8);
+  o += 32 + 36 * 8;
+  double lx = 0, ly = 0, az = 0;
+  std::memcpy(&lx, data + o, 8);
+  std::memcpy(&ly, data + o + 8, 8);
+  std::memcpy(&az, data + o + 40, 8);
+  *x = static_cast<float>(px);
+  *y = static_cast<float>(py);
+  *yaw = static_cast<float>(
+      std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)));
+  *vx = static_cast<float>(lx);
+  *vy = static_cast<float>(ly);
+  *wz = static_cast<float>(az);
+  return true;
+}
+
+bool DecodeRosImuRpy(const uint8_t* data, size_t len, float* roll, float* pitch,
+                     float* yaw) {
+  if (len < 4 + 8 + 4) return false;
+  size_t o = 4 + 8;
+  uint32_t flen = 0;
+  std::memcpy(&flen, data + o, 4);
+  o += 4;
+  if (flen > 256 || o + flen + 4 * 8 > len) return false;
+  o += flen;
+  double qx = 0, qy = 0, qz = 0, qw = 0;
+  std::memcpy(&qx, data + o, 8);
+  std::memcpy(&qy, data + o + 8, 8);
+  std::memcpy(&qz, data + o + 16, 8);
+  std::memcpy(&qw, data + o + 24, 8);
+  const double rad2deg = 57.2957795;
+  *roll = static_cast<float>(
+      std::atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy)) *
+      rad2deg);
+  double sinp = 2.0 * (qw * qy - qz * qx);
+  if (sinp > 1.0) sinp = 1.0;
+  if (sinp < -1.0) sinp = -1.0;
+  *pitch = static_cast<float>(std::asin(sinp) * rad2deg);
+  *yaw = static_cast<float>(
+      std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)) *
+      rad2deg);
+  return true;
+}
+
+bool DecodeRosLevel(const uint8_t* data, size_t len, const std::string& type,
+                    uint8_t* out) {
+  if (type.find("UInt8") != std::string::npos) {
+    if (len < 1) return false;
+    *out = data[0] > 100 ? 100 : data[0];
+    return true;
+  }
+  float v = 0;
+  if (!DecodeRosFloat(data, len, &v)) return false;
+  if (v <= 1.01f && v >= 0.0f) {
+    *out = static_cast<uint8_t>(v * 100.0f + 0.5f);
+  } else if (v > 1.01f && v <= 100.0f) {
+    *out = static_cast<uint8_t>(v + 0.5f);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+void RobotService::StartBatteryRos() {
+  if (battery_ros_ || cfg_.cloud.master_uri.empty() ||
+      cfg_.cloud.node_host.empty()) {
+    return;
+  }
+
+  // 本机实测：level 是 UInt8，voltage 是 Float32。查不到类型时按这个兜底，
+  // 再用 Float32 去订 level 会被发布者因 md5 直接拒掉。
+  std::string level_type = LookupRosType(cfg_.cloud.master_uri, "/battery/level");
+  std::string volt_type = LookupRosType(cfg_.cloud.master_uri, "/battery/voltage");
+  if (level_type.empty()) level_type = "std_msgs/UInt8";
+  if (volt_type.empty()) volt_type = "std_msgs/Float32";
+
+  RosClientConfig rc;
+  rc.master_uri = cfg_.cloud.master_uri;
+  rc.node_host = cfg_.cloud.node_host;
+  rc.node_name = "/x30_batt";
+  rc.retry_ms = 4000;
+
+  battery_ros_.reset(new RosClient(rc));
+  // md5=*：云深处 UInt8 的校验和与官方差一位，对不上会被直接踢掉。
+  battery_ros_->Subscribe({"/battery/level", level_type, "*"},
+                          [this, level_type](const uint8_t* d, size_t n) {
+                            uint8_t level = 0;
+                            if (!DecodeRosLevel(d, n, level_type, &level)) return;
+                            const RobotState s = client_.Snapshot();
+                            client_.ApplyBattery(level, s.battery_voltage, false);
+                          });
+  battery_ros_->Subscribe({"/battery/voltage", volt_type, "*"},
+                          [this](const uint8_t* d, size_t n) {
+                            float v = 0;
+                            if (!DecodeRosFloat(d, n, &v)) return;
+                            if (v > 200.0f) v = v / 1000.0f;
+                            const RobotState s = client_.Snapshot();
+                            client_.ApplyBattery(s.battery_level, v, false);
+                          });
+  battery_ros_->Subscribe(
+      {"/leg_odom", "nav_msgs/Odometry", "*"},
+      [this](const uint8_t* d, size_t n) {
+        float x = 0, y = 0, yaw = 0, vx = 0, vy = 0, wz = 0;
+        if (!DecodeRosOdometry(d, n, &x, &y, &yaw, &vx, &vy, &wz)) return;
+        client_.ApplyOdom(x, y, yaw, vx, vy, wz, false);
+      });
+  battery_ros_->Subscribe(
+      {"/lio_odom", "nav_msgs/Odometry", "*"},
+      [this](const uint8_t* d, size_t n) {
+        float x = 0, y = 0, yaw = 0, vx = 0, vy = 0, wz = 0;
+        if (!DecodeRosOdometry(d, n, &x, &y, &yaw, &vx, &vy, &wz)) return;
+        NoteLioSample(x, y, yaw);
+      });
+  battery_ros_->Subscribe(
+      {"/imu_from_motion", "sensor_msgs/Imu", "*"},
+      [this](const uint8_t* d, size_t n) {
+        float roll = 0, pitch = 0, yaw = 0;
+        if (!DecodeRosImuRpy(d, n, &roll, &pitch, &yaw)) return;
+        client_.ApplyAtt(roll, pitch, yaw, false);
+      });
+  battery_ros_->Subscribe(
+      {"/mileage/current_mileage", "std_msgs/Int32", "*"},
+      [this](const uint8_t* d, size_t n) {
+        int32_t cm = 0;
+        if (!DecodeRosInt32(d, n, &cm)) return;
+        client_.ApplyMileage(cm, false);
+      });
+
+  std::string err;
+  if (!battery_ros_->Start(&err)) {
+    std::fprintf(stderr, "[电池] ROS 订阅未启动：%s\n", err.c_str());
+    battery_ros_.reset();
+    return;
+  }
+  std::printf("[遥测] 已订阅 %s /battery/* /leg_odom /lio_odom /imu /mileage\n",
+              cfg_.cloud.master_uri.c_str());
+}
+
+void RobotService::StopBatteryRos() {
+  if (!battery_ros_) return;
+  battery_ros_->Stop();
+  battery_ros_.reset();
+}
+
+void RobotService::NoteLioSample(float x, float y, float yaw) {
+  const auto now = Clock::now();
+  {
+    std::lock_guard<std::mutex> lock(lio_mutex_);
+    lio_valid_ = true;
+    lio_x_ = x;
+    lio_y_ = y;
+    lio_yaw_ = yaw;
+    lio_last_msg_ = now;
+    if (!lio_got_msg_) {
+      lio_got_msg_ = true;
+      lio_first_msg_ = now;
+      lio_still_since_ = now;
+      lio_have_prev_ = false;
+    }
+    if (lio_have_prev_) {
+      const float dx = std::hypot(x - lio_prev_x_, y - lio_prev_y_);
+      float dyaw = std::fabs(yaw - lio_prev_yaw_);
+      if (dyaw > 3.14159265f) dyaw = 6.2831853f - dyaw;
+      if (dx > 0.035f || dyaw > 0.06f) {
+        lio_still_since_ = now;
+        if (lio_ready_ && dx > 0.25f) lio_ready_ = false;
+      }
+    }
+    lio_prev_x_ = x;
+    lio_prev_y_ = y;
+    lio_prev_yaw_ = yaw;
+    lio_have_prev_ = true;
+    if (!lio_ready_ && now - lio_first_msg_ > std::chrono::milliseconds(2000) &&
+        now - lio_still_since_ > std::chrono::milliseconds(1500)) {
+      lio_ready_ = true;
+      std::printf("[LIO] 已对准，可以走\n");
+    }
+  }
+  if (cloud_) cloud_->SetWorldPose(x, y);
+}
+
+bool RobotService::WalkHold() const {
+  if (!cloud_) return false;
+  const RobotState s = client_.Snapshot();
+  if (!StandingForLio(s.basic_state, s.rl_standing)) return false;
+  std::lock_guard<std::mutex> lock(lio_mutex_);
+  if (!lio_ready_) return true;
+  return !lio_got_msg_ ||
+         Clock::now() - lio_last_msg_ > std::chrono::milliseconds(800);
+}
+
+// ---------------------------------------------------------------------------
 // 遥测推送
 // ---------------------------------------------------------------------------
 
@@ -564,10 +980,21 @@ std::string RobotService::BuildStateJson() const {
   const RobotState s = client_.Snapshot();
   const GaitLimits limits = LimitsOf(s.gait);
 
+  bool lio_ready = false, lio_got = false, lio_fresh = false;
+  {
+    std::lock_guard<std::mutex> lock(lio_mutex_);
+    lio_got = lio_got_msg_;
+    lio_ready = lio_ready_;
+    lio_fresh = lio_got &&
+                Clock::now() - lio_last_msg_ < std::chrono::milliseconds(800);
+  }
+  const bool standing = StandingForLio(s.basic_state, s.rl_standing);
+  const bool aligning = cloud_ && standing && !(lio_ready && lio_fresh);
+
   // RL 起立后运动主机仍报「坐下」。芯片若跟着撒谎，人会以为没起来而连点起立。
   const char* state_text = ToString(s.basic_state);
   if (s.rl_standing && s.basic_state == BasicState::kSitting) {
-    state_text = "RL 站立 · 可走";
+    state_text = aligning ? "RL 站立 · 对准中" : "RL 站立 · 可走";
   }
 
   JsonWriter w;
@@ -585,11 +1012,47 @@ std::string RobotService::BuildStateJson() const {
       .Key("mileage_cm", s.current_mileage_cm)
       .Key("emergency_source", static_cast<unsigned>(s.emergency_source));
 
+  float ox = s.odom_x, oy = s.odom_y, oyaw = s.odom_yaw;
+  const char* odom_source = "leg";
+  bool have_lio = false;
+  {
+    std::lock_guard<std::mutex> lock(lio_mutex_);
+    have_lio = lio_valid_;
+    if (have_lio) {
+      ox = lio_x_;
+      oy = lio_y_;
+      oyaw = lio_yaw_;
+      odom_source = "lio";
+    }
+  }
+  if (!have_lio) {
+    const LocalizerPose lp = localizer_.pose();
+    if (lp.valid) {
+      ox = lp.x;
+      oy = lp.y;
+      oyaw = lp.yaw;
+      odom_source = "scan";
+    }
+  }
+
   w.BeginObject("odom")
-      .Key("x", s.odom_x)
-      .Key("y", s.odom_y)
-      .Key("yaw", s.odom_yaw)
+      .Key("x", ox)
+      .Key("y", oy)
+      .Key("yaw", oyaw)
       .EndObject();
+  w.Key("odom_source", odom_source);
+  {
+    const char* lio_text = "";
+    if (aligning) {
+      lio_text = lio_got ? "LIO 还不稳，请继续站稳，不要走"
+                         : "LIO 正在对准，请站稳，不要走";
+    }
+    w.BeginObject("lio")
+        .Key("ready", lio_ready && lio_fresh)
+        .Key("aligning", aligning)
+        .Key("text", lio_text)
+        .EndObject();
+  }
   w.BeginObject("vel")
       .Key("x", s.vel_x)
       .Key("y", s.vel_y)
@@ -601,6 +1064,7 @@ std::string RobotService::BuildStateJson() const {
       .Key("yaw", s.yaw, 1)
       .EndObject();
   w.BeginObject("battery")
+      .Key("valid", s.battery_valid)
       .Key("level", static_cast<unsigned>(s.battery_level))
       .Key("voltage", s.battery_voltage, 1)
       .EndObject();
@@ -654,6 +1118,20 @@ void RobotService::StateLoop() {
       }
     }
     ++tick;
+
+    // 原厂 LIO：UDP 敲门 + /lio_enable。文档要求站稳再开，坐下时不发。
+    if (cloud_ && !lio_valid_ && tick % 40 == 20) {
+      const RobotState st = client_.Snapshot();
+      if (StandingForLio(st.basic_state, st.rl_standing)) {
+        std::string err;
+        if (!lio_cmd_ok_ && terrain_.StartLio(true, &err)) {
+          lio_cmd_ok_ = true;
+        }
+        if (CallLioEnable(cfg_.cloud.master_uri, true)) {
+          lio_cmd_ok_ = true;
+        }
+      }
+    }
 
     // 租约到期主动广播一次，让各端的"谁在控制"指示及时更新。
     {

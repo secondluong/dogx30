@@ -19,11 +19,13 @@ add_library(x30_core
   src/gateway_config.cpp
   src/ws_server.cpp
   src/media_registry.cpp
+  src/ptz_client.cpp
   src/net_util.cpp
   src/xmlrpc.cpp
   src/ros_client.cpp
   src/point_cloud.cpp
   src/cloud_bridge.cpp
+  src/localizer.cpp
   src/robot_service.cpp
 )
 target_include_directories(x30_core PUBLIC include)
@@ -44,6 +46,9 @@ endif()
 
 add_executable(x30_gateway src/main.cpp)
 target_link_libraries(x30_gateway PRIVATE x30_core)
+
+add_executable(x30_localizer_test src/localizer_test.cpp)
+target_link_libraries(x30_localizer_test PRIVATE x30_core)
 if(MSVC)
   target_compile_options(x30_gateway PRIVATE /utf-8)
 endif()

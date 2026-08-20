@@ -27,9 +27,11 @@ const app = {
   alive: false,
   basicState: 0,
   rlStanding: false,
+  emergencyLocked: false,
   controlMode: 0,
   gait: 'walk',
   gaitPending: false,
+  lioAligning: false,
   walkMode: null,         // 由遥测推断：'torque' | 'step'
   modePick: null,         // G20 三挡或点按：manual | assist | auto
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
@@ -43,6 +45,7 @@ const STATE_TORQUE_STANDING = 3;
 const STATE_SIT_TO_STAND = 1;
 const STATE_STAND_TO_SIT = 5;
 const STATE_INITIAL_STAND = 2;
+const STATE_EMERGENCY = 6;
 
 // 趴下只露起立；站立（含 RL 起立后遥测仍报 0）才出步态/身高和力控起步。
 function isStandingUi() {
@@ -80,6 +83,7 @@ function paintWalkButtons() {
   });
   document.querySelectorAll('[data-cmd="step"]').forEach((b) => {
     b.classList.toggle('on', walk === 'step');
+    b.disabled = !!app.lioAligning;
   });
 }
 
@@ -130,6 +134,7 @@ function connect() {
         app.hasControl = !!msg.control;
         renderControl();
         if (window.X30Settings) window.X30Settings.onHello(msg);
+        if (isAppShell) requestControl();
         break;
       case 'config':
         if (window.X30Settings) window.X30Settings.onConfig(msg);
@@ -141,6 +146,11 @@ function connect() {
         app.holder = msg.holder || 0;
         app.hasControl = app.holder === app.clientId;
         renderControl();
+        if (msg.granted === false) {
+          showBanner(app.holder && app.holder !== app.clientId
+            ? '控制权被 #' + app.holder + ' 占用'
+            : '申请控制权失败');
+        }
         break;
       case 'state':
         renderState(msg);
@@ -189,6 +199,17 @@ function send(obj) {
   }
 }
 
+// 手持壳连上就要权：关掉原厂 App 不会把权交过来，操作员也不该再点一次。
+// 网页控制台仍是观察者，避免笔记本开着就把手柄的权抢走。
+function requestControl() {
+  if (app.hasControl) return;
+  if (app.holder && app.holder !== app.clientId) {
+    showBanner('控制权被 #' + app.holder + ' 占用');
+    return;
+  }
+  send({ t: 'claim' });
+}
+
 // ---------------------------------------------------------------------------
 // 渲染
 // ---------------------------------------------------------------------------
@@ -197,6 +218,7 @@ function setLink(online) {
   const chip = $('chip-link');
   chip.classList.toggle('online', online);
   $('link-text').textContent = online ? '已连接' : '重连中';
+  if ($('btn-settings')) $('btn-settings').classList.toggle('online', online);
   if (!online) {
     document.querySelector('.telemetry').classList.add('stale');
   }
@@ -227,6 +249,7 @@ function renderState(s) {
   app.alive = !!s.alive;
   app.basicState = s.basic_state;
   app.rlStanding = !!s.rl_standing;
+  app.emergencyLocked = s.basic_state === STATE_EMERGENCY || !!s.emergency_source;
   app.controlMode = typeof s.mode === 'number' ? s.mode : 0;
 
   document.querySelector('.telemetry').classList.toggle('stale', !s.alive);
@@ -235,7 +258,14 @@ function renderState(s) {
   chipState.textContent = s.basic_state_text || '—';
   chipState.classList.toggle('online', s.alive);
 
-  $('chip-batt').textContent = `${s.battery.level}% · ${fmt(s.battery.voltage, 1)}V`;
+  const batt = s.battery || {};
+  const battText = batt.valid ? `${batt.level}% · ${fmt(batt.voltage, 1)}V` : '—';
+  $('chip-batt').textContent = battText;
+  if ($('brand-batt')) {
+    $('brand-batt').textContent = battText;
+    $('brand-batt').classList.toggle('hidden', !isAppShell);
+  }
+  $('t-batt').textContent = batt.valid ? batt.level : '—';
 
   $('t-vx').textContent = fmt(s.vel.x);
   $('t-vy').textContent = fmt(s.vel.y);
@@ -254,11 +284,11 @@ function renderState(s) {
       wz: s.vel && s.vel.yaw,
       imuYaw: s.att && s.att.yaw,
       mile: s.mileage_cm,
+      source: s.odom_source,
     });
   }
   $('t-yaw').textContent = fmt(s.att.yaw, 1);
   $('t-rp').textContent = `${fmt(s.att.roll, 1)} / ${fmt(s.att.pitch, 1)}`;
-  $('t-batt').textContent = s.battery.level;
   $('t-cpu').textContent = fmt(s.temp.cpu, 1);
   $('t-motor').textContent = fmt(s.temp.motor_max, 1);
   $('t-mile').textContent = fmt(s.mileage_cm / 100, 1);
@@ -272,7 +302,19 @@ function renderState(s) {
     box.appendChild(el);
   });
 
-  if (s.emergency_source) showBanner('机器人处于软急停状态，需在遥控器上解除');
+  const lio = s.lio || {};
+  app.lioAligning = !!lio.aligning;
+  if (app.emergencyLocked) {
+    showBanner('急停后关节已锁，请先点卸力，再起立');
+  } else if (lio.aligning) {
+    const el = $('banner');
+    el.textContent = lio.text || 'LIO 正在对准，请站稳，不要走';
+    el.className = 'banner banner-wait';
+    el.classList.remove('hidden');
+    clearTimeout(bannerTimer);
+  } else if ($('banner').classList.contains('banner-wait')) {
+    $('banner').classList.add('hidden');
+  }
 
   document.querySelectorAll('[data-gait]').forEach((b) => {
     b.classList.toggle('active', s.gait_key === b.dataset.gait);
@@ -284,18 +326,11 @@ function renderState(s) {
   });
 
   // 起立/坐下走的是运动主机自己的轨迹，过渡中再点一次会打断甚至反转。
-  const standBusy = s.basic_state === STATE_SIT_TO_STAND ||
-                    s.basic_state === STATE_STAND_TO_SIT;
-  document.querySelectorAll('[data-cmd="stand"]').forEach((b) => {
-    b.disabled = standBusy;
-  });
-
   const standing = isStandingUi();
   const wrap = $('stage-wrap');
   wrap.classList.toggle('dog-up', standing);
   wrap.classList.toggle('dog-prone', !standing);
-  $('btn-stand').textContent = standing ? '趴下' : '起立';
-  $('btn-stand').classList.toggle('on', standing && !standBusy);
+  paintStandButton();
   if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
   else if (s.basic_state === STATE_TORQUE_STANDING) app.walkMode = 'torque';
   else if (!standing) app.walkMode = null;
@@ -316,7 +351,26 @@ function showBanner(text, holdMs) {
   bannerTimer = setTimeout(() => el.classList.add('hidden'), holdMs || 4000);
 }
 
+function paintStandButton() {
+  const btn = $('btn-stand');
+  if (!btn) return;
+  const standBusy = app.basicState === STATE_SIT_TO_STAND ||
+                    app.basicState === STATE_STAND_TO_SIT;
+  btn.disabled = standBusy;
+  if (app.emergencyLocked) {
+    btn.textContent = '卸力';
+    btn.classList.add('need');
+    btn.classList.remove('on');
+    return;
+  }
+  const standing = isStandingUi();
+  btn.textContent = standing ? '趴下' : '起立';
+  btn.classList.toggle('on', standing && !standBusy);
+  btn.classList.remove('need');
+}
+
 app.paintModes = paintModes;
+app.paintStandButton = paintStandButton;
 app.toggleGas = toggleGas;
 app.toggleTelem = toggleTelem;
 app.cycleView = cycleView;
@@ -336,15 +390,20 @@ function toggleGas() {
   const el = $('gas-panel');
   if (!el) return;
   el.classList.toggle('hidden');
+  const shown = !el.classList.contains('hidden');
+  if ($('btn-gas')) $('btn-gas').classList.toggle('active', shown);
 }
 
 function toggleTelem() {
   if (!$('telemetry')) return;
   $('telemetry').classList.toggle('hidden');
+  const shown = !$('telemetry').classList.contains('hidden');
+  if ($('btn-telem')) $('btn-telem').classList.toggle('active', shown);
 }
 
 function updateStickAvailability() {
-  const usable = app.hasControl && app.alive && controlChannel() !== null;
+  const usable = app.hasControl && app.alive && controlChannel() !== null &&
+                 !app.lioAligning;
   document.querySelectorAll('.stick').forEach((s) => {
     s.classList.toggle('disabled', !usable);
   });
@@ -436,11 +495,45 @@ function activeChannels() {
   return touchChannels();
 }
 
+function stickTarget() {
+  if (window.X30Gamepad && window.X30Gamepad.stickTarget) {
+    return window.X30Gamepad.stickTarget();
+  }
+  return 'dog';
+}
+
+function paintStickChip() {
+  const el = $('chip-stick');
+  if (!el) return;
+  const gp = window.X30Gamepad && window.X30Gamepad.channels
+    ? window.X30Gamepad.channels() : null;
+  const g20 = gp && gp.source === 'g20';
+  if (!isAppShell && !g20) {
+    el.classList.add('hidden');
+    return;
+  }
+  const ptz = stickTarget() === 'ptz';
+  el.classList.remove('hidden');
+  el.textContent = ptz ? '摇杆 · 布控球' : '摇杆 · 狗';
+  el.classList.toggle('online', ptz);
+}
+
 setInterval(() => {
+  paintStickChip();
   if (!app.hasControl) return;
-  const channel = controlChannel();
   const c = activeChannels();
+  if (stickTarget() === 'ptz') {
+    send({ t: 'vel', vx: 0, vy: 0, wz: 0 });
+    const look = typeof c.look === 'number' ? c.look : c.tilt;
+    send({ t: 'ptz', pan: -c.turn, tilt: look, zoom: c.fwd });
+    return;
+  }
+  const channel = controlChannel();
   if (channel === 'vel') {
+    if (app.lioAligning) {
+      send({ t: 'vel', vx: 0, vy: 0, wz: 0 });
+      return;
+    }
     // 网关的速度接口收的是机体系：Y 左为正、偏航逆时针为正，与通道约定一致。
     send({ t: 'vel', vx: c.fwd, vy: c.lat, wz: c.turn });
   } else if (channel === 'pose') {
@@ -465,7 +558,13 @@ $('btn-control').addEventListener('click', () => {
 // 急停不检查控制权，任何客户端任何时候都能按。
 $('btn-estop').addEventListener('click', () => {
   send({ t: 'cmd', name: 'estop' });
-  showBanner('已发送软急停');
+  app.emergencyLocked = true;
+  app.rlStanding = false;
+  const wrap = $('stage-wrap');
+  wrap.classList.remove('dog-up');
+  wrap.classList.add('dog-prone');
+  paintStandButton();
+  showBanner('急停后关节已锁，请先点卸力，再起立');
 });
 
 function guarded(fn) {
@@ -484,15 +583,21 @@ function markPending(el) {
 
 document.querySelectorAll('[data-cmd]').forEach((b) => {
   b.addEventListener('click', guarded(() => {
-    send({ t: 'cmd', name: b.dataset.cmd });
+    let name = b.dataset.cmd;
+    if (name === 'stand' && app.emergencyLocked) name = 'unload';
+    send({ t: 'cmd', name });
     markPending(b);
-    if (b.dataset.cmd === 'torque') {
+    if (name === 'step' && app.lioAligning) {
+      showBanner('LIO 还在对准，请站稳，不要走', 4000);
+      return;
+    }
+    if (name === 'torque') {
       app.walkMode = 'torque';
       paintWalkButtons();
-    } else if (b.dataset.cmd === 'step') {
+    } else if (name === 'step') {
       app.walkMode = 'step';
       paintWalkButtons();
-    } else if (b.dataset.cmd === 'stand' && isStandingUi()) {
+    } else if (name === 'stand' && isStandingUi()) {
       app.walkMode = null;
       paintWalkButtons();
     }
@@ -544,9 +649,12 @@ $('btn-media').addEventListener('click', () => {
   $('btn-media').classList.toggle('active', !$('hud-layout').classList.contains('hidden'));
 });
 
-$('btn-gp').addEventListener('click', () => {
-  $('gp-panel').classList.toggle('hidden');
-  $('btn-gp').classList.toggle('active', !$('gp-panel').classList.contains('hidden'));
+$('btn-telem').addEventListener('click', () => {
+  toggleTelem();
+});
+
+$('btn-gas').addEventListener('click', () => {
+  toggleGas();
 });
 
 $('btn-sticks').addEventListener('click', () => {
@@ -585,14 +693,15 @@ function applyLayout() {
   });
   $('btn-swap').textContent = viewLayout.mode === '1x1' ? '2×2' : '1×1';
   const cloudMain = viewLayout.mode === '1x1' && viewLayout.main === 'cloud';
-  // 点云菜单默认收着，切走背景时一并关掉，避免下次进来还挂着。
+  // 2×2 四格都在，点云格子还露着，不能按「不是主背景」退订。
+  const cloudVisible = viewLayout.mode === '2x2' || cloudMain;
+  // 点云菜单只在 1×1 点云背景时有位置。切走或进四宫格就收起来。
   if (!cloudMain) {
     if ($('cloud-ctl')) $('cloud-ctl').classList.add('hidden');
     if ($('btn-cloud-settings')) $('btn-cloud-settings').classList.remove('active');
   }
-  // 选点云当背景就订，切到相机/布控球就退。不另放「订阅点云」按钮。
   if (window.X30Cloud && window.X30Cloud.setWanted) {
-    window.X30Cloud.setWanted(cloudMain);
+    window.X30Cloud.setWanted(cloudVisible);
   }
   syncViewPick();
   requestAnimationFrame(() => {
@@ -735,12 +844,23 @@ document.addEventListener('visibilitychange', () => {
     send({ t: 'release' });
     showBanner('已切至后台，运动已停止');
   }
+  // 切去原厂 App 时心跳会被节流，3 秒租约一过权就没了。
+  // 手持壳回到前台自动再要一次，否则横幅只剩「请先发送 claim」。
+  if (!document.hidden && isAppShell) requestControl();
   // 点云订阅不要跟着显隐走：切标签、缩窗口、平板分屏都会把
   // document.hidden 置上，退订后再回来要重新点，操作员会以为订不住。
 });
 
-if ($('telemetry')) $('telemetry').classList.add('hidden');
-if ($('gas-panel')) $('gas-panel').classList.add('hidden');
+// 网页、App 指标和气体都默认藏。网页靠按钮打开，App 靠 G20 R1/R2。
+if ($('telemetry')) {
+  $('telemetry').classList.add('hidden');
+  if ($('btn-telem')) $('btn-telem').classList.remove('active');
+}
+if ($('gas-panel')) {
+  $('gas-panel').classList.add('hidden');
+  if ($('btn-gas')) $('btn-gas').classList.remove('active');
+}
+if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
 
 connect();
 

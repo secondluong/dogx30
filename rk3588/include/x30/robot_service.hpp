@@ -18,8 +18,11 @@
 #include "x30/cloud_bridge.hpp"
 #include "x30/gait_coordinator.hpp"
 #include "x30/gateway_config.hpp"
+#include "x30/localizer.hpp"
 #include "x30/media_registry.hpp"
 #include "x30/motion_client.hpp"
+#include "x30/ptz_client.hpp"
+#include "x30/ros_client.hpp"
 #include "x30/terrain_client.hpp"
 #include "x30/ws_server.hpp"
 
@@ -114,6 +117,11 @@ class RobotService {
   bool ControlHeld();
 
   std::string BuildStateJson() const;
+  bool WalkHold() const;
+  void NoteLioSample(float x, float y, float yaw);
+
+  void StartBatteryRos();
+  void StopBatteryRos();
 
   MotionClient& client_;
   TerrainClient& terrain_;
@@ -123,9 +131,28 @@ class RobotService {
 
   // 没配媒体源时为空，所有媒体消息一律回「未配置」。
   std::unique_ptr<MediaRegistry> media_;
+  std::unique_ptr<PtzClient> ptz_;
 
   // 未开启点云时为空，cloud_* 消息一律回「未启用」。
   std::unique_ptr<CloudBridge> cloud_;
+  std::unique_ptr<RosClient> battery_ros_;
+  Localizer localizer_;
+  std::chrono::steady_clock::time_point last_scan_{};
+  mutable std::mutex lio_mutex_;
+  bool lio_valid_ = false;
+  bool lio_cmd_ok_ = false;
+  bool lio_ready_ = false;
+  bool lio_got_msg_ = false;
+  bool lio_have_prev_ = false;
+  float lio_x_ = 0.0f;
+  float lio_y_ = 0.0f;
+  float lio_yaw_ = 0.0f;
+  float lio_prev_x_ = 0.0f;
+  float lio_prev_y_ = 0.0f;
+  float lio_prev_yaw_ = 0.0f;
+  std::chrono::steady_clock::time_point lio_first_msg_{};
+  std::chrono::steady_clock::time_point lio_last_msg_{};
+  std::chrono::steady_clock::time_point lio_still_since_{};
 
   std::thread state_thread_;
   std::atomic<bool> running_{false};

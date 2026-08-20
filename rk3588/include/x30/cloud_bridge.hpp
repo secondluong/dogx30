@@ -12,6 +12,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -32,9 +33,11 @@ struct CloudBridgeConfig {
   // eth0 地址，不是 MESH 侧的 eth1。填成 eth1 的地址会注册成功但收不到数据。
   std::string node_host = "192.168.1.120";
 
-  // 默认订阅机身合并云。等 LIO 上了以后换成配准后的世界系点云，
-  // 那时遥控端才能看到累积地图而不只是当前一帧。
+  // 机身合并云：扫描定位和 LIO 未就绪时的下行。
   std::string topic = "/lidar_points";
+
+  // LIO 配准后的世界系当前扫描。有它时优先下行，轨迹才能和点云对上。
+  std::string registered_topic = "/cloud_registered";
 
   PointCloudConfig cloud;
 };
@@ -54,17 +57,27 @@ class CloudBridge {
   void AddSubscriber(WsServer::ClientId id);
   void RemoveSubscriber(WsServer::ClientId id);
 
+  // 每帧解析后回调（10 Hz 原云，抽帧之前）。只喂机体系，给扫描定位用。
+  void SetFrameHandler(std::function<void(const PointCloudFrame&)> handler);
+
+  // LIO 位姿，给世界系点云做距离裁剪（相对狗，而不是世界原点）。
+  void SetWorldPose(float x, float y);
+
   // 供遥测里带上，遥控端据此显示"感知主机未连通"之类的提示。
   std::string StatusJson() const;
 
  private:
   void Supervisor();
-  void OnCloudMessage(const uint8_t* data, size_t len);
+  void OnBodyCloud(const uint8_t* data, size_t len);
+  void OnWorldCloud(const uint8_t* data, size_t len);
+  void Emit(PointCloudFrame* frame);
+  bool WorldFresh(uint64_t now_ms) const;
   void StartRos();
   void StopRos();
 
   CloudBridgeConfig cfg_;
   WsServer& server_;
+  std::function<void(const PointCloudFrame&)> frame_handler_;
 
   std::unique_ptr<RosClient> ros_;
   PointCloudEncoder encoder_;
@@ -76,6 +89,10 @@ class CloudBridge {
   uint64_t frames_dropped_ = 0;
   uint32_t last_points_ = 0;
   float last_voxel_ = 0.0f;
+  bool last_world_ = false;
+  float world_x_ = 0.0f;
+  float world_y_ = 0.0f;
+  uint64_t last_world_ms_ = 0;
 
   std::atomic<bool> running_{false};
   std::atomic<bool> ros_active_{false};

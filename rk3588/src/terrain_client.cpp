@@ -62,6 +62,45 @@ bool TerrainClient::SetBrakeMode(BrakeMode v) {
   return SendSimple(terrain::kBrakeMode, static_cast<uint32_t>(v));
 }
 
+bool TerrainClient::StartLio(bool on, std::string* error) {
+  UdpEndpoint ep;
+  std::string err;
+  if (!ep.Open(0, &err)) {
+    if (error) *error = err;
+    return false;
+  }
+  if (!ep.SetPeer(cfg_.perception_ip, terrain::kLioPort, &err)) {
+    if (error) *error = err;
+    return false;
+  }
+  CommandHead head{};
+  head.code = terrain::kLioToggle;
+  head.paramters_size = on ? 1u : 0u;
+  head.type = kTypeSimple;
+  if (!ep.Send(&head, sizeof(head))) {
+    if (error) *error = "LIO 指令发送失败";
+    return false;
+  }
+  CommandHead reply{};
+  const int n = ep.Recv(&reply, sizeof(reply), 800);
+  if (n < static_cast<int>(sizeof(reply))) {
+    if (error) *error = "感知主机 :60000 无应答";
+    std::printf("[LIO] %s（%s:%u %s）\n", error ? error->c_str() : "无应答",
+                cfg_.perception_ip.c_str(), terrain::kLioPort,
+                on ? "开" : "关");
+    return false;
+  }
+  // 文档：value 0=成功，-1=失败。uint32 里 -1 是全 F。
+  if (reply.paramters_size != 0) {
+    if (error) *error = "感知主机拒绝启动 LIO";
+    std::printf("[LIO] 被拒绝 value=%u（狗要站稳，或先退多帧地形图）\n",
+                reply.paramters_size);
+    return false;
+  }
+  std::printf("[LIO] 原厂激光惯性里程计已%s\n", on ? "启动" : "关闭");
+  return true;
+}
+
 HeightMapMode TerrainClient::last_mode() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return last_mode_;

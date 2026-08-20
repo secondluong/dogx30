@@ -68,6 +68,7 @@ fi
   echo "s"
   echo "estop";    sleep 1
   echo "s"
+  echo "unload";   sleep 1
   echo "q"
 } | "$GATEWAY" --robot-ip 127.0.0.1 --local-port 43897 --interactive > "$GW_LOG" 2>&1
 
@@ -111,6 +112,7 @@ fi
 check "$SIM_LOG" "进入力控站立"          "力控切换被正确解析"
 check "$SIM_LOG" "开始踏步"              "起步指令被正确解析"
 check "$SIM_LOG" "软急停"                "软急停被正确解析"
+check "$SIM_LOG" "卸力"                  "急停后卸力走 0x21010202，解除关节保护"
 check "$GW_LOG"  "状态 +踏步"            "网关解析出踏步状态"
 check "$GW_LOG"  "vx=0\.[3-9]"           "速度指令闭环回传（vx 应接近 0.5*1.2=0.6）"
 check "$GW_LOG"  "电池 +80%"             "电池遥测解析正确"
@@ -171,6 +173,20 @@ else
   fail=1
 fi
 rm -f "$LIE_SIM" "$LIE_GW"
+
+echo
+LOC_TEST=""
+for candidate in build/x30_localizer_test build-wsl/x30_localizer_test; do
+  if [[ -x "$candidate" ]]; then LOC_TEST="$candidate"; break; fi
+done
+if [[ -n "$LOC_TEST" ]]; then
+  if "$LOC_TEST"; then
+    echo "  PASS  扫描定位走廊平移自测"
+  else
+    echo "  FAIL  扫描定位走廊平移自测"
+    fail=1
+  fi
+fi
 
 echo
 if [[ $fail -eq 0 ]]; then

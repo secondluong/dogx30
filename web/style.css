@@ -44,6 +44,13 @@ body {
   z-index: 20;
 }
 
+.brand-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
 .brand {
   font-weight: 600;
   letter-spacing: .5px;
@@ -58,6 +65,12 @@ body {
 }
 .brand:hover { color: var(--text); }
 .brand.can-config { text-decoration: underline; text-underline-offset: 3px; }
+.brand-batt {
+  font-size: 13px;
+  line-height: 1.25;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
 .chips { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
 
@@ -81,6 +94,8 @@ body {
 }
 .chip.online .dot { background: var(--ok); }
 .chip.online { color: var(--text); }
+#chip-stick { display: none; }
+html.shell-app #chip-stick:not(.hidden) { display: inline-flex; }
 
 .bar-right { display: flex; align-items: center; gap: 10px; }
 .bar-mode, .bar-view { position: relative; }
@@ -128,11 +143,25 @@ body {
 /* ---------- 告警条 ---------- */
 
 .banner {
-  padding: 8px 16px;
-  background: rgba(248, 81, 73, .15);
-  border-bottom: 1px solid var(--danger);
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(560px, calc(100% - 24px));
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(48, 18, 18, .92);
+  border: 1px solid var(--danger);
   color: #ffb3ae;
   font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  pointer-events: none;
+}
+.banner.banner-wait {
+  background: rgba(42, 36, 14, .92);
+  border-color: #c9a227;
+  color: #f0d78c;
 }
 /* !important 是必须的，不是偷懒：这是个工具类，要盖掉的是自带 display 的组件类
    （.set-mask 是 flex、.layout 是 grid）。两边都只有一个类，优先级持平，就只能
@@ -484,6 +513,13 @@ body {
   color: var(--muted);
   white-space: nowrap;
 }
+.cloud-slice-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex: 0 0 auto;
+}
 .cloud-check, .cloud-num {
   display: inline-flex;
   align-items: center;
@@ -509,6 +545,11 @@ body {
 #btn-trail.active {
   background: #c62828;
   border-color: #c62828;
+  color: #fff;
+}
+#btn-cloud-vis.active {
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
 }
 
@@ -737,7 +778,7 @@ body {
 
 /* ---------- HUD 叠加（按原厂手柄：键浮在底图上） ---------- */
 
-.hud-swap, .hud-telem-btn, .hud-gp-btn, .hud-sticks-btn {
+.hud-swap, .hud-telem-btn, .hud-gas-btn, .hud-gp-btn, .hud-sticks-btn {
   z-index: 12;
   background: rgba(28, 34, 48, .78);
   backdrop-filter: blur(6px);
@@ -786,12 +827,13 @@ body {
   overflow-y: auto;
 }
 
-.hud-gp-btn, .hud-sticks-btn {
+.hud-sticks-btn, .hud-telem-btn, .hud-gas-btn {
   position: absolute;
   right: 16px;
 }
-.hud-gp-btn { top: 10px; }
-.hud-sticks-btn { top: 50px; }
+.hud-sticks-btn { top: 10px; }
+.hud-telem-btn { top: 50px; }
+.hud-gas-btn { top: 90px; }
 
 /* 网页默认不出现背景切换。模式菜单网页和 App 都有。 */
 .bar-pop {
@@ -817,9 +859,31 @@ html.shell-app .hud-layout-bar,
 html.shell-app #hud-layout,
 html.shell-app .hud-gp-btn,
 html.shell-app .hud-sticks-btn,
+html.shell-app .hud-telem-btn,
+html.shell-app .hud-gas-btn,
 html.shell-app .hud-gp,
-html.shell-app .hud-sticks { display: none !important; }
+html.shell-app .hud-sticks,
+html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
+html.shell-app #chip-link,
+html.shell-app #chip-batt { display: none !important; }
+html.shell-app .brand-wrap { gap: 8px; }
+html.shell-app .brand {
+  font-size: 14px;
+  line-height: 1.2;
+  padding-bottom: 3px;
+}
+html.shell-app .brand.online {
+  text-decoration: underline;
+  text-decoration-color: var(--ok);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
+}
+html.shell-app .brand:not(.online) { text-decoration: none; }
+html.shell-app .brand-batt:not(.hidden) {
+  display: block;
+  font-size: 13px;
+}
 html.shell-app .stage .pane:not(.is-main) { display: none !important; }
 html.shell-app .pip-hint { display: none !important; }
 html.shell-app .stage.layout-1x1 .pane.is-main .pane-actions { right: 16px; }
@@ -857,7 +921,8 @@ html.shell-app .hud-info {
   background: rgba(22, 27, 34, .88);
   backdrop-filter: blur(8px);
 }
-.telemetry .panel-head { margin: 0 0 6px; }
+.telemetry .panel-head,
+.gas-panel .panel-head { margin: 0 0 6px; }
 
 .hud-gp {
   position: absolute;
@@ -920,6 +985,12 @@ html.shell-app .hud-info {
   backdrop-filter: blur(6px);
   white-space: nowrap;
 }
+.hud-stand-btn.need {
+  background: #c9a227;
+  border-color: #c9a227;
+  color: #1a1400;
+  font-weight: 700;
+}
 .hud-menus > .btn {
   background: rgba(28, 34, 48, .78);
   backdrop-filter: blur(6px);
@@ -974,7 +1045,8 @@ html.shell-app .hud-info {
 .bar-pop .btn.hud-assist.active,
 .hud-modes .btn.hud-assist.active { opacity: 1; }
 
-/* 趴下：只留左下起立。站立才出底部中间的步态/踏面/身高和摇杆。 */
+/* 网页：趴下只留起立；站立才出步态/踏面/身高和虚拟摇杆。
+   App 壳没有虚拟杆，由 html.shell-app 整块关掉，不要和网页规则混用。 */
 .dog-prone .hud-menus,
 .dog-prone .hud-sticks { display: none !important; }
 

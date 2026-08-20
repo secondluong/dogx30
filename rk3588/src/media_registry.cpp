@@ -46,6 +46,14 @@ bool LoadMediaConfig(const std::string& path, MediaConfig* out,
   MediaConfig cfg;
   cfg.webrtc_base = root.String("webrtc_base", cfg.webrtc_base);
   cfg.budget_kbps = static_cast<int>(root.Number("budget_kbps", 3800));
+  const Json& ptz = root["ptz"];
+  if (ptz.type() == Json::Type::kObject) {
+    cfg.ptz_host = ptz.String("host");
+    cfg.ptz_port = static_cast<uint16_t>(ptz.Number("port", 80));
+    cfg.ptz_user = ptz.String("user", "admin");
+    cfg.ptz_password = ptz.String("pass");
+    cfg.ptz_channel = static_cast<int>(ptz.Number("channel", 1));
+  }
 
   const Json& arr = root["sources"];
   for (size_t i = 0; i < arr.Size(); ++i) {

@@ -10,12 +10,16 @@
 <body>
 
 <header class="bar">
-  <button type="button" class="brand" id="btn-settings">X30 遥控台</button>
+  <div class="brand-wrap">
+    <button type="button" class="brand" id="btn-settings">X30 遥控台</button>
+    <span class="brand-batt hidden" id="brand-batt"></span>
+  </div>
 
   <div class="chips">
     <span class="chip" id="chip-link"><i class="dot"></i><span id="link-text">连接中</span></span>
     <span class="chip" id="chip-state">—</span>
     <span class="chip" id="chip-batt">—</span>
+    <span class="chip hidden" id="chip-stick">摇杆 · 狗</span>
   </div>
 
   <div class="bar-right">
@@ -41,8 +45,6 @@
     <button class="btn btn-estop" id="btn-estop">急停</button>
   </div>
 </header>
-
-<div id="banner" class="banner hidden"></div>
 
 <!-- 网关设置。改完要重启网关，所以既要令牌，也要求当前没人持有控制权。 -->
 <div id="settings" class="set-mask hidden">
@@ -79,8 +81,9 @@
   </div>
 </div>
 
-<!-- 默认按趴下画：只露起立 + 右侧模式。站立后由 app.js 加 dog-up。 -->
+<!-- 默认按趴下画：网页只露起立。站立后 app.js 加 dog-up，虚拟摇杆才出现。 -->
 <main class="stage-wrap dog-prone" id="stage-wrap">
+  <div id="banner" class="banner hidden"></div>
 
   <div id="stage" class="stage layout-1x1">
     <div id="pane-video" class="pane is-main" data-view="dog_cam">
@@ -164,22 +167,25 @@
           <button type="button" class="btn sm" data-cloud-voxel="0.20">20</button>
           <button type="button" class="btn sm" data-cloud-voxel="0.40">40</button>
         </div>
+        <button type="button" class="btn sm active" id="btn-cloud-vis" title="隐藏点云，轨迹继续留着">点云显控</button>
         <button type="button" class="btn sm active" id="btn-trail" title="用红色画出狗走过的路">轨迹</button>
-        <label class="cloud-check">
-          <input type="checkbox" id="cloud-slice">
-          <span>楼层切割</span>
-        </label>
-        <label class="cloud-num">
-          <span>高度</span>
-          <input id="cloud-slice-z" type="number" inputmode="decimal" value="0.0" step="0.1" min="-2" max="20">
-          <span>m</span>
-        </label>
-        <label class="cloud-num">
-          <span>±</span>
-          <input id="cloud-slice-h" type="number" inputmode="decimal" value="0.6" step="0.1" min="0.1" max="5">
-          <span>m</span>
-        </label>
-        <button type="button" class="btn sm" id="btn-floor" title="在 0 / 3 / 6 / 9 米之间切换">楼层</button>
+        <div class="cloud-slice-row">
+          <label class="cloud-check">
+            <input type="checkbox" id="cloud-slice">
+            <span>楼层切割</span>
+          </label>
+          <label class="cloud-num" title="一层楼的实际层高，切割时按这个间隔识别楼层">
+            <span>高度</span>
+            <input id="cloud-slice-z" type="number" inputmode="decimal" value="3.0" step="0.1" min="1" max="8">
+            <span>m</span>
+          </label>
+          <label class="cloud-num" title="每一层从地面往上显示到多高，用来看墙脚障碍">
+            <span>显示</span>
+            <input id="cloud-slice-h" type="number" inputmode="decimal" value="0.6" step="0.1" min="0.1" max="5">
+            <span>m</span>
+          </label>
+          <button type="button" class="btn sm" id="btn-floor" title="在识别出的楼层之间切换，最后一档显示全部">楼层</button>
+        </div>
         <button type="button" class="btn sm hidden" id="btn-cloud-clear">清除</button>
         <span class="hint" id="cloud-note">拖动旋转</span>
       </div>
@@ -197,7 +203,7 @@
     <div id="media-list" class="media-list hud-media-list"></div>
   </div>
 
-  <!-- 指标和气体默认隐藏，由 G20 的 R1 / R2 显隐。 -->
+  <!-- 指标、气体网页和 App 都默认藏。网页靠按钮，App 靠 G20 R1/R2。 -->
   <div class="hud-info" id="hud-info">
     <section id="telemetry" class="panel telemetry hidden">
       <div class="panel-head"><span>指标</span><span class="tag" id="tag-holder">观察者</span></div>
@@ -218,13 +224,25 @@
     <div class="errors" id="t-errors"></div>
     </section>
     <section id="gas-panel" class="panel gas-panel hidden">
-      <div class="panel-head"><span>气体信息</span></div>
-      <p class="gas-empty">气体传感器尚未接入。G20 的 R2（CH16）已预留作显隐。</p>
+      <div class="panel-head"><span>气体</span><span class="tag">未接入</span></div>
+      <div class="grid" id="gas-grid">
+        <div class="cell"><label>氧气 O₂</label><b id="g-o2">—</b><em>%VOL</em></div>
+        <div class="cell"><label>一氧化碳 CO</label><b id="g-co">—</b><em>ppm</em></div>
+        <div class="cell"><label>硫化氢 H₂S</label><b id="g-h2s">—</b><em>ppm</em></div>
+        <div class="cell"><label>可燃气 LEL</label><b id="g-lel">—</b><em>%LEL</em></div>
+        <div class="cell"><label>二氧化碳 CO₂</label><b id="g-co2">—</b><em>ppm</em></div>
+        <div class="cell"><label>二氧化硫 SO₂</label><b id="g-so2">—</b><em>ppm</em></div>
+        <div class="cell"><label>二氧化氮 NO₂</label><b id="g-no2">—</b><em>ppm</em></div>
+        <div class="cell"><label>氨气 NH₃</label><b id="g-nh3">—</b><em>ppm</em></div>
+        <div class="cell"><label>氯气 Cl₂</label><b id="g-cl2">—</b><em>ppm</em></div>
+        <div class="cell"><label>VOC</label><b id="g-voc">—</b><em>ppm</em></div>
+      </div>
     </section>
   </div>
 
-  <button type="button" class="btn sm hud-gp-btn" id="btn-gp">手柄</button>
   <button type="button" class="btn sm hud-sticks-btn active" id="btn-sticks">摇杆</button>
+  <button type="button" class="btn sm hud-telem-btn" id="btn-telem">指标</button>
+  <button type="button" class="btn sm hud-gas-btn" id="btn-gas">气体</button>
   <div id="gp-panel" class="panel hud-gp hidden">
     <div class="gp-bar">
       <div class="gp-line">

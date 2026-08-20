@@ -223,24 +223,28 @@ class Robot:
                 self._zero_axes()
                 log("软急停 -> 趴下并锁关节")
 
-            elif code in (STAND_SIT, RL_STAND, RL_SIT):
+            elif code == STAND_SIT:
+                # 急停后原厂卸力。RL 起/趴在自锁态会被主机吞掉。
+                if self.state == EMERGENCY:
+                    self.state = SITTING
+                    self.emergency_source = 0
+                    log("卸力 -> 解除关节保护")
+                elif self.state == SITTING:
+                    log("卸力（已坐下）")
+                elif self.state in (INITIAL_STANDING, TORQUE_STANDING, STEPPING_STATE):
+                    self._begin(STAND_TO_SIT, SITTING, 2.0, log, "坐下")
+                else:
+                    log(f"忽略卸力 0x{code:08X}，当前是「{STATE_NAMES[self.state]}」")
+
+            elif code in (RL_STAND, RL_SIT):
                 # 0x21010223 / 0x21010222 是原厂手柄的 RL 起立/趴下。
-                # 0x21010202 是文档里的旧切换，实机上又快又硬，网关不该再发。
-                want_stand = (
-                    code == RL_STAND
-                    or (code == STAND_SIT and self.state in (SITTING, EMERGENCY))
-                )
-                want_sit = (
-                    code == RL_SIT
-                    or (code == STAND_SIT and self.state in (INITIAL_STANDING, TORQUE_STANDING))
-                )
-                if want_stand and self.state in (SITTING, EMERGENCY):
-                    tag = "RL起立" if code == RL_STAND else "起立"
-                    self._begin(SIT_TO_STAND, INITIAL_STANDING, 2.0, log, tag)
+                want_stand = code == RL_STAND
+                want_sit = code == RL_SIT
+                if want_stand and self.state == SITTING:
+                    self._begin(SIT_TO_STAND, INITIAL_STANDING, 2.0, log, "RL起立")
                     self.emergency_source = 0
                 elif want_sit and self.state in (INITIAL_STANDING, TORQUE_STANDING):
-                    tag = "RL趴下" if code == RL_SIT else "坐下"
-                    self._begin(STAND_TO_SIT, SITTING, 2.0, log, tag)
+                    self._begin(STAND_TO_SIT, SITTING, 2.0, log, "RL趴下")
                 else:
                     log(f"忽略站坐指令 0x{code:08X}，当前是「{STATE_NAMES[self.state]}」")
 

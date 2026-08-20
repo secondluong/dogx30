@@ -43,6 +43,10 @@ class TerrainClient {
   bool SetVelSource(VelSource v);
   bool SetBrakeMode(BrakeMode v);
 
+  // 开/关感知主机上的原厂 LIO（UDP :60000，0x0BAA0001）。
+  // 成功指对方回了 value=0。狗应站稳，否则文档说会失败。
+  bool StartLio(bool on, std::string* error = nullptr);
+
   // 最近一次成功发出的地形图模式，仅用于界面显示与日志。
   // 注意它反映的是"我们发了什么"，不是"模块当前处于什么模式"。
   HeightMapMode last_mode() const;

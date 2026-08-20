@@ -220,12 +220,44 @@ js.forEach(function (f) {
 });
 
 check('顶栏有背景按钮', /id="btn-view">背景<\/button>/.test(html));
+check('左下只有一个姿态按钮', /id="btn-stand"/.test(html) && html.indexOf('btn-unload') === -1);
 check('点标题打开设置', /id="btn-settings"[^>]*>\s*X30 遥控台/.test(html));
 check('没有单独的订阅点云按钮', html.indexOf('订阅点云') === -1 && !htmlIds['btn-cloud']);
 check('点云画面有设置按钮', !!htmlIds['btn-cloud-settings']);
+check('点云菜单有显控按钮', !!htmlIds['btn-cloud-vis']);
 check('点云菜单初始收着',
       /id="cloud-ctl"[^>]*\bhidden\b/.test(html) ||
       /class="[^"]*\bhidden\b[^"]*"[^>]*id="cloud-ctl"/.test(html));
+
+// 网页和 App 两套 HUD，改一处容易把另一处一起藏掉。
+var styleText = read('style.css');
+var appJs = read('app.js');
+check('急停后同一按钮转卸力',
+      /emergencyLocked/.test(appJs) && /textContent = '卸力'/.test(appJs) &&
+      /name = 'unload'/.test(appJs));
+check('网页仍有截图按钮', /data-capture="shot"/.test(html));
+check('App 壳去掉截图录屏按钮',
+      /html\.shell-app[\s\S]*?\.pane-actions/.test(styleText));
+check('网页有指标按钮', !!htmlIds['btn-telem']);
+check('网页有摇杆按钮', !!htmlIds['btn-sticks']);
+check('网页有气体按钮', !!htmlIds['btn-gas']);
+check('网页没有手柄按钮', !htmlIds['btn-gp'] && html.indexOf('>手柄<') === -1);
+check('App 壳藏掉网页摇杆和指标按钮',
+      /html\.shell-app[\s\S]*?\.hud-sticks/.test(styleText) &&
+      /html\.shell-app[\s\S]*?\.hud-telem-btn/.test(styleText) &&
+      /html\.shell-app[\s\S]*?\.hud-gas-btn/.test(styleText));
+check('趴下才藏网页摇杆', /\.dog-prone\s+\.hud-sticks/.test(styleText));
+check('网页打开时指标默认隐藏',
+      /telemetry[\s\S]*classList\.add\('hidden'\)/.test(appJs) &&
+      /class="[^"]*\btelemetry\b[^"]*\bhidden\b/.test(html));
+check('网页打开时气体默认隐藏',
+      /gas-panel[\s\S]*classList\.add\('hidden'\)/.test(appJs) &&
+      (/id="gas-panel"[^>]*\bhidden\b/.test(html) ||
+       /class="[^"]*\bgas-panel\b[^"]*\bhidden\b/.test(html)));
+check('2×2 时点云保持订阅',
+      /cloudVisible/.test(appJs) && /mode === '2x2'/.test(appJs));
+var gasCells = (html.match(/id="g-[a-z0-9]+"/g) || []).length;
+check('气体面板有 10 个指标', gasCells === 10, '实际 ' + gasCells);
 
 // ---------------------------------------------------------------------------
 console.log('\n== 设置面板的字段要与网关认的键一致 ==');

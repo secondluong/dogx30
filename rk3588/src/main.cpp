@@ -147,6 +147,7 @@ void PrintHelp() {
   stop               速度归零并主动释放轴指令
   freeze             停止喂数据但不清零，用来验证看门狗会自己超时
   estop              软急停，机器人立即趴下
+  unload             卸力，急停后解除关节自锁才能再起立
   save               保存故障数据（会让运动程序退出）
   s                  打印一次状态
   watch              持续刷新状态，按回车退出
@@ -266,6 +267,10 @@ void RunInteractive(MotionClient& client, const MotionClientConfig& cfg) {
       feeder.Idle();
       client.SoftEmergencyStop();
       std::printf("  已发送软急停。\n");
+    } else if (verb == "unload") {
+      feeder.Idle();
+      client.UnloadForce();
+      std::printf("  已发送卸力。\n");
     } else if (verb == "save") {
       client.SaveData();
       std::printf("  已发送保存数据指令，运动程序将退出。\n");

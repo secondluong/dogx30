@@ -28,6 +28,11 @@ namespace ros_md5 {
 inline constexpr const char* kPointCloud2 = "1158d486dd51d683ce2f1be655c3c181";
 inline constexpr const char* kImu = "6a62c6daae103f4ff57a132d6f95cec2";
 inline constexpr const char* kOdometry = "cd5e73d190d741a2f92e81eda573aca7";
+inline constexpr const char* kFloat32 = "73fcbf46b49191e672908e50842a83d4";
+inline constexpr const char* kFloat64 = "fdb28210bfa9d7c91146260178d9a584";
+// 官方 Noetic 是 …fbee。云深处 transfer_receiver 上的 UInt8 是 …fdee。
+// 电池订阅改发 md5=*，不依赖这一位。
+inline constexpr const char* kUInt8 = "7c8164229e7d2c17eb95e9231617fdee";
 }  // namespace ros_md5
 
 struct RosTopic {

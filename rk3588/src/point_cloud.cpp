@@ -200,7 +200,11 @@ void PointCloudEncoder::Encode(const PointCloudFrame& frame,
     // NaN 会污染包围盒，导致整帧坐标压成一个点。Livox 的无效点就是 NaN。
     if (std::isnan(x) || std::isnan(y) || std::isnan(z)) continue;
 
-    const float d_sq = x * x + y * y + z * z;
+    // 机体系：距离相对雷达原点。世界系：相对狗当前位姿，否则走出十几米
+    // 后原点附近的墙会被当成「狗身上的点」裁掉，周围的点反而留下。
+    const float dx = frame.world ? x - frame.robot_x : x;
+    const float dy = frame.world ? y - frame.robot_y : y;
+    const float d_sq = dx * dx + dy * dy + z * z;
     if (d_sq < min_sq || d_sq > max_sq) continue;
 
     const auto gx = static_cast<int64_t>(std::floor(x * inv_voxel));
@@ -260,7 +264,7 @@ void PointCloudEncoder::Encode(const PointCloudFrame& frame,
   out->push_back('X'); out->push_back('3');
   out->push_back('0'); out->push_back('C');
   out->push_back(1);   // version
-  out->push_back(0);   // flags：暂无 intensity
+  out->push_back(frame.world ? kCloudFlagWorld : 0);
   PutU16(out, 0);      // reserved
   PutU32(out, frame.seq);
   PutU64(out, frame.stamp_ms);

@@ -1,17 +1,16 @@
 // 点云渲染。WebGL 直接画，不引 three.js。
 //
-// 网关下发的是机体系当前帧（见 docs/app-protocol.md），不是累积地图。
-// 累积、楼层切割、显示体素、轨迹都在本机做：用运动主机里程计把历史帧
-// 变到当前机体系，不回头向感知主机多要带宽。
+// LIO 就绪后网关下发世界系 /cloud_registered（flags bit0）。轨迹和点
+// 都在同一套 LIO 坐标里，显示时再变到当前机体系。LIO 未就绪时仍是
+// 机体系 /lidar_points，用扫描定位位姿把历史帧拼起来。
 //
-// 坐标仍按量化帧还原：世界（机体）坐标 = origin + uint16 × scale。
+// 坐标还原：真实坐标 = origin + uint16 × scale。
 
 (function () {
   'use strict';
 
   const MAGIC = 0x43303358; // "X30C" 小端读成 u32
   const HEADER_SIZE = 40;
-  const FLOORS = [0, 3, 6, 9];
   const MAX_LIVE_FRAMES = 80;
   const MAX_PERSIST = 80000;
   const MAX_TRAIL = 2000;
@@ -32,17 +31,29 @@
   const frames = [];
   const trail = [];
   const persistMap = new Map();
-  const est = { x: 0, y: 0, yaw: 0, t: 0, mile: null, odomLive: false };
+  const est = {
+    x: 0, y: 0, yaw: 0, t: 0, mile: null,
+    odomLive: false,
+    lastOdomX: null, lastOdomY: null, lastOdomYaw: 0, lastOdomT: 0,
+    lastIngestX: null, lastIngestY: null,
+    source: '',
+    world: false,
+  };
 
   const opts = {
     persist: false,
     accumMs: 0,
     voxel: 0.10,
     trail: true,
+    showPoints: true,
     slice: false,
     sliceZ: 0,
     sliceHalf: 0.6,
-    floorIdx: 0,
+    storyH: 3.0,
+    displayH: 0.6,
+    floorCut: false,
+    floorView: -1,
+    floors: [],
   };
 
   // 相机：绕原点的轨道视角。仰角限制在两极之间，避免翻转。
@@ -72,7 +83,7 @@
     uniform float u_z0;
     uniform float u_zHalf;
     void main() {
-      if (u_slice > 0.5 && abs(v_h - u_z0) > u_zHalf) discard;
+      if (u_slice > 0.5 && (v_h < u_z0 || v_h > u_z0 + u_zHalf)) discard;
       float t = clamp((v_h + 0.6) / 2.6, 0.0, 1.0);
       vec3 low  = vec3(0.15, 0.45, 0.75);
       vec3 mid  = vec3(0.30, 0.85, 0.60);
@@ -305,10 +316,12 @@
     return xyz;
   }
 
-  function ingestPersist(xyz, n, from) {
+  function ingestPersist(xyz, n, from, world) {
     const inv = 1 / Math.max(opts.voxel, 0.05);
     for (let i = 0; i < n && persistMap.size < MAX_PERSIST; i++) {
-      const w = bodyToOdom(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2], from);
+      const w = world
+        ? [xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]]
+        : bodyToOdom(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2], from);
       const key = voxelKey(w[0], w[1], w[2], inv);
       if (!persistMap.has(key)) persistMap.set(key, w);
     }
@@ -344,12 +357,16 @@
       src = new Float32Array(total * 3);
       for (let i = 0; i < use.length; i++) {
         const f = use[i];
-        const samePose = Math.abs(f.pose.x - now.x) < 1e-4 &&
+        const samePose = !f.world &&
+                         Math.abs(f.pose.x - now.x) < 1e-4 &&
                          Math.abs(f.pose.y - now.y) < 1e-4 &&
                          Math.abs(f.pose.yaw - now.yaw) < 1e-4;
         for (let k = 0; k < f.count; k++) {
           const x = f.xyz[k * 3], y = f.xyz[k * 3 + 1], z = f.xyz[k * 3 + 2];
-          if (samePose) {
+          if (f.world) {
+            const b = odomToBody(x, y, z, now);
+            src[n++] = b[0]; src[n++] = b[1]; src[n++] = b[2];
+          } else if (samePose) {
             src[n++] = x; src[n++] = y; src[n++] = z;
           } else {
             const w = bodyToOdom(x, y, z, f.pose);
@@ -371,31 +388,115 @@
     pointCount = packed.count;
   }
 
-  function trailBodyVerts() {
-    const out = [];
-    for (let i = 0; i < trail.length; i++) {
-      const b = odomToBody(trail[i].x, trail[i].y, 0.12, pose);
-      out.push(b[0], b[1], b[2]);
-      // 段太长时中间补点，WebGL 线宽在很多 GPU 上只能是 1px。
-      if (i + 1 < trail.length) {
-        const n = odomToBody(trail[i + 1].x, trail[i + 1].y, 0.12, pose);
-        const dx = n[0] - b[0], dy = n[1] - b[1];
-        const dist = Math.hypot(dx, dy);
-        const steps = Math.min(8, Math.floor(dist / 0.08));
-        for (let s = 1; s < steps; s++) {
-          const t = s / steps;
-          out.push(b[0] + dx * t, b[1] + dy * t, 0.12);
-        }
+  function trailPtsBody() {
+    let start = 0;
+    for (let i = 1; i < trail.length; i++) {
+      if (Math.hypot(trail[i].x - trail[i - 1].x, trail[i].y - trail[i - 1].y) > 2.5) {
+        start = i;
       }
+    }
+    const pts = [];
+    for (let i = start; i < trail.length; i++) {
+      pts.push(odomToBody(trail[i].x, trail[i].y, 0.22, pose));
+    }
+    return pts;
+  }
+
+  // WebGL 线宽几乎总是 1px，埋在点云里看不见。轨迹改成地面上的一条带子。
+  function trailRibbonVerts() {
+    const pts = trailPtsBody();
+    const half = 0.045;
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+      const prev = pts[Math.max(0, i - 1)];
+      const next = pts[Math.min(pts.length - 1, i + 1)];
+      let dx = next[0] - prev[0], dy = next[1] - prev[1];
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-4) { dx = 1; dy = 0; }
+      else { dx /= len; dy /= len; }
+      const nx = -dy * half, ny = dx * half;
+      const p = pts[i];
+      out.push(p[0] + nx, p[1] + ny, p[2], p[0] - nx, p[1] - ny, p[2]);
     }
     return new Float32Array(out);
   }
 
+  function markerVerts() {
+    const z = 0.28;
+    const out = [0, 0, z];
+    const n = 12;
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      out.push(Math.cos(a) * 0.20, Math.sin(a) * 0.20, z);
+    }
+    return new Float32Array(out);
+  }
+
+  function collectZs() {
+    const zs = [];
+    if (opts.persist && persistMap.size > 0) {
+      persistMap.forEach((w) => { zs.push(w[2]); });
+    } else {
+      for (let i = 0; i < frames.length; i++) {
+        const f = frames[i];
+        for (let k = 0; k < f.count; k++) zs.push(f.xyz[k * 3 + 2]);
+      }
+    }
+    if (zs.length <= 5000) return zs;
+    const stride = Math.ceil(zs.length / 4000);
+    const out = [];
+    for (let i = 0; i < zs.length; i += stride) out.push(zs[i]);
+    return out;
+  }
+
+  // 按层高把点云切成若干层。一层里点数太少就丢掉（没走到的楼层不占档）。
+  function detectFloors() {
+    const story = Math.max(opts.storyH, 1.2);
+    const zs = collectZs();
+    if (!zs.length) {
+      opts.floors = [0];
+      return opts.floors;
+    }
+    zs.sort((a, b) => a - b);
+    const zMin = zs[Math.floor(zs.length * 0.03)];
+    const zMax = zs[Math.floor(zs.length * 0.97)];
+    const minCount = Math.max(20, zs.length * 0.015);
+    const floors = [];
+    const start = zMin;
+    for (let z = start; z <= zMax + 0.15; z += story) {
+      let c = 0;
+      const lo = z - 0.25;
+      const hi = z + story - 0.15;
+      for (let i = 0; i < zs.length; i++) {
+        if (zs[i] >= lo && zs[i] < hi) c++;
+      }
+      if (c >= minCount) floors.push(Number(z.toFixed(2)));
+    }
+    opts.floors = floors.length ? floors : [Number(zMin.toFixed(2))];
+    if (opts.floorView >= opts.floors.length) opts.floorView = -1;
+    return opts.floors;
+  }
+
+  function applyFloorView() {
+    if (!opts.floorCut || opts.floorView < 0 || !opts.floors.length) {
+      opts.slice = false;
+      return;
+    }
+    opts.slice = true;
+    opts.sliceZ = opts.floors[opts.floorView];
+    opts.sliceHalf = opts.displayH;
+  }
+
+  function floorButtonText() {
+    if (!opts.floorCut) return '楼层';
+    if (opts.floorView < 0) return '全部';
+    return (opts.floorView + 1) + 'F';
+  }
+
   function headingVerts() {
+    const z = 0.30;
     return new Float32Array([
-      0, 0, 0.12, 0.55, 0, 0.12,
-      0.55, 0, 0.12, 0.38, 0.10, 0.12,
-      0.55, 0, 0.12, 0.38, -0.10, 0.12,
+      0.12, 0.08, z,  0.38, 0, z,  0.12, -0.08, z,
     ]);
   }
 
@@ -405,7 +506,7 @@
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const mvp = mvpMatrix(canvas.width / canvas.height);
 
-    if (pointCount > 0) {
+    if (opts.showPoints && pointCount > 0) {
       gl.useProgram(program);
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       const loc = gl.getAttribLocation(program, 'a_p');
@@ -415,36 +516,42 @@
       gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_mvp'), false, mvp);
       gl.uniform1f(gl.getUniformLocation(program, 'u_slice'), opts.slice ? 1 : 0);
       gl.uniform1f(gl.getUniformLocation(program, 'u_z0'), opts.sliceZ);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_zHalf'), opts.sliceHalf);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_zHalf'), opts.displayH);
       gl.drawArrays(gl.POINTS, 0, pointCount);
     }
 
-    if (!opts.trail || !subscribed) return;
+    if (!opts.trail) return;
 
     gl.disable(gl.DEPTH_TEST);
     gl.useProgram(lineProgram);
     const loc = gl.getAttribLocation(lineProgram, 'a_p');
     gl.enableVertexAttribArray(loc);
     gl.uniformMatrix4fv(gl.getUniformLocation(lineProgram, 'u_mvp'), false, mvp);
-    gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.16, 0.16);
+    gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_size'), 10.0);
 
-    const dots = trailBodyVerts();
-    const nDots = dots.length / 3;
-    if (nDots > 0) {
+    const ribbon = trailRibbonVerts();
+    const nRibbon = ribbon.length / 3;
+    if (nRibbon >= 4) {
+      gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.12, 0.12);
       gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, dots, gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, ribbon, gl.DYNAMIC_DRAW);
       gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-      gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_size'), 6.0);
-      if (nDots >= 2) gl.drawArrays(gl.LINE_STRIP, 0, nDots);
-      gl.drawArrays(gl.POINTS, 0, nDots);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, nRibbon);
     }
 
+    const mark = markerVerts();
+    gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.92, 0.15);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, mark, gl.DYNAMIC_DRAW);
+    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_FAN, 0, mark.length / 3);
+
     const head = headingVerts();
+    gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.25, 0.10);
     gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, head, gl.DYNAMIC_DRAW);
     gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-    gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_size'), 8.0);
-    gl.drawArrays(gl.LINES, 0, 6);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.enable(gl.DEPTH_TEST);
   }
 
@@ -461,15 +568,34 @@
     if (HEADER_SIZE + count * 6 > arrayBuffer.byteLength) return;
 
     const xyz = decodeFrame(view, origin, scale, count);
+    const flags = view.getUint8(5);
+    const world = (flags & 1) !== 0;
+    if (world !== est.world) {
+      // 机体云和配准云坐标系不同，混在一张持久图里会对不齐轨迹。
+      persistMap.clear();
+      frames.length = 0;
+      est.lastIngestX = null;
+      est.lastIngestY = null;
+      est.world = world;
+    }
     const stamped = {
       t: Date.now(),
       pose: { x: pose.x, y: pose.y, yaw: pose.yaw },
       xyz: xyz,
       count: count,
+      world: world,
     };
     frames.push(stamped);
     if (frames.length > MAX_LIVE_FRAMES) frames.splice(0, frames.length - MAX_LIVE_FRAMES);
-    if (opts.persist) ingestPersist(xyz, count, stamped.pose);
+    if (opts.persist) {
+      const moved = est.lastIngestX === null ||
+        Math.hypot(stamped.pose.x - est.lastIngestX, stamped.pose.y - est.lastIngestY) > 0.04;
+      if (moved) {
+        ingestPersist(xyz, count, stamped.pose, world);
+        est.lastIngestX = stamped.pose.x;
+        est.lastIngestY = stamped.pose.y;
+      }
+    }
 
     // 帧到了就是订上了。只信本地按钮的话，重连或 2×2 切布局时角标会停在「未订阅」。
     if (!subscribed) {
@@ -478,9 +604,33 @@
     }
     const idle = document.getElementById('cloud-idle');
     if (idle) idle.classList.add('hidden');
+    if (opts.floorCut) {
+      detectFloors();
+      applyFloorView();
+    }
     rebuild();
     draw();
     paintTag(lastStatus);
+    const floorBtn = document.getElementById('btn-floor');
+    if (floorBtn) floorBtn.textContent = floorButtonText();
+  }
+
+  function applyBodyDelta(dx, dy, yaw) {
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    est.x += c * dx - s * dy;
+    est.y += s * dx + c * dy;
+    pose.x = est.x;
+    pose.y = est.y;
+    pose.yaw = est.yaw;
+  }
+
+  function recordTrail(now) {
+    const last = trail[trail.length - 1];
+    const moved = !last || Math.hypot(est.x - last.x, est.y - last.y) > 0.04;
+    if (!last || (moved && now - last.t > 80)) {
+      trail.push({ x: est.x, y: est.y, yaw: est.yaw, t: now });
+      if (trail.length > MAX_TRAIL) trail.splice(0, trail.length - 1600);
+    }
   }
 
   function resetEst(seed) {
@@ -490,6 +640,14 @@
     est.t = 0;
     est.mile = null;
     est.odomLive = false;
+    est.lastOdomX = null;
+    est.lastOdomY = null;
+    est.lastOdomYaw = 0;
+    est.lastOdomT = 0;
+    est.lastIngestX = null;
+    est.lastIngestY = null;
+    est.source = '';
+    est.world = false;
   }
 
   function onPose(a, b, c) {
@@ -503,6 +661,15 @@
       wz = typeof a.wz === 'number' ? a.wz : 0;
       imuYaw = typeof a.imuYaw === 'number' ? a.imuYaw * Math.PI / 180 : null;
       mile = typeof a.mile === 'number' ? a.mile : null;
+      if (typeof a.source === 'string' && a.source && a.source !== est.source) {
+        if (est.source) {
+          persistMap.clear();
+          frames.length = 0;
+          est.lastIngestX = null;
+          est.lastIngestY = null;
+        }
+        est.source = a.source;
+      }
     } else {
       x = a;
       y = b;
@@ -511,55 +678,77 @@
     if (typeof x !== 'number' || typeof y !== 'number' || typeof yaw !== 'number') {
       return;
     }
-    if (!subscribed) return;
 
     const now = Date.now();
-    if (!est.t) {
-      resetEst({ x: x, y: y, yaw: yaw });
-      est.t = now;
-      est.mile = mile;
-    }
+    const located = est.source === 'scan' || est.source === 'lio';
+    const heading = located ? yaw : (imuYaw !== null ? imuYaw : yaw);
 
-    const dt = Math.min(0.25, Math.max(0, (now - est.t) / 1000));
-    est.t = now;
-
-    const dOdom = Math.hypot(x - est.x, y - est.y);
-    if (Math.hypot(x, y) > 0.05 && dOdom > 0.015) est.odomLive = true;
-
-    if (est.odomLive) {
+    // 第一条只锚定，不把「原点 → 当前里程计」画成一条假轨迹。
+    if (est.lastOdomX === null) {
       est.x = x;
       est.y = y;
-      est.yaw = yaw;
+      est.yaw = heading;
+      est.t = now;
+      est.mile = mile;
+      est.lastOdomX = x;
+      est.lastOdomY = y;
+      est.lastOdomYaw = yaw;
+      est.lastOdomT = now;
+      if (Math.hypot(x, y) > 0.05) est.odomLive = true;
+      pose.x = est.x;
+      pose.y = est.y;
+      pose.yaw = est.yaw;
+      trail.length = 0;
+      trail.push({ x: est.x, y: est.y, yaw: est.yaw, t: now });
+      if (opts.trail) draw();
+      return;
+    }
+
+    const odomDelta = Math.hypot(x - est.lastOdomX, y - est.lastOdomY);
+    if (odomDelta > 1.0) {
+      trail.length = 0;
+      est.x = x;
+      est.y = y;
+      est.yaw = heading;
+      est.lastOdomX = x;
+      est.lastOdomY = y;
+      est.lastOdomYaw = yaw;
+      est.lastOdomT = now;
+      est.odomLive = true;
+      pose.x = est.x;
+      pose.y = est.y;
+      pose.yaw = est.yaw;
+      trail.push({ x: est.x, y: est.y, yaw: est.yaw, t: now });
+      if (opts.trail) draw();
+      return;
+    }
+
+    if (located || odomDelta > 0.015) {
+      est.lastOdomX = x;
+      est.lastOdomY = y;
+      est.lastOdomYaw = yaw;
+      est.lastOdomT = now;
+      est.odomLive = true;
+      est.x = x;
+      est.y = y;
+      est.yaw = heading;
     } else {
-      const heading = imuYaw !== null ? imuYaw : yaw;
-      const c = Math.cos(heading), s = Math.sin(heading);
+      // 腿式里程计冻住（RL 走路常见）。位置交给点云积分，航向跟 IMU。
+      if (imuYaw !== null) est.yaw = imuYaw;
+      const dt = Math.min(0.25, Math.max(0, (now - est.t) / 1000));
       const speed = Math.hypot(vx, vy);
       if (speed > 0.03) {
-        est.x += (c * vx - s * vy) * dt;
-        est.y += (s * vx + c * vy) * dt;
+        applyBodyDelta(vx * dt, vy * dt, est.yaw);
       } else if (mile !== null && est.mile !== null && mile > est.mile + 2) {
-        // 速度遥测也是 0 时，用本次里程沿机头往前推。
-        const ds = (mile - est.mile) / 100;
-        est.x += c * ds;
-        est.y += s * ds;
+        applyBodyDelta((mile - est.mile) / 100, 0, est.yaw);
       }
-      est.yaw = heading + wz * dt;
     }
+    est.t = now;
     if (mile !== null) est.mile = mile;
-
     pose.x = est.x;
     pose.y = est.y;
     pose.yaw = est.yaw;
-
-    const last = trail[trail.length - 1];
-    const moved = !last ||
-      (est.x - last.x) * (est.x - last.x) + (est.y - last.y) * (est.y - last.y) > 0.0004 ||
-      Math.abs(est.yaw - last.yaw) > 0.03;
-    const speeding = Math.hypot(vx, vy) > 0.04;
-    if (!last || ((moved || speeding) && now - last.t > 80)) {
-      trail.push({ x: est.x, y: est.y, yaw: est.yaw, t: now });
-      if (trail.length > MAX_TRAIL) trail.splice(0, trail.length - 1600);
-    }
+    recordTrail(now);
     if (opts.trail) draw();
   }
 
@@ -606,7 +795,24 @@
       const dropped = msg.dropped > 0 ? `，丢帧 ${msg.dropped}` : '';
       const extra = opts.persist ? '，持久' :
                     opts.accumMs > 0 ? `，累积 ${opts.accumMs / 1000}s` : '';
-      note.textContent = `下行 ${(msg.voxel * 100).toFixed(0)} cm${extra}${dropped}`;
+      let trailNote = '';
+      if (opts.trail && trail.length > 1) {
+        let len = 0;
+        for (let i = 1; i < trail.length; i++) {
+          len += Math.hypot(trail[i].x - trail[i - 1].x, trail[i].y - trail[i - 1].y);
+        }
+        trailNote = `，轨迹 ${len.toFixed(1)} m`;
+      }
+      const loc = est.world || (msg && msg.frame === 'world') ? '，配准' :
+                  est.source === 'lio' ? '，LIO' :
+                  est.source === 'scan' ? '，扫描定位' : '';
+      let floorNote = '';
+      if (opts.floorCut && opts.floors.length) {
+        floorNote = opts.floorView < 0
+          ? `，${opts.floors.length}层·全部`
+          : `，${opts.floors.length}层·${opts.floorView + 1}F`;
+      }
+      note.textContent = `下行 ${(msg.voxel * 100).toFixed(0)} cm${extra}${loc}${floorNote}${trailNote}${dropped}`;
     }
   }
 
@@ -635,17 +841,32 @@
     if (accum) accum.classList.toggle('is-dim', opts.persist);
     const trailBtn = document.getElementById('btn-trail');
     if (trailBtn) trailBtn.classList.toggle('active', opts.trail);
+    const visBtn = document.getElementById('btn-cloud-vis');
+    if (visBtn) visBtn.classList.toggle('active', opts.showPoints);
     const slice = document.getElementById('cloud-slice');
-    if (slice) slice.checked = opts.slice;
+    if (slice) slice.checked = opts.floorCut;
     const z = document.getElementById('cloud-slice-z');
-    if (z && document.activeElement !== z) z.value = String(opts.sliceZ);
+    if (z && document.activeElement !== z) z.value = String(opts.storyH);
     const h = document.getElementById('cloud-slice-h');
-    if (h && document.activeElement !== h) h.value = String(opts.sliceHalf);
+    if (h && document.activeElement !== h) h.value = String(opts.displayH);
+    const floorBtn = document.getElementById('btn-floor');
+    if (floorBtn) {
+      floorBtn.textContent = floorButtonText();
+      floorBtn.classList.toggle('active', opts.floorCut && opts.floorView >= 0);
+      const n = opts.floors.length;
+      floorBtn.title = n
+        ? `已识别 ${n} 层，点击切换；切完回到全部`
+        : '先勾选楼层切割，按高度识别楼层后再切换';
+    }
     const clear = document.getElementById('btn-cloud-clear');
     if (clear) clear.classList.toggle('hidden', !opts.persist);
   }
 
   function applyOpts() {
+    if (opts.floorCut) {
+      detectFloors();
+      applyFloorView();
+    }
     syncToolbar();
     if (frames.length || persistMap.size) {
       rebuild();
@@ -674,8 +895,7 @@
     syncSubscribeButton();
     paintTag(lastStatus);
     if (!subscribed) {
-      trail.length = 0;
-      resetEst();
+      // 退订只停点云，轨迹继续留着、位姿继续记。切走再回来路还在。
       clearCloud();
       const idle = document.getElementById('cloud-idle');
       if (idle) idle.classList.remove('hidden');
@@ -707,7 +927,8 @@
         if (opts.persist) {
           persistMap.clear();
           for (let i = 0; i < frames.length; i++) {
-            ingestPersist(frames[i].xyz, frames[i].count, frames[i].pose);
+            ingestPersist(frames[i].xyz, frames[i].count, frames[i].pose,
+                          !!frames[i].world);
           }
         }
         applyOpts();
@@ -741,10 +962,19 @@
         applyOpts();
         return;
       }
+      if (t.id === 'btn-cloud-vis') {
+        // 只藏点，不退订、不清轨迹。切走点云背景才会 unsubscribe。
+        opts.showPoints = !opts.showPoints;
+        applyOpts();
+        return;
+      }
       if (t.id === 'btn-floor') {
-        opts.floorIdx = (opts.floorIdx + 1) % FLOORS.length;
-        opts.sliceZ = FLOORS[opts.floorIdx];
-        opts.slice = true;
+        opts.floorCut = true;
+        detectFloors();
+        if (opts.floorView < 0) opts.floorView = 0;
+        else if (opts.floorView < opts.floors.length - 1) opts.floorView += 1;
+        else opts.floorView = -1;
+        applyFloorView();
         applyOpts();
         return;
       }
@@ -758,7 +988,14 @@
     const slice = document.getElementById('cloud-slice');
     if (slice) {
       slice.addEventListener('change', () => {
-        opts.slice = slice.checked;
+        opts.floorCut = slice.checked;
+        if (opts.floorCut) {
+          detectFloors();
+          opts.floorView = -1;
+        } else {
+          opts.floorView = -1;
+        }
+        applyFloorView();
         applyOpts();
       });
     }
@@ -766,7 +1003,9 @@
     if (z) {
       z.addEventListener('change', () => {
         const v = Number(z.value);
-        if (!Number.isNaN(v)) opts.sliceZ = v;
+        if (!Number.isNaN(v) && v > 0) opts.storyH = v;
+        if (opts.floorCut) detectFloors();
+        applyFloorView();
         applyOpts();
       });
     }
@@ -774,7 +1013,11 @@
     if (h) {
       h.addEventListener('change', () => {
         const v = Number(h.value);
-        if (!Number.isNaN(v) && v > 0) opts.sliceHalf = v;
+        if (!Number.isNaN(v) && v > 0) {
+          opts.displayH = v;
+          opts.sliceHalf = v;
+        }
+        applyFloorView();
         applyOpts();
       });
     }

@@ -28,12 +28,18 @@ struct PointCloudConfig {
   bool adaptive_voxel = true;
 };
 
+// 下行 flags：bit0 = 世界系（LIO 已配准），其余保留。
+inline constexpr uint8_t kCloudFlagWorld = 0x01;
+
 // 解析出来的一帧，已经是量化前的稀疏点。
 struct PointCloudFrame {
   uint32_t seq = 0;
   uint64_t stamp_ms = 0;
   std::string frame_id;
   std::vector<float> xyz;  // 3 个一组
+  bool world = false;      // true：已在 LIO 世界系，不要再按机体系转
+  float robot_x = 0.0f;    // 世界系时，距离裁剪相对机器人当前位置
+  float robot_y = 0.0f;
 };
 
 // 解析 sensor_msgs/PointCloud2 的原始消息体。
@@ -46,7 +52,7 @@ bool ParsePointCloud2(const uint8_t* data, size_t len, PointCloudFrame* out,
 // 线路格式（小端）：
 //   0  magic   "X30C"        4B
 //   4  version 1             1B
-//   5  flags                 1B
+//   5  flags                 1B  bit0=世界系（/cloud_registered）
 //   6  reserved              2B
 //   8  seq                   4B
 //  12  stamp_ms              8B

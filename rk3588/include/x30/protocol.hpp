@@ -60,7 +60,12 @@ inline constexpr uint32_t kConnectConfirm = 0x21020001;
 // 后一条是旧路径，起身/趴下又快又硬；前两条走 RL 策略，才是遥控器那种柔和轨迹。
 // 这两码不在公开 API 里，但是运动程序认、原厂手柄在用，比文档更值得信。
 // RL 起立后 basic_state 仍报 0，下一次该起还是该坐只能自己记。
-inline constexpr uint32_t kStandSitToggle = 0x21010202;  // 旧：坐 <-> 站，轨迹硬
+//
+// 0x21010202 日常不再用来起/趴。软急停后关节自锁，RL 起/趴会被主机吞掉；
+// 原厂 App 的「卸力」、手册里急停后按 ⑤/㉑，打的都是这条。现场 8/10
+// 硬件急停松开后先 0x21010202（"Robot is waitting to stand up"），再 RL 起立。
+inline constexpr uint32_t kStandSitToggle = 0x21010202;  // 旧切换；急停后卸力
+inline constexpr uint32_t kUnloadForce = kStandSitToggle;
 inline constexpr uint32_t kRlSitDown = 0x21010222;       // 原厂手柄趴下
 inline constexpr uint32_t kRlStandUp = 0x21010223;       // 原厂手柄起立
 inline constexpr uint32_t kTorqueStand = 0x2101020A;     // 初始站立 -> 力控站立
@@ -120,6 +125,11 @@ inline constexpr uint32_t kHeightMapMode = 0x3101EE01;
 inline constexpr uint32_t kBrakeMode = 0x3101EE02;
 inline constexpr uint32_t kVelSource = 0x3101EE03;
 inline constexpr uint32_t kStepZMax = 0x3100EE04;
+
+// 原厂 fast-lio。发往感知主机 :60000，不是地形图的 43899。
+// 1=开 0=关。狗要站稳再开，API 1.5.2.4 / 附录 C。
+inline constexpr uint32_t kLioToggle = 0x0BAA0001;
+inline constexpr uint16_t kLioPort = 60000;
 
 }  // namespace terrain
 
@@ -202,6 +212,19 @@ inline bool AxisCommandsApply(BasicState s, bool rl_standing = false) {
 // 坐↔站过渡。再发一次切换会打断正在走的轨迹，甚至当场反转。
 inline bool IsStandSitTransient(BasicState s) {
   return s == BasicState::kSitToStand || s == BasicState::kStandToSit;
+}
+
+// 原厂 LIO 要求站稳再开。RL 起立后遥测仍报坐下，要看 rl_standing。
+// 起立中 / 坐下中身子在动，不开。
+inline bool StandingForLio(BasicState s, bool rl_standing = false) {
+  if (IsStandSitTransient(s) || s == BasicState::kEmergencyOrFall) {
+    return false;
+  }
+  if (s == BasicState::kInitialStanding || s == BasicState::kTorqueStanding ||
+      s == BasicState::kStepping) {
+    return true;
+  }
+  return rl_standing && s == BasicState::kSitting;
 }
 
 enum class Gait : uint8_t {

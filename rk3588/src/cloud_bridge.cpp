@@ -42,6 +42,17 @@ void CloudBridge::AddSubscriber(WsServer::ClientId id) {
   wake_.notify_all();
 }
 
+void CloudBridge::SetFrameHandler(
+    std::function<void(const PointCloudFrame&)> handler) {
+  frame_handler_ = std::move(handler);
+}
+
+void CloudBridge::SetWorldPose(float x, float y) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  world_x_ = x;
+  world_y_ = y;
+}
+
 void CloudBridge::RemoveSubscriber(WsServer::ClientId id) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -63,7 +74,12 @@ void CloudBridge::StartRos() {
   ros_.reset(new RosClient(rc));
   ros_->Subscribe({cfg_.topic, "sensor_msgs/PointCloud2",
                    ros_md5::kPointCloud2},
-                  [this](const uint8_t* d, size_t n) { OnCloudMessage(d, n); });
+                  [this](const uint8_t* d, size_t n) { OnBodyCloud(d, n); });
+  if (!cfg_.registered_topic.empty() && cfg_.registered_topic != cfg_.topic) {
+    ros_->Subscribe({cfg_.registered_topic, "sensor_msgs/PointCloud2",
+                     ros_md5::kPointCloud2},
+                    [this](const uint8_t* d, size_t n) { OnWorldCloud(d, n); });
+  }
 
   std::string err;
   if (!ros_->Start(&err)) {
@@ -73,7 +89,12 @@ void CloudBridge::StartRos() {
     return;
   }
   ros_active_.store(true);
-  std::printf("[cloud] 已启动点云订阅 %s\n", cfg_.topic.c_str());
+  if (!cfg_.registered_topic.empty() && cfg_.registered_topic != cfg_.topic) {
+    std::printf("[cloud] 已启动点云订阅 %s + %s\n", cfg_.topic.c_str(),
+                cfg_.registered_topic.c_str());
+  } else {
+    std::printf("[cloud] 已启动点云订阅 %s\n", cfg_.topic.c_str());
+  }
 }
 
 void CloudBridge::StopRos() {
@@ -113,7 +134,43 @@ void CloudBridge::Supervisor() {
   }
 }
 
-void CloudBridge::OnCloudMessage(const uint8_t* data, size_t len) {
+bool CloudBridge::WorldFresh(uint64_t now_ms) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return last_world_ms_ != 0 && now_ms - last_world_ms_ < 1000;
+}
+
+void CloudBridge::OnBodyCloud(const uint8_t* data, size_t len) {
+  std::string err;
+  if (!ParsePointCloud2(data, len, &parse_buffer_, &err)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    last_error_ = "点云解析失败: " + err;
+    return;
+  }
+  parse_buffer_.world = false;
+  if (frame_handler_) frame_handler_(parse_buffer_);
+  // LIO 配准云在时不要再下机体云：遥控端用机体系硬转世界系会对不齐轨迹。
+  if (WorldFresh(NowMs())) return;
+  Emit(&parse_buffer_);
+}
+
+void CloudBridge::OnWorldCloud(const uint8_t* data, size_t len) {
+  std::string err;
+  if (!ParsePointCloud2(data, len, &parse_buffer_, &err)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    last_error_ = "配准点云解析失败: " + err;
+    return;
+  }
+  parse_buffer_.world = true;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    last_world_ms_ = NowMs();
+    parse_buffer_.robot_x = world_x_;
+    parse_buffer_.robot_y = world_y_;
+  }
+  Emit(&parse_buffer_);
+}
+
+void CloudBridge::Emit(PointCloudFrame* frame) {
   std::vector<WsServer::ClientId> targets;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -121,18 +178,10 @@ void CloudBridge::OnCloudMessage(const uint8_t* data, size_t len) {
     targets.assign(subscribers_.begin(), subscribers_.end());
   }
 
-  // 抽帧放在解析之前：话题是 10 Hz，下行只要 2 Hz，
-  // 剩下 8 帧连解析都不该做。
+  // 定位要 10 Hz 原云。下行仍按 target_hz 抽帧，避免 MESH 被点云撑满。
   if (!encoder_.ShouldEmit(NowMs())) return;
 
-  std::string err;
-  if (!ParsePointCloud2(data, len, &parse_buffer_, &err)) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    last_error_ = "点云解析失败: " + err;
-    return;
-  }
-
-  encoder_.Encode(parse_buffer_, &encode_buffer_);
+  encoder_.Encode(*frame, &encode_buffer_);
 
   size_t sent = 0, dropped = 0;
   for (const auto id : targets) {
@@ -151,6 +200,7 @@ void CloudBridge::OnCloudMessage(const uint8_t* data, size_t len) {
   frames_dropped_ += dropped;
   last_points_ = encoder_.last_point_count();
   last_voxel_ = encoder_.effective_voxel();
+  last_world_ = frame->world;
   if (!last_error_.empty()) last_error_.clear();
 }
 
@@ -166,6 +216,8 @@ std::string CloudBridge::StatusJson() const {
   w.Key("voxel", static_cast<double>(last_voxel_));
   w.Key("sent", static_cast<double>(frames_sent_));
   w.Key("dropped", static_cast<double>(frames_dropped_));
+  w.Key("frame", last_world_ ? "world" : "body");
+  w.Key("topic", last_world_ ? cfg_.registered_topic : cfg_.topic);
   if (!last_error_.empty()) w.Key("error", last_error_);
   w.EndObject();
   return w.Take();

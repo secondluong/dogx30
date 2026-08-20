@@ -216,6 +216,7 @@
       lat: left.x,
       turn: right.x,
       tilt: 0,
+      look: right.y,
     };
   }
 
@@ -230,11 +231,11 @@
     gas: { ch: 15, press: 1050 },
   };
 
-  // 三段拨动：高位向上、低位向下、中位空挡。首次采样只记档，不动作。
+  // 三段拨动：高位向上控狗，低位向下控布控球。中位保持上一档，不切模式。
   function ch5Toggle(v) {
     if (typeof v !== 'number' || v !== v) return '';
-    if (v <= 1300) return 'yield';
-    if (v >= 1700) return 'claim';
+    if (v <= 1100) return 'ptz';
+    if (v >= 1900) return 'dog';
     return '';
   }
 
@@ -348,6 +349,7 @@
     g20Talk: false,
     g20Wheel: null,
     g20Primed: false,
+    stickTarget: 'dog',
   };
 
   function loadStored() {
@@ -396,7 +398,7 @@
   }
 
   function zero() {
-    state.channels = { fwd: 0, lat: 0, turn: 0, tilt: 0 };
+    state.channels = { fwd: 0, lat: 0, turn: 0, tilt: 0, look: 0 };
     state.engaged = false;
   }
 
@@ -486,6 +488,7 @@
         if (app.cycleView) app.cycleView();
         return;
       }
+      if (key === 'dog' || key === 'ptz') return;
       if (key === 'claim') {
         if (!app.hasControl) send({ t: 'claim' });
         return;
@@ -498,17 +501,22 @@
         showBanner('请先申请控制权');
         return;
       }
-      if (key === 'stand_up') {
-        if (app.isStandingUi && app.isStandingUi()) return;
+      if (key === 'stand_up' || key === 'sit_down' || key === 'stand') {
+        // 急停自锁时原厂 ⑤/㉑ 是卸力，不是 RL 起/趴。
+        if (app.emergencyLocked) {
+          send({ t: 'cmd', name: 'unload' });
+          return;
+        }
+        if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) return;
+        if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) return;
         send({ t: 'cmd', name: 'stand' });
         return;
       }
-      if (key === 'sit_down') {
-        if (app.isStandingUi && !app.isStandingUi()) return;
-        send({ t: 'cmd', name: 'stand' });
-        return;
-      }
-      if (key === 'stand' || key === 'torque' || key === 'step') {
+      if (key === 'torque' || key === 'step') {
+        if (key === 'step' && app.lioAligning) {
+          showBanner('LIO 还在对准，请站稳，不要走', 4000);
+          return;
+        }
         send({ t: 'cmd', name: key });
         return;
       }
@@ -557,9 +565,15 @@
         var tog = ch5Toggle(ev.ch[4]);
         if (state.g20Prev.toggle === undefined) {
           state.g20Prev.toggle = tog;
+          if (tog === 'ptz' || tog === 'dog') state.stickTarget = tog;
         } else if (tog && tog !== state.g20Prev.toggle) {
           state.g20Prev.toggle = tog;
-          dispatch(tog);
+          if (tog === 'ptz' || tog === 'dog') {
+            if (state.stickTarget !== tog) {
+              state.stickTarget = tog;
+              showBanner(tog === 'ptz' ? '摇杆：布控球' : '摇杆：机器狗');
+            }
+          }
         } else if (!tog) {
           state.g20Prev.toggle = '';
         }
@@ -608,6 +622,7 @@
           state.g20Primed = false;
           state.g20Prev = {};
           state.g20Wheel = null;
+          state.stickTarget = 'dog';
           zero();
           setTalk(false);
         }
@@ -725,10 +740,13 @@
   }
 
   api.initGamepad = initGamepad;
+  api.stickTarget = function () { return state.stickTarget; };
   api.channels = function () {
     return { fwd: state.channels.fwd, lat: state.channels.lat,
              turn: state.channels.turn, tilt: state.channels.tilt,
-             engaged: state.engaged, source: state.source };
+             look: state.channels.look || 0,
+             engaged: state.engaged, source: state.source,
+             stickTarget: state.stickTarget };
   };
   return api;
 });

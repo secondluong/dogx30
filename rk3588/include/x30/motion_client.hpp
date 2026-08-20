@@ -81,6 +81,7 @@ struct RobotState {
 
   uint8_t battery_level = 0;
   float battery_voltage = 0.0f;
+  bool battery_valid = false;
 
   int32_t current_mileage_cm = 0;
   uint32_t error_state = 0;
@@ -111,6 +112,7 @@ class MotionClient {
   // 而不是假设发了就一定生效。
 
   void StandOrSit();        // 坐 <-> 站。发原厂手柄那对 RL 指令，不是文档里的旧切换
+  void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
   void EnterTorqueStand();  // 初始站立 -> 力控站立
   void ToggleStepping();    // 力控站立 <-> 踏步 切换
   void SetGait(Gait gait);
@@ -138,6 +140,17 @@ class MotionClient {
   bool commanding() const { return commanding_.load(); }
 
   RobotState Snapshot() const;
+
+  // UDP 电池报文经常不到登记地址；感知主机的 /battery/* 作为后备。
+  // from_udp 一旦成功，就不再让 ROS 覆盖。
+  void ApplyBattery(uint8_t level, float voltage, bool from_udp);
+
+  // RL 起立后运动 UDP 的腿式里程计/姿态/里程经常整段是 0。感知主机
+  // /leg_odom、/mileage/*、IMU 仍在走，作为后备。UDP 一旦给出非零值就占住。
+  void ApplyOdom(float x, float y, float yaw, float vx, float vy, float wz,
+                 bool from_udp);
+  void ApplyAtt(float roll, float pitch, float yaw, bool from_udp);
+  void ApplyMileage(int32_t cm, bool from_udp);
 
  private:
   void TxLoop();
@@ -168,6 +181,12 @@ class MotionClient {
   mutable std::mutex state_mutex_;
   RobotState state_;
   std::chrono::steady_clock::time_point last_telemetry_{};
+  bool battery_from_udp_{false};
+  bool odom_from_udp_{false};
+  bool odom_from_ros_{false};
+  bool att_from_udp_{false};
+  bool mileage_from_udp_{false};
+  bool mileage_from_ros_{false};
 
   // 上次「坐/站」发出去的是起立还是趴下。RL 起立后遥测仍报坐下，
   // 只能靠这个决定下一次该发哪条，不能信 basic_state。

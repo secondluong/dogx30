@@ -45,6 +45,13 @@ struct MediaConfig {
   int budget_kbps = 3800;
 
   std::vector<MediaSource> sources;
+
+  // 布控球云台。没配 host 时摇杆切到球机只停车、不转云台。
+  std::string ptz_host;
+  uint16_t ptz_port = 80;
+  std::string ptz_user = "admin";
+  std::string ptz_password;
+  int ptz_channel = 1;
 };
 
 // 从 JSON 配置文件加载。文件不存在时返回 false 并填 error，

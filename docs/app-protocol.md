@@ -33,6 +33,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 
 ```json
 {"t":"cmd","name":"stand"}                  // 坐 <-> 站 切换
+{"t":"cmd","name":"unload"}                 // 卸力：急停后解除关节自锁
 {"t":"cmd","name":"torque"}                 // 进入力控站立
 {"t":"cmd","name":"step"}                   // 起步 <-> 停步 切换
 {"t":"cmd","name":"height","value":"normal"} // normal|crawl
@@ -113,6 +114,13 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 
 ```json
 {"t":"media_select","id":"ptz_vis"}
+```
+
+云台（需要控制权）。App 拨动开关向下时摇杆走这一路，不再发给狗。
+各轴 -1..1：`pan` 右为正，`tilt` 上为正，`zoom` 拉近为正。
+
+```json
+{"t":"ptz","pan":0.4,"tilt":-0.2,"zoom":0}
 ```
 
 主动索取一次当前计划（一般不需要，服务端会在相关变化时主动推）。
@@ -330,7 +338,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 | --- | --- | --- |
 | 0 | 4 | 魔数 `"X30C"` |
 | 4 | 1 | 版本，当前为 1 |
-| 5 | 1 | 标志位，暂时全 0 |
+| 5 | 1 | 标志位。bit0=1 表示世界系（LIO `/cloud_registered`），0 为机体系 |
 | 6 | 2 | 保留 |
 | 8 | 4 | 序号 |
 | 12 | 8 | 时间戳（毫秒） |
@@ -346,8 +354,9 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 （`vertexAttribPointer` 的 `normalized=true`），连转换都不用做，
 实现见 `web/cloud.js`。
 
-当前下发的是**机体系当前帧**，不是累积地图——LIO 还没上。
-等有了配准点云，换的只是网关订阅的话题，这个格式不变。
+LIO 在发 `/cloud_registered` 时，下行是**世界系当前扫描**（flags bit0），
+和 `/lio_odom` 同一套坐标，遥控端用当前位姿变到机体系显示，轨迹才能对上。
+LIO 未就绪时仍下机体 `/lidar_points`。格式不变。
 
 ### 错误
 

@@ -175,6 +175,62 @@ void MotionClient::RxLoop() {
   }
 }
 
+void MotionClient::ApplyBattery(uint8_t level, float voltage, bool from_udp) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (!from_udp && battery_from_udp_) return;
+  if (from_udp) battery_from_udp_ = true;
+  if (level > 100) level = 100;
+  state_.battery_level = level;
+  if (voltage > 0.0f) state_.battery_voltage = voltage;
+  state_.battery_valid = state_.battery_level > 0 || state_.battery_voltage > 1.0f;
+}
+
+void MotionClient::ApplyOdom(float x, float y, float yaw, float vx, float vy,
+                             float wz, bool from_udp) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  const bool live = std::hypot(x, y) > 0.05f || std::hypot(vx, vy) > 0.02f;
+  if (from_udp) {
+    if (live) odom_from_udp_ = true;
+    else if (!odom_from_udp_ && odom_from_ros_) return;
+  } else {
+    if (odom_from_udp_) return;
+    odom_from_ros_ = true;
+  }
+  state_.odom_x = x;
+  state_.odom_y = y;
+  state_.odom_yaw = yaw;
+  state_.vel_x = vx;
+  state_.vel_y = vy;
+  state_.vel_yaw = wz;
+}
+
+void MotionClient::ApplyAtt(float roll, float pitch, float yaw, bool from_udp) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  const bool live =
+      std::fabs(roll) + std::fabs(pitch) + std::fabs(yaw) > 0.5f;
+  if (from_udp) {
+    if (live) att_from_udp_ = true;
+    else if (!att_from_udp_) return;
+  } else if (att_from_udp_) {
+    return;
+  }
+  state_.roll = roll;
+  state_.pitch = pitch;
+  state_.yaw = yaw;
+}
+
+void MotionClient::ApplyMileage(int32_t cm, bool from_udp) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (from_udp) {
+    if (cm > 0) mileage_from_udp_ = true;
+    else if (!mileage_from_udp_ && mileage_from_ros_) return;
+  } else {
+    if (mileage_from_udp_) return;
+    mileage_from_ros_ = true;
+  }
+  state_.current_mileage_cm = cm;
+}
+
 void MotionClient::HandleDatagram(const uint8_t* data, int len) {
   if (len < static_cast<int>(sizeof(CommandHead))) return;
 
@@ -188,7 +244,12 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
     case telem::kRunningStatus: {
       RcsData d{};
       if (!Extract(data, len, &d)) return;
-      state_.current_mileage_cm = d.current_mileage;
+      if (d.current_mileage > 0) {
+        mileage_from_udp_ = true;
+        state_.current_mileage_cm = d.current_mileage;
+      } else if (!mileage_from_ros_) {
+        state_.current_mileage_cm = d.current_mileage;
+      }
       state_.error_state = d.error_state;
       state_.emergency_source = d.rcs_state_list.emergency_source;
       state_.control_mode = d.rcs_state_list.is_nav_mode == 0
@@ -201,20 +262,38 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
       if (!Extract(data, len, &d)) return;
       state_.basic_state = static_cast<BasicState>(d.basic_state);
       state_.gait = static_cast<Gait>(d.gait_state);
-      state_.odom_x = d.leg_odom_pos[0];
-      state_.odom_y = d.leg_odom_pos[1];
-      state_.odom_yaw = d.leg_odom_pos[2];
-      state_.vel_x = d.leg_odom_vel[0];
-      state_.vel_y = d.leg_odom_vel[1];
-      state_.vel_yaw = d.leg_odom_vel[2];
+      {
+        const float ox = d.leg_odom_pos[0];
+        const float oy = d.leg_odom_pos[1];
+        const bool live =
+            std::hypot(ox, oy) > 0.05f ||
+            std::hypot(d.leg_odom_vel[0], d.leg_odom_vel[1]) > 0.02f;
+        if (live) {
+          odom_from_udp_ = true;
+        }
+        if (live || !odom_from_ros_) {
+          state_.odom_x = ox;
+          state_.odom_y = oy;
+          state_.odom_yaw = d.leg_odom_pos[2];
+          state_.vel_x = d.leg_odom_vel[0];
+          state_.vel_y = d.leg_odom_vel[1];
+          state_.vel_yaw = d.leg_odom_vel[2];
+        }
+      }
       break;
     }
     case telem::kSensorData: {
       ControllerSensorData d{};
       if (!Extract(data, len, &d)) return;
-      state_.roll = d.imu_data.roll;
-      state_.pitch = d.imu_data.pitch;
-      state_.yaw = d.imu_data.yaw;
+      if (std::fabs(d.imu_data.roll) + std::fabs(d.imu_data.pitch) +
+          std::fabs(d.imu_data.yaw) > 0.5f) {
+        att_from_udp_ = true;
+      }
+      if (att_from_udp_) {
+        state_.roll = d.imu_data.roll;
+        state_.pitch = d.imu_data.pitch;
+        state_.yaw = d.imu_data.yaw;
+      }
       std::memcpy(state_.joint_pos, d.joint_pos.data, sizeof(state_.joint_pos));
       std::memcpy(state_.joint_vel, d.joint_vel.data, sizeof(state_.joint_vel));
       std::memcpy(state_.joint_tau, d.joint_tau.data, sizeof(state_.joint_tau));
@@ -231,10 +310,35 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
       break;
     }
     case telem::kBattery: {
+      // 实机报文经常短于文档的 40 字节；整包对不上就整段丢掉，电量会永远是 0。
       BatterySensorData d{};
-      if (!Extract(data, len, &d)) return;
-      state_.battery_level = d.battery_level;
-      state_.battery_voltage = static_cast<float>(d.voltage);
+      const int payload = len - static_cast<int>(sizeof(CommandHead));
+      if (payload > 0) {
+        std::memcpy(&d, data + sizeof(CommandHead),
+                    std::min(payload, static_cast<int>(sizeof(d))));
+      }
+      float volts = static_cast<float>(d.voltage);
+      if (d.voltage > 200) volts = static_cast<float>(d.voltage) / 100.0f;
+      if (d.voltage == 0 && payload >= 4) {
+        float fv = 0.0f;
+        std::memcpy(&fv, data + sizeof(CommandHead), sizeof(fv));
+        if (fv > 20.0f && fv < 100.0f) volts = fv;
+      }
+      uint8_t level = d.battery_level;
+      if (level > 100) level = 0;
+      static bool logged = false;
+      if (!logged) {
+        logged = true;
+        std::printf("[运动] 电池 UDP len=%d level=%u voltage=%.1f (raw=%u)\n",
+                    len, static_cast<unsigned>(level), volts,
+                    static_cast<unsigned>(d.voltage));
+      }
+      battery_from_udp_ = true;
+      if (level > 100) level = 100;
+      state_.battery_level = level;
+      if (volts > 0.0f) state_.battery_voltage = volts;
+      state_.battery_valid = state_.battery_level > 0 ||
+                             state_.battery_voltage > 1.0f;
       break;
     }
     case telem::kBodyHeightState: {
@@ -244,8 +348,19 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
       state_.body_height_gear = gear;
       break;
     }
-    default:
+    default: {
+      static uint32_t seen[16] = {};
+      static int nseen = 0;
+      bool already = false;
+      for (int i = 0; i < nseen; ++i) {
+        if (seen[i] == head.code) already = true;
+      }
+      if (!already && nseen < 16) {
+        seen[nseen++] = head.code;
+        std::printf("[运动] 未识别遥测 0x%08x len=%d\n", head.code, len);
+      }
       break;
+    }
   }
 }
 
@@ -298,6 +413,19 @@ void MotionClient::StandOrSit() {
     SendSimple(cmd::kRlSitDown);
   }
 }
+
+void MotionClient::UnloadForce() {
+  // 软急停后关节自锁。原厂 App「卸力」、手柄 ⑤/㉑ 打的是 0x21010202，
+  // 不是 RL 起/趴。现场急停后再发 0x21010223/22，主机不应，狗起不来。
+  SendSimple(cmd::kUnloadForce);
+  ReleaseAxes();
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  last_stand_sit_ = LastStandSit::kSat;
+  state_.rl_standing = false;
+  axes_unlocked_ = false;
+  std::printf("[运动] 卸力 0x21010202（遥测=%s）\n", ToString(state_.basic_state));
+}
+
 void MotionClient::EnterTorqueStand() {
   SendSimple(cmd::kTorqueStand);
   std::lock_guard<std::mutex> lock(state_mutex_);
