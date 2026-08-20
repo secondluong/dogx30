@@ -93,6 +93,8 @@ final class RadioLink {
     private int tick;
     private int sentOk;
     private int sentFail;
+    private int rxOk;
+    private String lastCmd = "";
     private boolean pipeOk;
     private boolean rfOn;
     private String status = "off";
@@ -171,6 +173,8 @@ final class RadioLink {
             o.put("err", lastErr);
             o.put("sentOk", sentOk);
             o.put("sentFail", sentFail);
+            o.put("rx", rxOk);
+            o.put("cmd", lastCmd);
             o.put("standing", standing);
             return o.toString();
         } catch (Exception e) {
@@ -189,6 +193,8 @@ final class RadioLink {
         if (!ifaces.isEmpty()) sb.append(" ").append(ifaces);
         if (!lastErr.isEmpty() && sentOk == 0) sb.append(" ").append(lastErr);
         sb.append(" ok").append(sentOk).append("/fail").append(sentFail);
+        sb.append(" rx").append(rxOk);
+        if (!lastCmd.isEmpty()) sb.append(" ").append(lastCmd);
         return sb.toString();
     }
 
@@ -206,6 +212,7 @@ final class RadioLink {
     }
 
     private synchronized void commandOnRadio(String name) {
+        lastCmd = name;
         if (!enabled) {
             enabled = true;
             start();
@@ -321,6 +328,8 @@ final class RadioLink {
         tick = 0;
         sentOk = 0;
         sentFail = 0;
+        rxOk = 0;
+        lastCmd = "";
         lastErr = "";
         status = "starting";
         enableRf(true);
@@ -360,7 +369,12 @@ final class RadioLink {
             robotAddr = net != null ? resolve(net, ROBOT_IP) : InetAddress.getByName(ROBOT_IP);
             udp = new DatagramSocket((java.net.SocketAddress) null);
             udp.setReuseAddress(true);
-            udp.bind(new InetSocketAddress(0));
+            // 运动主机 network.toml 登记的是 43897；随机端口发出去也不回遥测。
+            InetSocketAddress bindAddr = local != null
+                    ? new InetSocketAddress(local, LOCAL_PORT)
+                    : new InetSocketAddress(LOCAL_PORT);
+            udp.bind(bindAddr);
+            udp.setSoTimeout(1);
             if (net != null) {
                 try {
                     net.bindSocket(udp);
@@ -706,11 +720,12 @@ final class RadioLink {
         G20Rc.Snapshot snap = G20Rc.get().snapshot();
         if (tick % HB_EVERY == 0) {
             sendSimple(HEARTBEAT);
-            if (!confirmed) {
+            if (!confirmed || tick % 250 == 0) {
                 sendSimple(CONNECT);
                 confirmed = true;
             }
         }
+        drainRx();
         tick++;
         if (snap.ch != null && snap.ch.length > 0) {
             handleButtons(snap.ch);
@@ -797,6 +812,21 @@ final class RadioLink {
         } catch (Throwable t) {
             Log.w(TAG, "pipe send", t);
             return false;
+        }
+    }
+
+    private void drainRx() {
+        if (udp == null) return;
+        byte[] buf = new byte[256];
+        try {
+            while (true) {
+                DatagramPacket p = new DatagramPacket(buf, buf.length);
+                udp.receive(p);
+                rxOk++;
+            }
+        } catch (java.net.SocketTimeoutException ignored) {
+        } catch (Exception e) {
+            if (rxOk == 0 && lastErr.isEmpty()) lastErr = "rx:" + brief(e);
         }
     }
 

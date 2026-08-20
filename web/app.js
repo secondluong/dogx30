@@ -563,6 +563,8 @@ function radioStatusLine() {
   if (st.local) bits.push(st.local);
   else if (st.nets) bits.push(st.nets);
   bits.push('ok' + (st.sentOk || 0) + '/fail' + (st.sentFail || 0));
+  bits.push('rx' + (st.rx || 0));
+  if (st.cmd) bits.push(st.cmd);
   if (st.err) bits.push(st.err);
   return bits.join(' ');
 }
