@@ -276,14 +276,26 @@ check('切 2.4G 不经网关下发',
 var radioJava = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
             'com', 'dogx30', 'control', 'RadioLink.java'), 'utf8');
+var radioBridge = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+            'com', 'dogx30', 'control', 'ControlActivity.java'), 'utf8');
 check('2.4G RadioLink 含起立趴下行走指令',
       /0x21010223/.test(radioJava) &&
       /0x21010222/.test(radioJava) &&
       /0x21010201/.test(radioJava) &&
       /bindToAirlink/.test(radioJava) &&
-      /createG12G20Pipeline/.test(radioJava) &&
+      /setScreenAxes/.test(radioJava) &&
+      /maybeStep/.test(radioJava) &&
       !/createUDPPipeline/.test(radioJava) &&
-      /void command\(String name\)/.test(radioJava));
+      !/createG12G20Pipeline/.test(radioJava) &&
+      /void command\(String name\)/.test(radioJava) &&
+      /radioVel/.test(radioBridge) &&
+      /radioStanding/.test(radioBridge));
+check('2.4G 起立按钮按 App 自己的起趴状态切换',
+      /if \(radioDirect\(\)\) return 'stand'/.test(appJs) &&
+      /nativeRadioVel/.test(appJs) &&
+      /syncRadioStanding/.test(appJs) &&
+      /html\.shell-app:not\(\.radio-24\) \.hud-sticks/.test(styleText));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));
 var mediaJs = read('media.js');

@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20260820f">
 </head>
 <body>
 
@@ -279,6 +279,10 @@
   </div>
 
   <div id="hud-standing" class="hud-menus">
+    <div class="row wrap hud-walk">
+      <button type="button" class="btn sm" data-cmd="torque">力控</button>
+      <button type="button" class="btn sm" data-cmd="step">起步</button>
+    </div>
     <div class="acc">
       <button type="button" class="btn acc-btn" data-acc="gait">步态</button>
       <div class="acc-pop hidden" id="acc-gait">
@@ -342,6 +346,6 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="app.js?v=20260820e"></script>
+<script src="app.js?v=20260820f"></script>
 </body>
 </html>

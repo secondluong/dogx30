@@ -233,6 +233,10 @@ function hasNativeRadio() {
   }
 }
 
+function radioDirect() {
+  return isAppShell && app.radioPath === 'radio';
+}
+
 function send(obj) {
   if (!obj) return;
   // 只有安装包真能直达时，2.4G 才停掉网关运动。否则切 2.4G 等于把 MESH 也掐死。
@@ -280,6 +284,44 @@ function nativeRadioCmd(name) {
   return false;
 }
 app.nativeRadioCmd = nativeRadioCmd;
+
+function hasRadioStanding() {
+  try {
+    return !!(window.X30Native && typeof window.X30Native.radioStanding === 'function');
+  } catch (e) {
+    return false;
+  }
+}
+
+function nativeRadioStanding() {
+  try {
+    if (hasRadioStanding()) return !!window.X30Native.radioStanding();
+  } catch (e) { /* 网页没有原生桥 */ }
+  return app.rlStanding;
+}
+
+function nativeRadioVel(vx, vy, wz) {
+  try {
+    if (window.X30Native && typeof window.X30Native.radioVel === 'function') {
+      window.X30Native.radioVel(vx, vy, wz);
+      return true;
+    }
+  } catch (e) { /* 旧包没有摇杆直达 */ }
+  return false;
+}
+
+function syncRadioStanding() {
+  if (!radioDirect()) return;
+  const up = nativeRadioStanding();
+  if (up === app.rlStanding) return;
+  app.rlStanding = up;
+  const wrap = $('stage-wrap');
+  if (wrap) {
+    wrap.classList.toggle('dog-up', up);
+    wrap.classList.toggle('dog-prone', !up);
+  }
+  paintStandButton();
+}
 
 // 2.4G 没有网关遥测时，本地先把起立后的步态/身高菜单亮出来。
 function applyRadioPose(name) {
@@ -381,6 +423,7 @@ function notifyNativeRadio() {
 
 function applyRadioPath(announce) {
   app.radioFallback = app.radioPath === 'radio';
+  document.documentElement.classList.toggle('radio-24', radioDirect());
   notifyNativeRadio();
   if (app.radioPath === 'radio') {
     if (hasNativeRadio()) {
@@ -388,14 +431,26 @@ function applyRadioPath(announce) {
         app.hasControl = false;
         send({ t: 'yield' });
       }
+      const sticks = $('hud-sticks');
+      if (sticks) {
+        sticks.classList.remove('hidden');
+        if ($('btn-sticks')) $('btn-sticks').classList.add('active');
+      }
       if (announce) {
-        showBanner('已切到 2.4G。起立/趴下走无线电直达，不经网关');
+        showBanner('已切到 2.4G。起立/趴下/行走直达运动主机，不经网关');
       }
     } else if (announce) {
       showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
     }
     paintRadioBtn();
     return;
+  }
+  if (isAppShell) {
+    const sticks = $('hud-sticks');
+    if (sticks) {
+      sticks.classList.add('hidden');
+      if ($('btn-sticks')) $('btn-sticks').classList.remove('active');
+    }
   }
   if (linkOpen()) requestControl();
   if (announce) {
@@ -436,10 +491,15 @@ function requestControl() {
 
 function setLink(online) {
   const chip = $('chip-link');
-  chip.classList.toggle('online', online && app.alive);
-  $('link-text').textContent = online
-      ? (app.alive ? '已连接' : '狗未接通')
-      : (app.radioFallback ? '2.4G' : '重连中');
+  if (radioDirect()) {
+    chip.classList.toggle('online', true);
+    $('link-text').textContent = '2.4G';
+  } else {
+    chip.classList.toggle('online', online && app.alive);
+    $('link-text').textContent = online
+        ? (app.alive ? '已连接' : '狗未接通')
+        : (app.radioFallback ? '2.4G' : '重连中');
+  }
   if ($('btn-settings')) $('btn-settings').classList.toggle('online', online);
   if (!online) {
     document.querySelector('.telemetry').classList.add('stale');
@@ -473,21 +533,32 @@ const fmt = (v, n = 2) => (typeof v === 'number' ? v.toFixed(n) : '—');
 function renderState(s) {
   app.alive = !!s.alive;
   setLink(linkOpen());
-  if (linkOpen() && !s.alive && !app.warnedRobotDown) {
+  if (linkOpen() && !s.alive && !app.warnedRobotDown && !radioDirect()) {
     app.warnedRobotDown = true;
     showBanner('网关在，但够不着狗。把板子 eth0 网线插回机身口，并确认狗已开机', 15000);
   }
   if (s.alive) app.warnedRobotDown = false;
-  app.basicState = s.basic_state;
-  app.rlStanding = !!s.rl_standing;
-  app.emergencyLocked = s.basic_state === STATE_EMERGENCY || !!s.emergency_source;
+  // 2.4G 直达后运动遥测改回平板，网关会一直报坐下。不能再用它改口。
+  if (!radioDirect()) {
+    app.basicState = s.basic_state;
+    app.rlStanding = !!s.rl_standing;
+    app.emergencyLocked = s.basic_state === STATE_EMERGENCY || !!s.emergency_source;
+  } else if (s.alive && s.basic_state === STATE_EMERGENCY) {
+    app.emergencyLocked = true;
+    app.rlStanding = false;
+  }
   app.controlMode = typeof s.mode === 'number' ? s.mode : 0;
 
   document.querySelector('.telemetry').classList.toggle('stale', !s.alive);
 
   const chipState = $('chip-state');
-  chipState.textContent = s.basic_state_text || '—';
-  chipState.classList.toggle('online', s.alive);
+  if (radioDirect()) {
+    chipState.textContent = '2.4G';
+    chipState.classList.add('online');
+  } else {
+    chipState.textContent = s.basic_state_text || '—';
+    chipState.classList.toggle('online', s.alive);
+  }
 
   const batt = s.battery || {};
   const battText = batt.valid ? `${batt.level}% · ${fmt(batt.voltage, 1)}V` : '—';
@@ -534,10 +605,10 @@ function renderState(s) {
   });
 
   const lio = s.lio || {};
-  app.lioAligning = !!lio.aligning;
+  app.lioAligning = radioDirect() ? false : !!lio.aligning;
   if (app.emergencyLocked) {
     showBanner('急停后关节已锁，请先点卸力，再起立');
-  } else if (lio.aligning) {
+  } else if (lio.aligning && !radioDirect()) {
     const el = $('banner');
     el.textContent = lio.text || 'LIO 正在对准，请站稳，不要走';
     el.className = 'banner banner-wait';
@@ -562,9 +633,11 @@ function renderState(s) {
   wrap.classList.toggle('dog-up', standing);
   wrap.classList.toggle('dog-prone', !standing);
   paintStandButton();
-  if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
-  else if (s.basic_state === STATE_TORQUE_STANDING) app.walkMode = 'torque';
-  else if (!standing) app.walkMode = null;
+  if (!radioDirect()) {
+    if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
+    else if (s.basic_state === STATE_TORQUE_STANDING) app.walkMode = 'torque';
+    else if (!standing) app.walkMode = null;
+  }
   paintWalkButtons();
   if (!standing) closeAccordions();
 
@@ -637,8 +710,10 @@ function updateStickAvailability() {
   const ptz = stickTarget() === 'ptz';
   const usable = ptz
     ? true
-    : (app.hasControl && app.alive && controlChannel() !== null &&
-       !app.lioAligning);
+    : radioDirect()
+      ? (isStandingUi() && !app.emergencyLocked)
+      : (app.hasControl && app.alive && controlChannel() !== null &&
+         !app.lioAligning);
   document.querySelectorAll('.stick').forEach((s) => {
     s.classList.toggle('disabled', !usable);
   });
@@ -769,6 +844,12 @@ let ptzClaimedAt = 0;
 setInterval(() => {
   paintStickChip();
   const c = activeChannels();
+  if (radioDirect() && hasNativeRadio()) {
+    syncRadioStanding();
+    if (stickTarget() === 'ptz') nativeRadioVel(0, 0, 0);
+    else nativeRadioVel(c.fwd || 0, c.lat || 0, c.turn || 0);
+    return;
+  }
   if (stickTarget() === 'ptz') {
     const moving = !!(c.engaged || c.fwd || c.lat || c.turn || c.tilt ||
                       c.look);
@@ -861,6 +942,8 @@ function radioCmdFromEl(el) {
   if (el.dataset.cmd) {
     if (el.dataset.cmd === 'stand') {
       if (app.emergencyLocked) return 'unload';
+      // 2.4G 以 App 自己记的起/趴为准，不能看网关遥测，否则一直再发起立。
+      if (radioDirect()) return 'stand';
       return isStandingUi() ? 'sit_down' : 'stand_up';
     }
     return el.dataset.cmd;
@@ -877,7 +960,16 @@ function guarded(fn) {
     if (isAppShell && app.radioPath === 'radio') {
       const name = radioCmdFromEl(ev && ev.currentTarget);
       if (name && nativeRadioCmd(name)) {
-        applyRadioPose(name);
+        if (name === 'stand') {
+          if (hasRadioStanding()) {
+            syncRadioStanding();
+            applyRadioPose(app.rlStanding ? 'stand_up' : 'sit_down');
+          } else {
+            applyRadioPose(app.rlStanding ? 'sit_down' : 'stand_up');
+          }
+        } else {
+          applyRadioPose(name);
+        }
         markPending(ev.currentTarget);
         return;
       }
@@ -1203,8 +1295,7 @@ if ($('gas-panel')) {
   if ($('btn-gas')) $('btn-gas').classList.remove('active');
 }
 if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
-paintRadioBtn();
-notifyNativeRadio();
+applyRadioPath(false);
 
 connect();
 

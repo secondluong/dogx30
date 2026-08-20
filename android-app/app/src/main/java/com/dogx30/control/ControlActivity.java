@@ -212,6 +212,16 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public boolean radioStanding() {
+            return RadioLink.get().isStanding();
+        }
+
+        @JavascriptInterface
+        public void radioVel(double vx, double vy, double wz) {
+            RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz);
+        }
+
+        @JavascriptInterface
         public void setGateway(String host, int port) {
             if (host == null) return;
             host = host.trim();

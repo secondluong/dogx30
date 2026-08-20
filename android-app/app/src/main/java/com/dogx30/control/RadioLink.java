@@ -65,6 +65,11 @@ final class RadioLink {
     private boolean prevSit;
     private boolean prevEstop;
     private int tick;
+    private float screenFwd;
+    private float screenLat;
+    private float screenTurn;
+    private boolean haveScreen;
+    private boolean needStep;
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
     @Nullable private InetAddress robotAddr;
@@ -82,47 +87,73 @@ final class RadioLink {
         else stop();
     }
 
+    synchronized boolean isStanding() {
+        return standing;
+    }
+
+    synchronized void setScreenAxes(float fwd, float lat, float turn) {
+        screenFwd = fwd;
+        screenLat = lat;
+        screenTurn = turn;
+        haveScreen = true;
+    }
+
     synchronized void command(String name) {
         if (!enabled || name == null) return;
         switch (name) {
             case "stand_up":
-                sendSimple(emergency ? UNLOAD : STAND);
-                emergency = false;
-                standing = true;
+                if (emergency) {
+                    sendSimple(UNLOAD);
+                    emergency = false;
+                    standing = false;
+                    needStep = false;
+                } else {
+                    sendSimple(STAND);
+                    standing = true;
+                    needStep = true;
+                }
                 break;
             case "sit":
             case "sit_down":
                 sendSimple(SIT);
                 standing = false;
+                needStep = false;
                 break;
             case "stand":
                 if (emergency) {
                     sendSimple(UNLOAD);
                     emergency = false;
                     standing = false;
+                    needStep = false;
                 } else if (standing) {
                     sendSimple(SIT);
                     standing = false;
+                    needStep = false;
                 } else {
                     sendSimple(STAND);
                     standing = true;
+                    needStep = true;
                 }
                 break;
             case "unload":
                 sendSimple(UNLOAD);
                 emergency = false;
                 standing = false;
+                needStep = false;
                 break;
             case "torque":
                 sendSimple(TORQUE);
+                needStep = false;
                 break;
             case "step":
                 sendSimple(STEP);
+                needStep = false;
                 break;
             case "estop":
                 sendSimple(ESTOP);
                 emergency = true;
                 standing = false;
+                needStep = false;
                 break;
             case "manual":
             case "mode":
@@ -240,6 +271,10 @@ final class RadioLink {
     private void stop() {
         running = false;
         handler.removeCallbacks(loop);
+        haveScreen = false;
+        needStep = false;
+        standing = false;
+        confirmed = false;
         if (udp != null) {
             udp.close();
             udp = null;
@@ -260,8 +295,35 @@ final class RadioLink {
         tick++;
         if (snap.ch != null && snap.ch.length > 0) {
             handleButtons(snap.ch);
-            sendAxes(snap.ch);
         }
+        boolean g20 = snap.ch != null && snap.ch.length > 0;
+        if (g20 && !screenMoving()) {
+            sendAxes(snap.ch);
+        } else if (haveScreen) {
+            maybeStep(screenFwd, screenLat, screenTurn);
+            sendSimple(AXIS_LY, bits(screenFwd));
+            sendSimple(AXIS_LX, bits(-screenLat));
+            sendSimple(AXIS_RX, bits(-screenTurn));
+        } else {
+            sendSimple(AXIS_LY, 0);
+            sendSimple(AXIS_LX, 0);
+            sendSimple(AXIS_RX, 0);
+        }
+    }
+
+    private boolean screenMoving() {
+        return haveScreen && (Math.abs(screenFwd) > 0.05f
+                || Math.abs(screenLat) > 0.05f
+                || Math.abs(screenTurn) > 0.05f);
+    }
+
+    private void maybeStep(float fwd, float lat, float turn) {
+        if (!needStep || !standing) return;
+        if (Math.abs(fwd) < 0.12f && Math.abs(lat) < 0.12f && Math.abs(turn) < 0.12f) {
+            return;
+        }
+        sendSimple(STEP);
+        needStep = false;
     }
 
     private void handleButtons(int[] ch) {
@@ -285,6 +347,7 @@ final class RadioLink {
         float fwd = axis(ch, 2, false);
         float lat = axis(ch, 3, true);
         float turn = axis(ch, 0, true);
+        maybeStep(fwd, lat, turn);
         sendSimple(AXIS_LY, bits(fwd));
         sendSimple(AXIS_LX, bits(-lat));
         sendSimple(AXIS_RX, bits(-turn));
