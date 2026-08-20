@@ -34,9 +34,6 @@ function loadRadioPath() {
   if (!isAppShell) return 'mesh';
   if (offlineRadio) return 'radio';
   try {
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'radio';
-  } catch (e) { /* 当在线 */ }
-  try {
     // 上一版开机就开数传/射频，G20 画面和控制一起没了。只清一次，回到 MESH。
     if (!window.localStorage.getItem('x30.radioPath.restoreMesh')) {
       window.localStorage.setItem(RADIO_STORE, 'mesh');
@@ -333,6 +330,15 @@ function nativeRadioLinkOk() {
   return false;
 }
 
+function nativeRadioStatus() {
+  try {
+    if (window.X30Native && typeof window.X30Native.radioStatus === 'function') {
+      return JSON.parse(window.X30Native.radioStatus() || '{}');
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
 function nativeRadioStanding() {
   try {
     if (hasRadioStanding()) return !!window.X30Native.radioStanding();
@@ -470,10 +476,14 @@ function applyRadioPath(announce) {
           : '已切到 2.4G。指令走 G20 数传，不经网关');
       }
       setTimeout(() => {
-        if (radioDirect() && hasNativeRadio() && !nativeRadioLinkOk()) {
-          showBanner('G20 数传管道没连上。请关掉云卓助手和云深处 App，并确认已对频', 8000);
-        }
-      }, 1500);
+        if (!radioDirect() || !hasNativeRadio()) return;
+        if (nativeRadioLinkOk()) return;
+        const st = nativeRadioStatus() || {};
+        const why = st.status === 'no-usb-net'
+          ? '还没有 G20 USB 网（192.168.144）。请确认已对频，并关掉云卓助手/云深处'
+          : ('2.4G 还没通到运动主机（' + (st.status || 'unknown') + '）。请确认 G20 已对频');
+        showBanner(why, 10000);
+      }, 2000);
     } else if (announce) {
       showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
     }

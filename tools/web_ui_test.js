@@ -283,17 +283,18 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /0x21010223/.test(radioJava) &&
       /0x21010222/.test(radioJava) &&
       /0x21010201/.test(radioJava) &&
-      /bindProcessToNetwork/.test(radioJava) &&
+      /bindSocket/.test(radioJava) &&
       /192, 168, 144/.test(radioJava) &&
-      /createG12G20Pipeline/.test(radioJava) &&
       /createUDPPipeline/.test(radioJava) &&
-      /192\.168\.144\.10/.test(radioJava) &&
-      /torqued \|\| stepping/.test(radioJava) &&
+      /192\.168\.1\.103/.test(radioJava) &&
+      /onRcReady/.test(radioJava) &&
+      !/createG12G20Pipeline/.test(radioJava) &&
       !/maybeStep/.test(radioJava) &&
       !/KeyRCRFEnable/.test(radioJava) &&
       /void command\(String name\)/.test(radioJava) &&
       /radioStanding/.test(radioBridge) &&
-      /radioLinkOk/.test(radioBridge));
+      /radioLinkOk/.test(radioBridge) &&
+      /radioStatus/.test(radioBridge));
 check('离线包装页强制 2.4G 不连网关 WS',
       /offlineRadio \|\| location\.protocol === 'file:'/.test(appJs) &&
       /只能走 2\.4G/.test(appJs) &&

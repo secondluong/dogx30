@@ -96,6 +96,8 @@ public final class G20Rc {
             refreshDevice();
             emit();
             ensurePolling();
+            // USB 网这时才稳，跟云深处一样再开到运动主机的 UDP。
+            RadioLink.get().onRcReady();
         }
 
         @Override
@@ -169,6 +171,7 @@ public final class G20Rc {
     public void setBackupRadio(boolean on) {
         backupRadio = on;
         RadioLink.get().setEnabled(on);
+        if (on && connected) RadioLink.get().onRcReady();
     }
 
     public void setWsDown(boolean down) {

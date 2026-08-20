@@ -319,6 +319,11 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public String radioStatus() {
+            return RadioLink.get().statusJson();
+        }
+
+        @JavascriptInterface
         public void radioVel(double vx, double vy, double wz) {
             RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz);
         }
