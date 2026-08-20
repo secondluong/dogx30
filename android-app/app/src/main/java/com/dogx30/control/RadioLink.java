@@ -9,6 +9,7 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.system.Os;
 import android.system.OsConstants;
@@ -77,7 +78,8 @@ final class RadioLink {
         return INST;
     }
 
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    @Nullable private HandlerThread worker;
+    @Nullable private Handler handler;
     private boolean enabled;
     private boolean running;
     private boolean confirmed;
@@ -109,21 +111,38 @@ final class RadioLink {
 
     synchronized void attach(Context ctx) {
         if (ctx != null) appCtx = ctx.getApplicationContext();
+        ensureWorker();
     }
 
-    synchronized void setEnabled(boolean on) {
-        if (enabled == on) return;
-        enabled = on;
-        if (on) start();
-        else stop();
+    private void ensureWorker() {
+        if (handler != null) return;
+        worker = new HandlerThread("radio-udp");
+        worker.start();
+        handler = new Handler(worker.getLooper());
+    }
+
+    private void onRadio(Runnable r) {
+        ensureWorker();
+        if (Looper.myLooper() == handler.getLooper()) r.run();
+        else handler.post(r);
+    }
+
+    void setEnabled(boolean on) {
+        onRadio(() -> {
+            if (enabled == on) return;
+            enabled = on;
+            if (on) start();
+            else stop();
+        });
     }
 
     /** CSDK 连上遥控器后 USB 网才稳定，再开 socket / 管道。 */
-    synchronized void onRcReady() {
-        if (!enabled) return;
-        if (udp == null && !pipeOk) status = "rc-up";
-        openUdp();
-        openSdkUdp();
+    void onRcReady() {
+        onRadio(() -> {
+            if (!enabled) return;
+            if (udp == null && !pipeOk) status = "rc-up";
+            openUdp();
+        });
     }
 
     synchronized boolean isStanding() {
@@ -181,16 +200,17 @@ final class RadioLink {
         stepping = false;
     }
 
-    synchronized void command(String name) {
+    void command(String name) {
         if (name == null) return;
+        onRadio(() -> commandOnRadio(name));
+    }
+
+    private synchronized void commandOnRadio(String name) {
         if (!enabled) {
             enabled = true;
             start();
         }
-        if (udp == null && !pipeOk) {
-            openUdp();
-            openSdkUdp();
-        }
+        if (udp == null) openUdp();
         switch (name) {
             case "stand_up":
                 if (emergency) {
@@ -296,7 +316,7 @@ final class RadioLink {
         }
     }
 
-    private void start() {
+    private synchronized void start() {
         confirmed = false;
         tick = 0;
         sentOk = 0;
@@ -306,7 +326,6 @@ final class RadioLink {
         enableRf(true);
         requestEthernet();
         openUdp();
-        openSdkUdp();
         if (!running) {
             running = true;
             handler.post(loop);
@@ -467,10 +486,7 @@ final class RadioLink {
         netCb = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network network) {
-                handler.post(() -> {
-                    openUdp();
-                    openSdkUdp();
-                });
+                onRadio(RadioLink.this::openUdp);
             }
         };
         try {
@@ -664,9 +680,9 @@ final class RadioLink {
         }
     }
 
-    private void stop() {
+    private synchronized void stop() {
         running = false;
-        handler.removeCallbacks(loop);
+        if (handler != null) handler.removeCallbacks(loop);
         standing = false;
         clearWalk();
         confirmed = false;
@@ -683,13 +699,10 @@ final class RadioLink {
         }
     }
 
-    private void onTick() {
+    private synchronized void onTick() {
         if (!running || !enabled) return;
         handler.postDelayed(loop, TICK_MS);
-        if (tick % 50 == 0) {
-            if (udp == null) openUdp();
-        }
-        if (!pipeOk && tick % 150 == 0) openSdkUdp();
+        if (tick % 50 == 0 && udp == null) openUdp();
         G20Rc.Snapshot snap = G20Rc.get().snapshot();
         if (tick % HB_EVERY == 0) {
             sendSimple(HEARTBEAT);
@@ -771,10 +784,6 @@ final class RadioLink {
         byte[] pkt = buf.array();
         // 只走一条成功路径。起步/力控是切换指令，多路齐发会互相抵消。
         if (udp != null && sendUdp(pkt, robotAddr)) {
-            sentOk++;
-            return;
-        }
-        if (pipeOk && udpPipe != null && writePipe(udpPipe, pkt)) {
             sentOk++;
             return;
         }
