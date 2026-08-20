@@ -8,6 +8,7 @@ final class GatewayStore {
     static final String PREFS = "x30";
     static final String KEY_HOST = "host";
     static final String KEY_PORT = "port";
+    static final String KEY_RADIO = "radioPath";
     static final String DEFAULT_HOST = "192.168.1.32";
     static final int DEFAULT_PORT = 8080;
 
@@ -29,6 +30,17 @@ final class GatewayStore {
 
     static String consoleUrl(Context ctx) {
         return "http://" + host(ctx) + ":" + port(ctx) + "/index.html?shell=app";
+    }
+
+    static String radioPath(Context ctx) {
+        String v = prefs(ctx).getString(KEY_RADIO, "mesh");
+        return "radio".equals(v) ? "radio" : "mesh";
+    }
+
+    static void saveRadioPath(Context ctx, String path) {
+        prefs(ctx).edit()
+                .putString(KEY_RADIO, "radio".equals(path) ? "radio" : "mesh")
+                .apply();
     }
 
     private GatewayStore() {}

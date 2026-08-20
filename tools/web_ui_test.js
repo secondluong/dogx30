@@ -272,7 +272,8 @@ check('切 2.4G 不经网关下发',
       /nativeRadioCmd/.test(appJs) &&
       /radioCmdFromEl/.test(appJs) &&
       /applyRadioPose/.test(appJs) &&
-      /restoreMesh/.test(appJs));
+      /function meshWsUrl/.test(appJs) &&
+      /getRadioPath/.test(appJs));
 var radioJava = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
             'com', 'dogx30', 'control', 'RadioLink.java'), 'utf8');
@@ -295,15 +296,16 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge) &&
       /radioStatus/.test(radioBridge));
-check('离线包装页强制 2.4G 不连网关 WS',
-      /offlineRadio \|\| location\.protocol === 'file:'/.test(appJs) &&
-      /只能走 2\.4G/.test(appJs) &&
-      /已自动切到 2\.4G/.test(appJs));
-check('App 网关不通立刻开本地页',
-      /void openConsole\(/.test(radioBridge) &&
-      /gatewayReachable/.test(radioBridge) &&
-      /hasIpNetwork/.test(radioBridge) &&
-      /setBackupRadio\(true\)/.test(radioBridge));
+check('链路只跟顶栏 MESH/2.4G 按钮',
+      /function setRadioPath/.test(appJs) &&
+      /function meshWsUrl/.test(appJs) &&
+      /getRadioPath/.test(appJs) &&
+      /saveRadioPath/.test(radioBridge) &&
+      /String getRadioPath/.test(radioBridge) &&
+      !/meshWifiOn/.test(radioBridge) &&
+      !/isWifiEnabled/.test(radioBridge) &&
+      !/已自动切到 2\.4G/.test(appJs) &&
+      !/只能走 2\.4G/.test(appJs));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));
 var mediaJs = read('media.js');

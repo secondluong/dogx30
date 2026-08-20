@@ -22,26 +22,28 @@ function detectAppShell() {
   const href = String(location.href || '');
   return location.protocol === 'file:' || href.indexOf('android_asset') !== -1;
 }
-const pageQuery = new URLSearchParams(location.search);
 const isAppShell = detectAppShell();
-const offlineRadio = pageQuery.get('offline') === '1'
-    || location.protocol === 'file:'
-    || String(location.href || '').indexOf('android_asset') !== -1;
 if (isAppShell) document.documentElement.classList.add('shell-app');
 
 const RADIO_STORE = 'x30.radioPath';
+function nativeRadioPath() {
+  try {
+    if (window.X30Native && typeof window.X30Native.getRadioPath === 'function') {
+      const v = window.X30Native.getRadioPath();
+      if (v === 'radio' || v === 'mesh') return v;
+    }
+  } catch (e) { /* 网页没有原生桥 */ }
+  return '';
+}
+
 function loadRadioPath() {
   if (!isAppShell) return 'mesh';
-  if (offlineRadio) return 'radio';
+  const fromNative = nativeRadioPath();
+  if (fromNative) return fromNative;
   try {
-    // 上一版开机就开数传/射频，G20 画面和控制一起没了。只清一次，回到 MESH。
-    if (!window.localStorage.getItem('x30.radioPath.restoreMesh')) {
-      window.localStorage.setItem(RADIO_STORE, 'mesh');
-      window.localStorage.setItem('x30.radioPath.restoreMesh', '1');
-    }
     const v = window.localStorage.getItem(RADIO_STORE);
     if (v === 'radio' || v === 'mesh') return v;
-  } catch (e) { /* 无 storage 时按 MESH */ }
+  } catch (e) { /* 无 storage 时按上次按钮 */ }
   return 'mesh';
 }
 
@@ -124,18 +126,39 @@ function paintWalkButtons() {
 // 连接
 // ---------------------------------------------------------------------------
 
+function meshWsUrl() {
+  try {
+    if (isAppShell && window.X30Native
+        && typeof window.X30Native.getGatewayHost === 'function') {
+      const host = String(window.X30Native.getGatewayHost() || '').trim();
+      const port = Number(window.X30Native.getGatewayPort()) || 8080;
+      if (host) return 'ws://' + host + ':' + port + '/ws';
+    }
+  } catch (e) { /* 用当前页地址 */ }
+  if (location.protocol === 'file:') return '';
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return proto + '//' + location.host + '/ws';
+}
+
 function connect() {
-  // 本地包装页没有网关。硬连 ws 只会狂报错，顶栏一直像 MESH「重连中」。
-  if (offlineRadio || location.protocol === 'file:') {
-    app.radioPath = 'radio';
-    app.radioFallback = true;
+  // 顶栏选了 2.4G 就只走数传，不再连网关。
+  if (isAppShell && app.radioPath === 'radio') {
     applyRadioPath(false);
     setLink(false);
     renderControl();
     return;
   }
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = `${proto}//${location.host}/ws`;
+  if (app.ws && (app.ws.readyState === WebSocket.OPEN
+      || app.ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  const url = meshWsUrl();
+  if (!url) {
+    setLink(false);
+    renderControl();
+    setTimeout(connect, RECONNECT_MS);
+    return;
+  }
   const ws = new WebSocket(url);
   app.ws = ws;
 
@@ -161,13 +184,10 @@ function connect() {
       showBanner(isAppShell
         ? (app.radioPath === 'radio'
           ? '网关已断，当前仍是 2.4G 直达'
-          : 'MESH 已断。已自动切到 2.4G')
+          : 'MESH 已断。要控狗请切 2.4G，或等网关重连')
         : 'WiFi 已断，网关已放手。请用原厂 2.4G 手柄直达（无画面）', 8000);
     }
-    if (isAppShell && app.radioPath !== 'radio') {
-      setRadioPath('radio');
-    }
-    if (offlineRadio || location.protocol === 'file:') return;
+    if (app.radioPath === 'radio') return;
     setTimeout(connect, RECONNECT_MS);
   };
 
@@ -471,9 +491,7 @@ function applyRadioPath(announce) {
         send({ t: 'yield' });
       }
       if (announce) {
-        showBanner(offlineRadio
-          ? '网关不在，按键走 G20 数传到运动主机'
-          : '已切到 2.4G。指令走 G20 数传，不经网关');
+        showBanner('已切到 2.4G。指令走 G20 数传，不经网关');
       }
       setTimeout(() => {
         if (!radioDirect() || !hasNativeRadio()) return;
@@ -500,17 +518,17 @@ function applyRadioPath(announce) {
 }
 
 function setRadioPath(path) {
-  // 没网关时切回 MESH 等于把自己锁死。
-  if (path !== 'radio' && (offlineRadio || location.protocol === 'file:')) {
-    app.radioPath = 'radio';
-    try { window.localStorage.setItem(RADIO_STORE, 'radio'); } catch (e) { /* ignore */ }
-    applyRadioPath(true);
-    renderControl();
-    showBanner('当前没有网关，只能走 2.4G', 4000);
-    return;
-  }
   app.radioPath = path === 'radio' ? 'radio' : 'mesh';
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
+  if (app.radioPath === 'radio') {
+    const ws = app.ws;
+    app.ws = null;
+    if (ws) {
+      try { ws.close(); } catch (e) { /* 关掉即可 */ }
+    }
+  } else {
+    connect();
+  }
   applyRadioPath(true);
   renderControl();
 }

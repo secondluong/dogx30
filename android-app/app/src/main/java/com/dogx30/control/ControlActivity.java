@@ -2,10 +2,6 @@ package com.dogx30.control;
 
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
-import android.content.Context;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -101,8 +97,7 @@ public class ControlActivity extends AppCompatActivity {
                 view.requestFocus();
                 if (usingLocalConsole) {
                     view.evaluateJavascript(
-                            "document.documentElement.classList.add('shell-app');"
-                                    + "if(window.app&&app.setRadioPath)app.setRadioPath('radio');",
+                            "document.documentElement.classList.add('shell-app');",
                             null);
                 }
             }
@@ -116,8 +111,8 @@ public class ControlActivity extends AppCompatActivity {
             }
         });
 
-        // WiFi 关着还硬拉网关会卡很久，onReceivedError 也不一定马上到。
-        // 先探测：不通就立刻开包装里的 App 页，并强制 2.4G。
+        // 链路只跟顶栏按钮：上次选 2.4G 就先开数传，选 MESH 就连网关。
+        G20Rc.get().setBackupRadio("radio".equals(GatewayStore.radioPath(this)));
         openConsole();
 
         // 误触返回键会直接退出遥控页，机器狗随即失去控制指令。必须二次确认。
@@ -167,10 +162,6 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     private void openConsole() {
-        if (!hasIpNetwork()) {
-            loadLocalConsole();
-            return;
-        }
         final String probe = url;
         io.execute(() -> {
             final boolean ok = gatewayReachable(probe);
@@ -184,30 +175,12 @@ public class ControlActivity extends AppCompatActivity {
                 }
             });
         });
-        // 探网卡太久时先给本地页，避免黑屏；探通了再切回网关。
         mainHandler.postDelayed(() -> {
             if (!usingLocalConsole && web != null
                     && (web.getUrl() == null || web.getUrl().equals("about:blank"))) {
                 loadLocalConsole();
             }
         }, 1800);
-    }
-
-    private boolean hasIpNetwork() {
-        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (cm == null) return false;
-        for (Network n : cm.getAllNetworks()) {
-            NetworkCapabilities caps = cm.getNetworkCapabilities(n);
-            if (caps == null) continue;
-            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    || caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                    || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-                    || (Build.VERSION.SDK_INT >= 31
-                        && caps.hasTransport(NetworkCapabilities.TRANSPORT_USB))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static boolean gatewayReachable(String consoleUrl) {
@@ -235,8 +208,7 @@ public class ControlActivity extends AppCompatActivity {
         }
         usingLocalConsole = true;
         hideOverlay();
-        G20Rc.get().setBackupRadio(true);
-        web.loadUrl("file:///android_asset/web/index.html?shell=app&offline=1");
+        web.loadUrl("file:///android_asset/web/index.html?shell=app");
     }
 
     private void showOverlay(String text) {
@@ -293,7 +265,13 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public String getRadioPath() {
+            return GatewayStore.radioPath(ControlActivity.this);
+        }
+
+        @JavascriptInterface
         public void setRadioPath(String path) {
+            GatewayStore.saveRadioPath(ControlActivity.this, path);
             G20Rc.get().setBackupRadio(path != null && path.equals("radio"));
         }
 
