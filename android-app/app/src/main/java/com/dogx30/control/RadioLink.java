@@ -36,6 +36,7 @@ final class RadioLink {
     private static final String TAG = "RadioLink";
     private static final String ROBOT_IP = "192.168.1.103";
     private static final int ROBOT_PORT = 43893;
+    private static final int LOCAL_PORT = 43897;
     private static final int TICK_MS = 20;
     private static final int HB_EVERY = 10;
     private static final int AXIS_MAX = 32767;
@@ -272,7 +273,8 @@ final class RadioLink {
     private synchronized void openSdkUdp() {
         closeSdkUdp();
         try {
-            pipe = PipelineManager.INSTANCE.createUDPPipeline(ROBOT_IP, ROBOT_PORT);
+            pipe = PipelineManager.INSTANCE.createUDPPipeline(
+                    LOCAL_PORT, ROBOT_IP, ROBOT_PORT);
             if (pipe == null) {
                 Log.w(TAG, "createUDPPipeline null");
                 return;
