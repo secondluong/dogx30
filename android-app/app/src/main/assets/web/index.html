@@ -1,12 +1,23 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<script>
+(function () {
+  var href = String(location.href || '');
+  var q = String(location.search || '');
+  if (q.indexOf('shell=app') !== -1 ||
+      location.protocol === 'file:' ||
+      href.indexOf('android_asset') !== -1) {
+    document.documentElement.classList.add('shell-app');
+  }
+})();
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260820h">
+<link rel="stylesheet" href="style.css?v=20260820i">
 </head>
 <body>
 
@@ -346,6 +357,6 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="app.js?v=20260820h"></script>
+<script src="app.js?v=20260820i"></script>
 </body>
 </html>

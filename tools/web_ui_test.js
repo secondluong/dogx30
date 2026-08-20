@@ -299,6 +299,8 @@ check('2.4G 起立按钮按 App 自己的起趴状态切换',
       /syncRadioStanding/.test(appJs) &&
       /html\.shell-app \.hud-sticks/.test(styleText) &&
       /offlineRadio/.test(appJs) &&
+      /detectAppShell/.test(appJs) &&
+      /android_asset/.test(appJs) &&
       !/nativeRadioVel/.test(appJs));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));

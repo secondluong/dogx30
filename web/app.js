@@ -12,10 +12,21 @@ const RECONNECT_MS = 1000;
 const $ = (id) => document.getElementById(id);
 
 // 安卓壳用 ?shell=app 打开。网页不加这个参数，布局完全不动。
+// 没 MESH 时走 file:///android_asset，WebView 常把 ?shell=app 丢掉，
+// 只认查询串会画出网页那套 2×2 / 控制权 / 摇杆。
+function detectAppShell() {
+  if (document.documentElement.classList.contains('shell-app')) return true;
+  try {
+    if (new URLSearchParams(location.search).get('shell') === 'app') return true;
+  } catch (e) { /* 无 URLSearchParams 时看地址 */ }
+  const href = String(location.href || '');
+  return location.protocol === 'file:' || href.indexOf('android_asset') !== -1;
+}
 const pageQuery = new URLSearchParams(location.search);
-const isAppShell = pageQuery.get('shell') === 'app';
+const isAppShell = detectAppShell();
 const offlineRadio = pageQuery.get('offline') === '1'
-    || location.protocol === 'file:';
+    || location.protocol === 'file:'
+    || String(location.href || '').indexOf('android_asset') !== -1;
 if (isAppShell) document.documentElement.classList.add('shell-app');
 
 const RADIO_STORE = 'x30.radioPath';
