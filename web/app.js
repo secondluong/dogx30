@@ -490,8 +490,8 @@ function applyRadioPath(announce) {
         if (nativeRadioLinkOk()) return;
         const st = nativeRadioStatus() || {};
         const why = st.status === 'no-usb-net'
-          ? '还没有 G20 USB 网（192.168.144）。请确认已对频，并关掉云卓助手/云深处'
-          : ('2.4G 还没通到运动主机（' + (st.status || 'unknown') + '）。请确认 G20 已对频');
+          ? '接收机还没接到平板（G20 USB 网没起来）。请确认已对频，并关掉云卓助手/云深处'
+          : ('2.4G 还没到运动主机 192.168.1.103（' + (st.status || 'unknown') + '）');
         showBanner(why, 10000);
       }, 2000);
     } else if (announce) {

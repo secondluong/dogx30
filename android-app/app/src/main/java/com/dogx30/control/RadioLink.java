@@ -28,15 +28,14 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * 2.4G 控狗跟云卓/云深处同一条 CSDK 路：
- * createUDPPipeline(本地端口, "192.168.144.10", 43893) 再 writeData。
- * 平板 USB 网只有 192.168.144.0/24，直接打 192.168.1.103 常常没有路由。
+ * 厂家拓扑：手柄 --2.4G--> 接收机 --交换机--> 运动主机 192.168.1.103:43893。
+ * CSDK 只负责把平板接到接收机（G20 USB / 数传）。0x21 的终点永远是 .103，
+ * 不是 G20 天空端地址。
  */
 final class RadioLink {
 
     private static final String TAG = "RadioLink";
     private static final String ROBOT_IP = "192.168.1.103";
-    private static final String AIR_IP = "192.168.144.10";
     private static final int ROBOT_PORT = 43893;
     private static final int LOCAL_PORT = 43897;
     private static final int TICK_MS = 20;
@@ -84,7 +83,6 @@ final class RadioLink {
     private String status = "off";
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
-    @Nullable private InetAddress airAddr;
     @Nullable private InetAddress robotAddr;
     @Nullable private Network airNet;
     @Nullable private Pipeline udpPipe;
@@ -290,12 +288,11 @@ final class RadioLink {
             if (cm != null) {
                 cm.bindProcessToNetwork(net);
             }
-            airAddr = resolve(net, AIR_IP);
             robotAddr = resolve(net, ROBOT_IP);
             udp = new DatagramSocket();
             net.bindSocket(udp);
-            status = "udp-" + AIR_IP;
-            Log.i(TAG, status + " / " + ROBOT_IP);
+            status = "udp-" + ROBOT_IP;
+            Log.i(TAG, status);
         } catch (Exception e) {
             status = "udp-fail";
             Log.w(TAG, "udp", e);
@@ -319,7 +316,7 @@ final class RadioLink {
     private synchronized void openSdkUdp() {
         if ((pipeOk && udpPipe != null) || (g20Ok && g20Pipe != null)) return;
         if (udpPipe == null) {
-            udpPipe = openPipe(LOCAL_PORT, AIR_IP, "udp144");
+            udpPipe = openPipe(LOCAL_PORT, ROBOT_IP, "udp103");
         }
         if (g20Pipe == null) {
             try {
@@ -355,7 +352,7 @@ final class RadioLink {
             public void onConnectSuccess() {
                 if (udpKind) {
                     pipeOk = true;
-                    status = "pipe-" + AIR_IP;
+                    status = "pipe-" + ROBOT_IP;
                 } else {
                     g20Ok = true;
                     if (!pipeOk) status = "g20-up";
@@ -466,7 +463,6 @@ final class RadioLink {
 
     private void closeSocketOnly() {
         airNet = null;
-        airAddr = null;
         robotAddr = null;
         if (udp != null) {
             udp.close();
@@ -584,10 +580,6 @@ final class RadioLink {
             return;
         }
         if (g20Ok && g20Pipe != null && writePipe(g20Pipe, pkt)) {
-            sentOk++;
-            return;
-        }
-        if (udp != null && sendUdp(pkt, airAddr)) {
             sentOk++;
             return;
         }
