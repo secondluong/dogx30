@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260825r">
+<link rel="stylesheet" href="style.css?v=20260825s">
 </head>
 <body>
 
@@ -304,11 +304,10 @@
     <button type="button" class="btn hud-stand-btn" data-cmd="stand" id="btn-stand">起立</button>
   </div>
 
+  <!-- 底栏不放力控/起步了：推杆自己会踩这两级（RadioLink.armForWalk /
+       MotionClient::ArmForWalk），留着只会把这一排挤成两行。停步和力控调姿态
+       仍在实体手柄上，映射见 gamepad.html。 -->
   <div id="hud-standing" class="hud-menus">
-    <div class="row wrap hud-walk">
-      <button type="button" class="btn sm" data-cmd="torque">力控</button>
-      <button type="button" class="btn sm" data-cmd="step">起步</button>
-    </div>
     <div class="acc">
       <!-- 收起来的时候直接显示当前选的那一档，箭头表示点开还能换。还不知道选的是
            什么（没遥测、也没点过）就先显示 data-label 里的名字。 -->
@@ -387,7 +386,7 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260825r"></script>
-<script src="app.js?v=20260825r"></script>
+<script src="dogcam24.js?v=20260825s"></script>
+<script src="app.js?v=20260825s"></script>
 </body>
 </html>

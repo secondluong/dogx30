@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825r';
+const WEB_BUILD = '0825s';
 
 function nativeAppVersion() {
   try {
@@ -147,6 +147,8 @@ function effectiveWalk() {
   return app.walkMode;
 }
 
+// 底栏已经不放力控/起步了（推杆自己会踩），这里只剩实体手柄那两颗按钮的回显，
+// 以及网页版控制台可能还挂着的同名按钮 —— 没有元素时就是空转。
 function paintWalkButtons() {
   const walk = effectiveWalk();
   document.querySelectorAll('[data-cmd="torque"]').forEach((b) => {

@@ -1043,12 +1043,10 @@ html.shell-app .hud-info {
   transform: translateX(-50%);
   z-index: 12;
   display: flex;
+  /* 这一排必须始终是一行：折行了摇杆上方就堆成两层，遥控时容易点错。 */
+  flex-wrap: nowrap;
   gap: 8px;
 }
-/* 这一排必须始终是一行。以前力控/起步那两颗在 .row.wrap 里，屏幕一窄就折到
-   第二行，五颗按钮排成两行，遥控时既难看也容易点错。 */
-.hud-menus .hud-walk { flex-wrap: nowrap; }
-.hud-menus .hud-walk .btn { flex: 0 0 auto; min-width: 0; }
 .acc { position: relative; }
 .acc-btn {
   background: rgba(28, 34, 48, .78);

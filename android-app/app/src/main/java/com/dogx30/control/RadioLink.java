@@ -164,6 +164,11 @@ final class RadioLink {
     @Nullable private Network airNet;
     @Nullable private Pipeline udpPipe;
     @Nullable private ConnectivityManager.NetworkCallback netCb;
+    @Nullable private ConnectivityManager.NetworkCallback wifiCb;
+    /** UDP 那个 socket 真绑上了图传网卡（bindSocket 或 SO_BINDTODEVICE 成功）。 */
+    private boolean udpBound;
+    /** 当前钉住的进程默认网络，null 表示没钉、跟系统默认走。 */
+    @Nullable private Network pinnedNet;
 
     private final Runnable loop = this::onTick;
     private final Runnable standTask = this::standNow;
@@ -171,6 +176,7 @@ final class RadioLink {
     synchronized void attach(Context ctx) {
         if (ctx != null) appCtx = ctx.getApplicationContext();
         ensureWorker();
+        watchWifi();
     }
 
     // 下面三个是给 NativeVideo 用的：2.4G 下机身相机的 RTSP 也得走这张网卡，
@@ -267,6 +273,9 @@ final class RadioLink {
             o.put("pipe", pipeOk);
             o.put("rf", rfOn);
             o.put("air", airNet != null);
+            // socket 绑没绑上那张网卡。没绑上就只能靠系统默认路由，此时进程也不会
+            // 被钉到 WiFi 上（见 pinProcess），MESH 那侧会跟着受影响。
+            o.put("bound", udpBound);
             o.put("local", boundLocal != null ? boundLocal.getHostAddress() : airLocalIp());
             o.put("iface", ifaceName);
             o.put("prefix", ifacePrefix);
@@ -533,7 +542,7 @@ final class RadioLink {
         lastErr = "";
         status = "starting";
         enableRf(true);
-        requestEthernet();
+        watchEthernet();
         openUdp();
         if (!running) {
             running = true;
@@ -542,6 +551,12 @@ final class RadioLink {
     }
 
     private synchronized void openUdp() {
+        openSocket();
+        // 绑成没绑成，决定了敢不敢把进程钉到 WiFi 上，所以每次开关 socket 都重算。
+        pinProcess();
+    }
+
+    private synchronized void openSocket() {
         try {
             AirIf air = findAirIf();
             Network net = findAirlink();
@@ -562,10 +577,6 @@ final class RadioLink {
             boundLocal = local;
             ifaceName = name;
             ifacePrefix = air != null ? air.prefix : 0;
-            ConnectivityManager cm = connectivity();
-            if (cm != null && net != null) {
-                cm.bindProcessToNetwork(net);
-            }
             robotAddr = net != null ? resolve(net, ROBOT_IP) : InetAddress.getByName(ROBOT_IP);
             udp = new DatagramSocket((java.net.SocketAddress) null);
             udp.setReuseAddress(true);
@@ -578,12 +589,17 @@ final class RadioLink {
             if (net != null) {
                 try {
                     net.bindSocket(udp);
+                    udpBound = true;
                 } catch (Exception e) {
                     Log.w(TAG, "bindSocket", e);
                 }
-            } else if (!name.isEmpty()) {
+            }
+            // bindSocket 失败也退回按网卡名绑：这个 socket 绑没绑上，决定了后面
+            // 敢不敢把进程钉到 WiFi 上，能多一种绑法就多一种。
+            if (!udpBound && !name.isEmpty()) {
                 try {
                     bindToDevice(udp, name);
+                    udpBound = true;
                 } catch (Exception e) {
                     lastErr = "bind:" + brief(e);
                     Log.w(TAG, "bindToDevice", e);
@@ -694,7 +710,15 @@ final class RadioLink {
         }
     }
 
-    private void requestEthernet() {
+    /**
+     * 只是「盯着」图传网卡，好在它上线时重开 socket。
+     *
+     * 以前这里是主动申请（cm.requestNetwork）：那会把这条网络拉起来，还会让系统更
+     * 倾向把它选成默认网络（Android 里以太网优先级高过 WiFi）。我们并不需要系统
+     * 给面子 —— 绑定是逐 socket 做的（bindSocket / SO_BINDTODEVICE），
+     * registerNetworkCallback 是纯旁听，不影响选路。
+     */
+    private void watchEthernet() {
         ConnectivityManager cm = connectivity();
         if (cm == null || netCb != null) return;
         netCb = new ConnectivityManager.NetworkCallback() {
@@ -709,10 +733,89 @@ final class RadioLink {
             if (Build.VERSION.SDK_INT >= 31) {
                 b.addTransportType(NetworkCapabilities.TRANSPORT_USB);
             }
-            cm.requestNetwork(b.build(), netCb);
+            cm.registerNetworkCallback(b.build(), netCb);
         } catch (Exception e) {
-            Log.w(TAG, "requestNetwork", e);
+            Log.w(TAG, "watchEthernet", e);
         }
+    }
+
+    /**
+     * 一直盯着 WiFi，好在它换 AP、重连之后重新钉一次 —— Network 对象会变，
+     * 钉着旧的那个就等于把整个 App 关进一张死网络里，MESH 再也连不上。
+     */
+    private void watchWifi() {
+        ConnectivityManager cm = connectivity();
+        if (cm == null || wifiCb != null) return;
+        wifiCb = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                onRadio(RadioLink.this::pinProcess);
+            }
+
+            @Override
+            public void onLost(Network network) {
+                onRadio(RadioLink.this::pinProcess);
+            }
+        };
+        try {
+            cm.registerNetworkCallback(new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .build(), wifiCb);
+        } catch (Exception e) {
+            Log.w(TAG, "watchWifi", e);
+        }
+        onRadio(this::pinProcess);
+    }
+
+    /**
+     * 把整个进程的默认出口钉在 WiFi 上。
+     *
+     * G20 的图传网卡一上线，Android 按以太网看待它、优先级高过 WiFi，系统默认路由
+     * 就整个搬过去。现场实测：`wlan0` 是 192.168.1.48、`ar_net0` 是 192.168.1.11，
+     * 两张卡同一个网段，`ip route` 里是 `default via 192.168.1.1 dev ar_net0`，
+     * 连 `ip route get <网关地址>` 都返回 ar_net0。于是 WebView 里的 WebSocket、
+     * WebRTC 全从图传口出去；切到 MESH 时射频是关的（见 G20Rc.setBackupRadio），
+     * 那条路发不出去，MESH 整条链路直接断掉，而 WiFi 图标还显示"已连接"。
+     *
+     * 2.4G 要用的 socket 各自绑了网卡（UDP 在 openSocket，RTSP 在 NativeVideo），
+     * 逐 socket 的绑定优先于进程级，所以钉 WiFi 不碍事。但万一两种绑法都没成，
+     * 2.4G 就只能靠"系统默认网络正好是图传口"通着 —— 这时候绝不能钉，
+     * 控制链路比 MESH 重要。
+     */
+    private synchronized void pinProcess() {
+        ConnectivityManager cm = connectivity();
+        if (cm == null) return;
+        Network want = (enabled && !udpBound) ? null : findWifi();
+        if (want == null ? pinnedNet == null : want.equals(pinnedNet)) return;
+        try {
+            cm.bindProcessToNetwork(want);
+            pinnedNet = want;
+            Log.i(TAG, "pin " + want);
+        } catch (Exception e) {
+            Log.w(TAG, "pin", e);
+        }
+    }
+
+    @Nullable
+    private Network findWifi() {
+        ConnectivityManager cm = connectivity();
+        if (cm == null) return null;
+        try {
+            Network[] all = cm.getAllNetworks();
+            if (all == null) return null;
+            for (Network n : all) {
+                NetworkCapabilities c = cm.getNetworkCapabilities(n);
+                // WiFi Direct / Aware 那几张也是 TRANSPORT_WIFI，但没有 INTERNET。
+                if (c != null
+                        && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    return n;
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "findWifi", e);
+        }
+        return null;
     }
 
     private static final class AirIf {
@@ -881,16 +984,10 @@ final class RadioLink {
         robotAddr = null;
         ifaceName = "";
         ifacePrefix = 0;
+        udpBound = false;
         if (udp != null) {
             udp.close();
             udp = null;
-        }
-        ConnectivityManager cm = connectivity();
-        if (cm != null) {
-            try {
-                cm.bindProcessToNetwork(null);
-            } catch (Exception ignored) {
-            }
         }
     }
 
@@ -917,6 +1014,9 @@ final class RadioLink {
             }
             netCb = null;
         }
+        // 回 MESH 了，图传口那边射频也关了（G20Rc.setBackupRadio），
+        // 这时候必须把出口钉回 WiFi，否则网关在系统默认路由那侧根本发不出去。
+        pinProcess();
     }
 
     private synchronized void onTick() {

@@ -441,6 +441,19 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge) &&
       /radioStatus/.test(radioBridge));
+// 图传网卡和 WiFi 常撞在同一个网段（现场实测 ar_net0 192.168.1.11 / wlan0
+// 192.168.1.48），Android 又按以太网优先把默认路由搬到图传口上，于是 WebView 里
+// 的 WebSocket、WebRTC 全从那口出去 —— 切到 MESH 射频一关就整条链路断。
+// 所以：不再 requestNetwork（别帮它抢默认网络）、进程钉在 WiFi 上、
+// 2.4G 那个 socket 自己按网卡绑；万一没绑上就不敢钉，控制链路优先。
+check('图传口不许抢走进程的默认出口',
+      !/cm\.requestNetwork\(/.test(radioJava) &&
+      /registerNetworkCallback/.test(radioJava) &&
+      /TRANSPORT_WIFI/.test(radioJava) &&
+      /private synchronized void pinProcess/.test(radioJava) &&
+      /\(enabled && !udpBound\) \? null : findWifi\(\)/.test(radioJava) &&
+      /udpBound = true/.test(radioJava) &&
+      !/bindProcessToNetwork\(net\)/.test(radioJava));
 // 狗一直在往遥控器发遥测（0x1009 那一包头后第一个字节就是 basic_state），
 // 以前 drainRx 只数包不看内容，姿态全靠「我发过什么」猜。别的遥控器动过狗、
 // 或者刚从 MESH 切回来，猜的和实际就是两回事。
@@ -579,11 +592,19 @@ check('上下楼三档必选其一',
       /markStairPick\(b\.dataset\.gait\)/.test(appJs) &&
       /markStairPick\(key\)/.test(appJs) &&
       /#stair-row \[data-gait\]\.pick/.test(appJs) &&
-      /data-short="多帧"/.test(html) &&
-      /on\.dataset\.short \|\| on\.textContent/.test(appJs) &&
-      /\.hud-menus \.hud-walk \{ flex-wrap: nowrap; \}/.test(styleText) &&
       /\.acc-pop \.btn\.sm\.pick \{/.test(styleText) &&
       /\.acc-pop \.btn\.sm\.pick::after/.test(styleText));
+
+// 底栏那一排永远是一行。以前力控/起步在 .row.wrap 里，屏幕一窄就折成两行；
+// 现在那两颗直接拿掉了（推杆自己踩），剩下三个档位按钮还要用短名收窄。
+check('底栏菜单不折行、档位用短名',
+      !/data-cmd="torque"/.test(html) &&
+      !/data-cmd="step"/.test(html) &&
+      !/hud-walk/.test(html) &&
+      !/hud-walk/.test(styleText) &&
+      /data-short="多帧"/.test(html) &&
+      /on\.dataset\.short \|\| on\.textContent/.test(appJs) &&
+      /flex-wrap: nowrap/.test(styleText));
 
 // 步态编码到按钮键的映射现在有两份：网关的 GaitKey() 和 2.4G 直连用的
 // RADIO_GAIT_KEYS。走歪了的表现是同一只狗在两条链路上高亮不同的步态。
