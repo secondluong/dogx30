@@ -23,8 +23,6 @@ GATEWAY_BIN="./build/x30_gateway"
 source deploy/render_unit.sh
 # shellcheck source=deploy/config_util.sh
 source deploy/config_util.sh
-# shellcheck source=deploy/media_migrate.sh
-source deploy/media_migrate.sh
 
 pass() { echo "   [OK]   $1"; }
 fail() { echo "   [FAIL] $1${2:+  $2}"; FAILED=1; }
@@ -257,98 +255,6 @@ if [[ -x "$GATEWAY_BIN" ]]; then
   reject "不是键值对"   "robot_ip 192.168.1.9"
 else
   echo "   （没有编译产物，跳过网关自解析部分）"
-fi
-
-# ---------------------------------------------------------------------------
-echo
-echo "== mediamtx.yml 的 WebRTC 迁移 =="
-# ---------------------------------------------------------------------------
-
-# install.sh 刻意不覆盖现场的 mediamtx.yml（里面有相机地址和密码），所以
-# 「WebRTC 不能绑单一地址」这个修复只能靠迁移送进去。迁移要是不灵，升级完
-# 2.4G 依旧没画面，而现场只会看到「等待拉流」，根本联想不到是配置没动。
-MM_OLD="$TMP/mediamtx.yml"
-sed 's/admin:PASSWORD/admin:Sekret123/g' deploy/mediamtx.yml > "$MM_OLD"
-# 还原成老写法：绑死一个地址、没有 TCP 候选、候选不按网口取。
-sed -i -e 's/^webrtcAddress: :8889.*/webrtcAddress: 192.168.10.2:8889   # 只在 eth1 上听/' \
-       -e 's/^webrtcLocalUDPAddress: :8189.*/webrtcLocalUDPAddress: 192.168.10.2:8189/' \
-       -e '/^webrtcLocalTCPAddress:/d' \
-       -e 's/^webrtcIPsFromInterfaces: yes/webrtcIPsFromInterfaces: no/' \
-       -e '/^webrtcIPsFromInterfacesList:/d' \
-       -e 's/^webrtcAdditionalHosts: \[\]/webrtcAdditionalHosts: [192.168.10.2]/' \
-       "$MM_OLD"
-cp "$MM_OLD" "$TMP/mediamtx.before"
-
-if migrate_mediamtx_webrtc "$MM_OLD" > "$TMP/mig.out" 2>&1; then
-  pass "老格式被迁移（$(tr -d '\n' < "$TMP/mig.out" | cut -c1-40)…）"
-else
-  fail "迁移失败" "$(cat "$TMP/mig.out")"
-fi
-
-for want in "^webrtcAddress: :8889" "^webrtcLocalUDPAddress: :8189" \
-            "^webrtcLocalTCPAddress: :8189" "^webrtcIPsFromInterfaces: yes" \
-            "^webrtcIPsFromInterfacesList: \[eth0, eth1, wlan0\]"; do
-  label=${want#^}; label=${label//\\/}
-  if grep -qE "$want" "$MM_OLD"; then
-    pass "迁出 $label"
-  else
-    fail "没迁出 $label"
-  fi
-done
-
-# 4G 不能出现在 ICE 候选里 —— 这是原先绑单一地址守住的安全性质。
-# 先去掉行尾注释再看：注释里正写着"刻意不列 wwan0"，连注释一起匹配会自己误报。
-if sed 's/#.*//' "$MM_OLD" | grep -qE '^webrtcIPsFromInterfacesList:.*wwan0'; then
-  fail "把 wwan0（4G）也列进 ICE 候选了" "视频会经 4G 暴露"
-else
-  pass "wwan0（4G）不在 ICE 候选里"
-fi
-
-# 相机地址和密码是现场一台一改的，迁移绝不能碰。
-if diff <(grep -vE '^webrtc' "$TMP/mediamtx.before") \
-        <(grep -vE '^webrtc' "$MM_OLD") > /dev/null; then
-  pass "非 webrtc 行一字未动（相机地址与密码没被碰）"
-else
-  fail "迁移改到了 webrtc 之外的行" "相机地址或密码可能被动过"
-fi
-
-# 可反复执行：install.sh 就是拿来重跑升级的。
-if migrate_mediamtx_webrtc "$MM_OLD" > "$TMP/mig2.out" 2>&1 \
-   && [[ ! -s "$TMP/mig2.out" ]]; then
-  pass "已迁移过的文件不再改动"
-else
-  fail "重复迁移会继续改文件" "$(cat "$TMP/mig2.out")"
-fi
-
-# 格式不认识时必须整份退回，而不是留下一个起不来的 mediamtx。
-printf 'webrtc: yes\nwebrtcFoo: bar\n' > "$TMP/weird.yml"
-cp "$TMP/weird.yml" "$TMP/weird.before"
-if migrate_mediamtx_webrtc "$TMP/weird.yml" > /dev/null 2>&1; then
-  fail "不认识的格式被当成迁移成功了"
-elif diff "$TMP/weird.before" "$TMP/weird.yml" > /dev/null; then
-  pass "格式不认识时原样退回"
-else
-  fail "格式不认识却改了文件" "可能留下起不来的配置"
-fi
-
-# 最有力的一条：让 mediamtx 自己吃一遍迁移结果。手写断言只能证明字符串对，
-# 证明不了它认得这些键 —— 键名拼错、值不合法，它会直接拒绝启动。
-MM_BIN="/opt/x30/bin/mediamtx"
-if [[ -x "$MM_BIN" ]]; then
-  # 换成不占用的端口，免得和正在跑的媒体服务撞。
-  sed -e 's/:8889/:18889/' -e 's/:8189/:18189/g' \
-      -e 's|127.0.0.1:8554|127.0.0.1:18554|' -e 's|127.0.0.1:9997|127.0.0.1:19997|' \
-      "$MM_OLD" > "$TMP/mm_try.yml"
-  if timeout 8 "$MM_BIN" "$TMP/mm_try.yml" > "$TMP/mm.log" 2>&1 &
-     MM_PID=$!; sleep 4; grep -q "TCP/ICE" "$TMP/mm.log"; then
-    pass "mediamtx 认得迁移结果（UDP/ICE 与 TCP/ICE 都起来了）"
-  else
-    fail "mediamtx 起不来或没起 TCP 候选" "$(tail -2 "$TMP/mm.log")"
-  fi
-  kill "$MM_PID" 2>/dev/null || true
-  wait "$MM_PID" 2>/dev/null || true
-else
-  echo "   （没有 mediamtx 二进制，跳过它自解析那部分）"
 fi
 
 echo

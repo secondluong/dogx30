@@ -4,10 +4,8 @@
 # 这里只做转封装，CPU 几乎不占也没有二次编码损失。
 #
 # 安全：MediaMTX 默认监听全部网卡并开五种协议。本机装有 4G，这是不可接受的
-# 暴露面，所以关掉用不到的协议，RTSP 和 API 只绑 127.0.0.1。
-# WebRTC 是唯一对外的一路，它要同时服务 MESH 和 2.4G 两个网段，没法绑单一地址，
-# 改用 ICE 候选白名单把 4G 排除在外 —— 见下面 webrtc 一节。
-# 改这些地址前先想清楚 4G 那侧能不能够到。
+# 暴露面，所以下面把监听地址全部限定在 eth1（192.168.10.2），
+# 并关掉用不到的协议。改这些地址前先想清楚 4G 那侧能不能够到。
 
 logLevel: info
 logDestinations: [stdout]
@@ -26,28 +24,14 @@ rtspTransports: [tcp]
 rtspAddress: 127.0.0.1:8554        # 仅本机，遥控端不经 RTSP
 
 webrtc: yes
-# 遥控端有两条链路，落在**两个互不可达的网段**上：
-#   MESH  → eth1，192.168.10.0/24
-#   2.4G  → 机身交换机上的 2.4G 接收机 → eth0，192.168.1.0/24
-# MediaMTX 只能配一个监听地址，绑死其中一个会让另一条链路完全拉不到流
-# （现场表现：控制正常、画面一直停在「等待拉流」）。所以这里监听全部网卡，
-# 再用下面的 ipsFromInterfacesList 把 ICE 候选限定在内网口上 —— 4G（wwan0）
-# 的地址不会出现在候选里。要更严的话在 wwan0 上用防火墙挡掉 8889/8189。
-# 来龙去脉见 docs/media-architecture.md 第六节「webrtc_base 必须按客户端算」。
-webrtcAddress: :8889
+webrtcAddress: 192.168.10.2:8889   # 只在 eth1 上听，4G 够不到
 webrtcEncryption: no               # 内网链路，且 MESH 本身有加密
-webrtcLocalUDPAddress: :8189
-# UDP 不通时还能靠 TCP 候选建连。2.4G 这类窄链路上 UDP 未必畅通，
-# 而只有 UDP 候选时 ICE 失败的样子和「拉不到流」一模一样，查起来很费劲。
-webrtcLocalTCPAddress: :8189
+webrtcLocalUDPAddress: 192.168.10.2:8189
 
 # ICE 只用本地候选。这是个封闭内网，没有 NAT 要穿，
 # 配 STUN 服务器反而会在没有外网时拖慢建连。
-# 候选按网口取，而不是写死一个地址：写死就只有那一条链路能建连。
-# wlan0 留着是为了台面联调（板子还没接进机身网时走 WiFi）。wwan0 刻意不列。
-webrtcIPsFromInterfaces: yes
-webrtcIPsFromInterfacesList: [eth0, eth1, wlan0]
-webrtcAdditionalHosts: []
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: [192.168.10.2]
 webrtcICEServers2: []
 
 api: yes

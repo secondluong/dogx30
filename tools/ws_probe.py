@@ -346,17 +346,6 @@ def media_scenario(host, port):
           err.get("msg", ""))
     c.close()
 
-    # 拉流地址必须跟着「客户端从哪个地址连进来」走。MESH 落在 eth1 的
-    # 192.168.10.0/24，2.4G 落在机身网 192.168.1.0/24，两个网段互不可达 ——
-    # 配置里写死一个主机名，另一条链路就只能一直停在「等待拉流」。
-    # deploy/media.json 里写的是 192.168.10.2，探针从回环连进来，
-    # 所以下发的主机名应当是 127.0.0.1 而不是配置里那个。
-    base = cplan.get("webrtc_base", "")
-    check("拉流地址换成客户端连进来的那个地址（而非配置里写死的）",
-          "//127.0.0.1:" in base and "192.168.10.2" not in base, base)
-    check("协议和端口仍取自配置，不跟着一起换",
-          base.startswith("http://") and base.endswith(":8889"), base)
-
 
 def no_media_scenario(host, port):
     """没配媒体源时，控制功能必须完全不受影响。"""

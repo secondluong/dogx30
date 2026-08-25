@@ -170,21 +170,6 @@ bool IsSafeRelativePath(const std::string& path) {
   return true;
 }
 
-// 这个连接是打到本机哪个地址上的。getsockname 给的是**本端**地址，也就是
-// 客户端拨过来的那个 IP —— 它天然是「客户端够得到的地址」，不用去猜路由。
-std::string LocalIpOfSocket(int fd) {
-  sockaddr_in local{};
-  socklen_t len = sizeof(local);
-  if (::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &len) != 0) {
-    return std::string();
-  }
-  char buf[INET_ADDRSTRLEN] = {0};
-  if (::inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf)) == nullptr) {
-    return std::string();
-  }
-  return std::string(buf);
-}
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -195,10 +180,6 @@ struct WsServer::Connection {
   std::atomic<bool> open{false};
   std::mutex send_mutex;
   std::string inbox;  // 分片重组缓冲
-  // 本连接落在**本机哪个地址**上。监听 0.0.0.0 时，2.4G 来的客户端进 eth0 那侧的
-  // 地址，MESH 来的进 eth1 那侧 —— 两者互相路由不到。媒体计划里要下发拉流地址，
-  // 只有按这个地址给，客户端才够得到。
-  std::string local_ip;
 
   bool SendRaw(const void* data, size_t len) {
     std::lock_guard<std::mutex> lock(send_mutex);
@@ -371,7 +352,6 @@ void WsServer::AcceptLoop() {
     auto conn = std::make_shared<Connection>();
     conn->id = next_id_.fetch_add(1);
     conn->fd = fd;
-    conn->local_ip = LocalIpOfSocket(fd);
 
     // 回收已结束的会话线程，避免长时间运行后 vector 无限增长。
     session_threads_.erase(
@@ -643,13 +623,6 @@ std::vector<WsServer::ClientId> WsServer::ClientIds() const {
   ids.reserve(clients_.size());
   for (const auto& [id, conn] : clients_) ids.push_back(id);
   return ids;
-}
-
-std::string WsServer::LocalIpFor(ClientId id) const {
-  std::lock_guard<std::mutex> lock(clients_mutex_);
-  const auto it = clients_.find(id);
-  if (it == clients_.end() || !it->second) return std::string();
-  return it->second->local_ip;
 }
 
 }  // namespace x30

@@ -466,10 +466,7 @@ void RobotService::OnDisconnect(WsServer::ClientId id) {
 
 void RobotService::SendMediaPlan(WsServer::ClientId id) {
   if (!media_) return;
-  // 拉流地址按「这个客户端是从哪个地址连进来的」下发。MESH 走 eth1 那侧的
-  // 192.168.10.0/24，2.4G 走机身网 192.168.1.0/24，两个网段互相路由不到，
-  // 配置里那个写死的 webrtc_base 只能满足其中一边。
-  server_.Send(id, media_->BuildPlanJson(id, server_.LocalIpFor(id)));
+  server_.Send(id, media_->BuildPlanJson(id));
 }
 
 void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {

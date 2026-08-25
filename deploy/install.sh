@@ -12,8 +12,6 @@ SRC_EARLY="$(cd "$(dirname "$0")/.." && pwd)"
 source "$SRC_EARLY/deploy/render_unit.sh"
 # shellcheck source=deploy/config_util.sh
 source "$SRC_EARLY/deploy/config_util.sh"
-# shellcheck source=deploy/media_migrate.sh
-source "$SRC_EARLY/deploy/media_migrate.sh"
 
 PREFIX="/opt/x30"
 UNIT_PATH="/etc/systemd/system/x30-gateway.service"
@@ -177,12 +175,6 @@ for f in media.json mediamtx.yml; do
     echo "已放置 $f 样例，需按现场相机地址修改"
   fi
 done
-
-# 老版本的 mediamtx.yml 把 WebRTC 绑在单一地址上，而 MESH 与 2.4G 落在两个互不
-# 可达的网段（见 docs/media-architecture.md 第六节）—— 绑死一个，另一条链路必然
-# 停在「等待拉流」。上面刻意不覆盖现场文件，所以这个修复只能靠迁移送进去：
-# 只改 webrtc* 那几行，相机地址和密码一律不碰。
-migrate_mediamtx_webrtc "$PREFIX/mediamtx.yml" || true
 
 # --- systemd ----------------------------------------------------------------
 
