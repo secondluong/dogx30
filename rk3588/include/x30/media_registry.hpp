@@ -37,8 +37,9 @@ struct MediaSource {
 };
 
 struct MediaConfig {
-  // 遥控端访问 MediaMTX 的基地址。注意这里要填**遥控端能访问到的地址**，
-  // 不是 127.0.0.1 —— 这个串会原样下发给遥控端浏览器。
+  // 遥控端访问 MediaMTX 的基地址。下发时**主机名会按客户端替换**（见
+  // MediaRegistry::WebrtcBaseFor），这里的主机名只在取不到连接地址时兜底；
+  // 协议和端口则一直照这里用。
   std::string webrtc_base = "http://192.168.10.2:8889";
 
   // 视频总码率上限。留给控制报文的余量已经扣掉，见带宽预算。
@@ -76,7 +77,15 @@ class MediaRegistry {
   void Forget(ClientId id);
 
   // 算出给这个客户端的计划。没调用过 Select 的客户端拿到的是全缩略图。
-  std::string BuildPlanJson(ClientId id) const;
+  //
+  // client_ip 是这个客户端连到本机时用的**本端**地址。配置里的 webrtc_base 只能
+  // 写一个地址，而 MESH（eth1，192.168.10.0/24）和 2.4G（机身网，192.168.1.0/24）
+  // 是两个互不可达的网段，写死哪个都会让另一边拉不到流。所以下发时把主机名换成
+  // client_ip —— 客户端既然从那个地址进来，就一定够得到它。留空则按配置原样下发。
+  std::string BuildPlanJson(ClientId id, const std::string& client_ip = "") const;
+
+  // 把 webrtc_base 的主机名换成 host，协议和端口沿用配置。host 为空则原样返回。
+  std::string WebrtcBaseFor(const std::string& host) const;
 
   bool empty() const { return cfg_.sources.empty(); }
 

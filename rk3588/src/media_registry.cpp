@@ -1,5 +1,6 @@
 #include "x30/media_registry.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -168,7 +169,26 @@ const MediaRendition* MediaRegistry::Pick(const MediaSource& src,
   return nullptr;
 }
 
-std::string MediaRegistry::BuildPlanJson(ClientId id) const {
+// 不上锁：cfg_ 构造后不再变，而 BuildPlanJson 是持着 mutex_ 调进来的 ——
+// 这里再去拿同一把锁会死锁。
+std::string MediaRegistry::WebrtcBaseFor(const std::string& host) const {
+  if (host.empty()) return cfg_.webrtc_base;
+  // 形如 http://1.2.3.4:8889。只换主机名，协议和端口都沿用配置里的写法 ——
+  // 端口是 MediaMTX 的监听口，跟客户端从哪个网段来无关。
+  const std::string& base = cfg_.webrtc_base;
+  const auto scheme_end = base.find("://");
+  if (scheme_end == std::string::npos) return base;
+  const auto host_begin = scheme_end + 3;
+  // 主机名后面可能跟 :端口，也可能跟路径，取先出现的那个作为主机名的终点。
+  const auto colon = base.find(':', host_begin);
+  const auto slash = base.find('/', host_begin);
+  auto host_end = std::min(colon == std::string::npos ? base.size() : colon,
+                           slash == std::string::npos ? base.size() : slash);
+  return base.substr(0, host_begin) + host + base.substr(host_end);
+}
+
+std::string MediaRegistry::BuildPlanJson(ClientId id,
+                                         const std::string& client_ip) const {
   std::lock_guard<std::mutex> lock(mutex_);
 
   ClientState cs;
@@ -181,7 +201,7 @@ std::string MediaRegistry::BuildPlanJson(ClientId id) const {
   w.BeginObject();
   w.Key("t", "media_plan");
   w.Key("main", cs.selected);
-  w.Key("webrtc_base", cfg_.webrtc_base);
+  w.Key("webrtc_base", WebrtcBaseFor(client_ip));
   w.Key("budget_kbps", cfg_.budget_kbps);
 
   int total = 0;

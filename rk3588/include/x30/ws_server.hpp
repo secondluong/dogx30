@@ -58,6 +58,11 @@ class WsServer {
   // 因人而异），这时 Broadcast 不适用。
   std::vector<ClientId> ClientIds() const;
 
+  // 这个客户端是打到本机哪个地址上的。监听 0.0.0.0 时，2.4G 的客户端从机身网
+  // （eth0 那侧）进来，MESH 的从 eth1 那侧进来，两个网段互不可达。要下发「客户端
+  // 够得到的地址」时只能按这个来，不能用一个写死的串。取不到时返回空串。
+  std::string LocalIpFor(ClientId id) const;
+
  private:
   struct Connection;
 

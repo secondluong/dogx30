@@ -67,8 +67,12 @@ run_scenario() {
     FAILED=1; cleanup; return
   fi
 
+  # 只听回环。默认监听 0.0.0.0 时，局域网里真在跑的平板会连上测试网关（它每两秒
+  # 重连一次同一个端口），抢走全码率槽位，于是媒体编排那组断言莫名失败 ——
+  # 排查这种"失败"要花掉一整个下午，而它跟被测代码毫无关系。
   "$GATEWAY" --robot-ip 127.0.0.1 --perception-ip 127.0.0.1 \
-      --serve --web "$ROOT/web" "$@" > "/tmp/x30_gw_$tag.log" 2>&1 &
+      --serve --bind 127.0.0.1 --web "$ROOT/web" "$@" \
+      > "/tmp/x30_gw_$tag.log" 2>&1 &
   GW_PID=$!
   if ! wait_ready "/tmp/x30_gw_$tag.log" "遥控服务已就绪" "网关"; then
     FAILED=1; cleanup; return

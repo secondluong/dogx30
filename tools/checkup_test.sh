@@ -24,7 +24,6 @@ source deploy/config_util.sh
 # 造一套装好的样子：前缀 $TMP/opt，单元指向 $TMP/opt/conf/gateway.conf
 PREFIX="$TMP/opt"
 CONF="$PREFIX/conf/gateway.conf"
-TOKEN="$PREFIX/conf/admin.token"
 UNIT="$TMP/x30.service"
 render_unit deploy/x30-gateway.service "$PREFIX" > "$UNIT"
 
