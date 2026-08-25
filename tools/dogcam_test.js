@@ -21,6 +21,7 @@ function check(name, ok, detail) {
 function harness() {
   var h = {
     calls: [],
+    resyncs: 0,
     cls: {},
     on24: false,
     hidden: false,
@@ -65,6 +66,11 @@ function harness() {
       },
       addEventListener: function () {},
       setInterval: function () { return 0; },
+      // 这一路归原生还是归网关是二选一，交接时要通知 media.js 重算。
+      // 不记进 h.calls：那串是给原生播放器的指令序列，混进来会看不清。
+      X30Media: {
+        resync: function () { h.resyncs++; },
+      },
       X30Native: {
         videoStart: function (u) { h.calls.push('start ' + u); },
         videoStop: function () { h.calls.push('stop'); },
@@ -127,13 +133,18 @@ check('占位图说明正在拉哪个地址',
       h.idle().indexOf('rtsp://192.168.1.105:8554/test') !== -1, h.idle());
 check('布控球如实标成 2.4G 下不可用',
       h.ptz().indexOf('布控球在网关那侧') !== -1, h.ptz());
+// 平板同时连着 WiFi 时网关那一路也够得到机身相机。接手时得让 media.js 重算，
+// 否则同一只相机被拉两遍：白占本来就窄的 2.4G，两边还抢同一块占位图。
+check('接手时通知 media.js 让出这一路', h.resyncs === 1, String(h.resyncs));
 
 // 切布局、切档、定时器都会走到 sync。每次都重开流的话画面会不停闪断。
 h.calls.length = 0;
+h.resyncs = 0;
 h.mod.onStageLayout();
 h.mod.onRadioPath();
 h.mod.onStageLayout();
 check('反复同步不会把正在放的流打断', h.calls.length === 0, JSON.stringify(h.calls));
+check('反复同步也不会反复惊动 media.js', h.resyncs === 0, String(h.resyncs));
 
 // --- 出错和出画面 -----------------------------------------------------------
 console.log('\n== 状态回报 ==');
@@ -178,10 +189,12 @@ check('回前台重新开流',
 console.log('\n== 切回 MESH ==');
 
 h.calls.length = 0;
+h.resyncs = 0;
 h.on24 = false;
 h.mod.onRadioPath();
 check('停掉原生这一路', h.calls.length === 1 && h.calls[0] === 'stop',
       JSON.stringify(h.calls));
+check('交回时通知 media.js 接手', h.resyncs === 1, String(h.resyncs));
 check('背景恢复不透明，否则 MESH 的 WebRTC 画面会被黑底盖住',
       !h.cls['native-video-on']);
 // 占位图交回 media.js 管，留着 2.4G 的话会让人以为还在走那条路。

@@ -60,6 +60,29 @@ final class RadioLink {
     private static final int AXIS_MAX = 32767;
     private static final int AXIS_DZ = 655;
 
+    // 运动主机的遥测。0x1009 那一包头后第一个字节就是 basic_state，第二个是 gait_state
+    // （见 rk3588/include/x30/protocol.hpp 的 CommandHead + MotionStateData）。
+    // 这是狗**自己报的**姿态，比本地猜靠得住：以前这里只数包不看内容，
+    // 一切档本地那份猜测就和实际脱节，界面便一直显示站立。
+    private static final int TELEM_MOTION = 0x1009;
+    private static final int HEAD_LEN = 12;
+    /** 遥测 200 Hz，半秒没有就当它不可信，退回本地记的那份。 */
+    private static final long TELEM_FRESH_MS = 500;
+
+    // basic_state 取值，与 protocol.hpp 的 BasicState 一致。
+    private static final int ST_SITTING = 0;
+    private static final int ST_SIT_TO_STAND = 1;
+    private static final int ST_INITIAL_STANDING = 2;
+    private static final int ST_TORQUE_STANDING = 3;
+    private static final int ST_STEPPING = 4;
+    private static final int ST_STAND_TO_SIT = 5;
+    private static final int ST_EMERGENCY = 6;
+
+    /** 没有遥测时，起立后等这么久才发轴，免得把柔和的起身掐硬。 */
+    private static final long AXIS_AFTER_STAND_MS = 1500;
+    /** 屏幕摇杆多久没更新就当松手。掉帧或页面卡住时不能让狗一直走。 */
+    private static final long SCREEN_AXIS_HOLD_MS = 400;
+
     private static final int HEARTBEAT = 0x21040001;
     private static final int CONNECT = 0x21020001;
     private static final int STAND = 0x21010223;
@@ -87,6 +110,14 @@ final class RadioLink {
     private boolean running;
     private boolean confirmed;
     private boolean standing;
+    private int telemState = -1;
+    private int telemGait = -1;
+    private long telemAt;
+    private long lastStandAt;
+    private float scrFwd;
+    private float scrLat;
+    private float scrTurn;
+    private long scrAt;
     private boolean torqued;
     private boolean stepping;
     private boolean emergency;
@@ -173,7 +204,31 @@ final class RadioLink {
         });
     }
 
+    private boolean telemFresh() {
+        return telemState >= 0 && System.currentTimeMillis() - telemAt < TELEM_FRESH_MS;
+    }
+
+    private boolean telemUpright() {
+        // 与 protocol.hpp TelemUpright 一致：初始站立 / 力控站立 / 踏步。
+        return telemState == ST_INITIAL_STANDING || telemState == ST_TORQUE_STANDING
+                || telemState == ST_STEPPING;
+    }
+
+    /**
+     * 狗是不是站着。有遥测就信遥测 —— 这是 MESH 那侧用的同一个字段，
+     * 两条链路读同一份真相，切档时状态才不会走散。
+     */
     synchronized boolean isStanding() {
+        if (telemFresh()) {
+            if (telemUpright()) return true;
+            // 起立中 / 坐下中按意图算，否则按钮会在过渡期来回跳。
+            if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
+                return standing;
+            }
+            // RL 起立后运动主机仍报坐下（见 protocol.hpp），这种只能按我们记的算。
+            if (telemState == ST_SITTING) return standing;
+            return false;
+        }
         return standing;
     }
 
@@ -201,20 +256,55 @@ final class RadioLink {
             o.put("sentFail", sentFail);
             o.put("rx", rxOk);
             o.put("cmd", lastCmd);
-            o.put("standing", standing);
+            o.put("standing", isStanding());
+            // 狗自己报的姿态与步态。没有遥测时给 -1，网页那侧就不会拿它盖掉
+            // 网关的读数（两条链路共用 app.basicState）。
+            o.put("basic", telemFresh() ? telemState : -1);
+            o.put("gait", telemFresh() ? telemGait : -1);
+            o.put("emergency", emergency);
+            o.put("axes", axesApply());
             return o.toString();
         } catch (Exception e) {
             return "{}";
         }
     }
 
-    /** 钉在顶栏，不用翻黄条。 */
+    /**
+     * 屏幕摇杆推到哪。通道约定与网关的速度接口一致（前为正、左为正、逆时针为正），
+     * 到协议轴的取反在 sendAxes 里做，和实体摇杆走同一条出口。
+     */
     synchronized void setScreenAxes(float fwd, float lat, float turn) {
+        scrFwd = fwd;
+        scrLat = lat;
+        scrTurn = turn;
+        scrAt = System.currentTimeMillis();
     }
 
     private void clearWalk() {
         torqued = false;
         stepping = false;
+    }
+
+    /**
+     * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
+     *
+     * 关键的那条是最后一句：我们起立发的是 0x21010223（RL 起立，原厂手柄同一条），
+     * 而运动主机在这之后**仍然报 basic_state=0**，可原厂手柄此时就能走。
+     * 以前这里只认 torqued || stepping，所以 2.4G 下非要先点「力控」「起步」才能走，
+     * 而 MESH 下不用 —— 同一只狗两套手感，是这一侧漏了这条规则。
+     *
+     * 起立中 / 坐下中 / 急停一律不发：那几个状态里轴没有文档定义，实测会把原厂柔和的
+     * 起身趴下掐成猛起猛趴（力控站立的左摇杆 Y 是身高，50 Hz 发 0 等于一直喊「压到最低」）。
+     */
+    private boolean axesApply() {
+        if (telemFresh()) {
+            if (telemState == ST_TORQUE_STANDING || telemState == ST_STEPPING) return true;
+            if (telemState == ST_SITTING) return standing;
+            return false;
+        }
+        // 没遥测时退回本地那份。起立后要等身子稳住，否则同样会掐硬。
+        if (torqued || stepping) return true;
+        return standing && System.currentTimeMillis() - lastStandAt > AXIS_AFTER_STAND_MS;
     }
 
     /**
@@ -241,6 +331,7 @@ final class RadioLink {
         if (!enabled) return;
         sendSimple(STAND);
         standing = true;
+        lastStandAt = System.currentTimeMillis();
         clearWalk();
     }
 
@@ -763,15 +854,7 @@ final class RadioLink {
         if (snap.ch != null && snap.ch.length > 0) {
             handleButtons(snap.ch);
         }
-        if (torqued || stepping) {
-            if (snap.ch != null && snap.ch.length > 0) {
-                sendAxes(snap.ch);
-            } else if (stepping) {
-                sendSimple(AXIS_LY, 0);
-                sendSimple(AXIS_LX, 0);
-                sendSimple(AXIS_RX, 0);
-            }
-        }
+        if (axesApply()) sendAxes(snap.ch);
     }
 
     private void handleButtons(int[] ch) {
@@ -811,13 +894,33 @@ final class RadioLink {
         return v <= 1275;
     }
 
-    private void sendAxes(int[] ch) {
-        float fwd = axis(ch, 2, false);
-        float lat = axis(ch, 3, true);
-        float turn = axis(ch, 0, true);
-        sendSimple(AXIS_LY, bits(fwd));
-        sendSimple(AXIS_LX, bits(-lat));
-        sendSimple(AXIS_RX, bits(-turn));
+    /**
+     * 一帧轴。实体摇杆优先，它回中时用屏幕摇杆那份 —— 平板上那两个虚拟摇杆以前
+     * 推了没反应：桥接方法在，但 setScreenAxes 是个空壳。
+     *
+     * 屏幕那份超过 SCREEN_AXIS_HOLD_MS 没更新就按松手算（发 0）。页面卡住或切后台
+     * 时不能让狗照着最后一帧一直走。
+     */
+    private void sendAxes(@Nullable int[] ch) {
+        float ly = 0f;
+        float lx = 0f;
+        float rx = 0f;
+        // 通道要先确认是活的。上电时通道常是全 0，按 axis() 的换算 (0-1500)/500
+        // 会被读成满量程后退 —— 起立后就能发轴之后，这一脚会直接踹出去。
+        if (ch != null && ch.length > 0 && rcLive(ch)) {
+            ly = axis(ch, 2, false);
+            lx = -axis(ch, 3, true);
+            rx = -axis(ch, 0, true);
+        }
+        if (ly == 0f && lx == 0f && rx == 0f
+                && System.currentTimeMillis() - scrAt < SCREEN_AXIS_HOLD_MS) {
+            ly = scrFwd;
+            lx = -scrLat;
+            rx = -scrTurn;
+        }
+        sendSimple(AXIS_LY, bits(ly));
+        sendSimple(AXIS_LX, bits(lx));
+        sendSimple(AXIS_RX, bits(rx));
     }
 
     private static float axis(int[] ch, int index, boolean invert) {
@@ -876,10 +979,45 @@ final class RadioLink {
                 DatagramPacket p = new DatagramPacket(buf, buf.length);
                 udp.receive(p);
                 rxOk++;
+                readTelem(buf, p.getLength());
             }
         } catch (java.net.SocketTimeoutException ignored) {
         } catch (Exception e) {
             if (rxOk == 0 && lastErr.isEmpty()) lastErr = "rx:" + brief(e);
+        }
+    }
+
+    /**
+     * 读运动主机的遥测。只取姿态那一包（0x1009）：头 12 字节之后第一个字节是
+     * basic_state，第二个是 gait_state，与 rk3588 那侧解的是同一份结构。
+     *
+     * 这几个字段一到手，本地那些猜测（站没站、力控没力控）就能自己纠回来 ——
+     * 以前 2.4G 只靠「我发过什么」记状态，别的遥控器动过狗、或者刚从 MESH 切回来，
+     * 记的和实际就是两回事。
+     */
+    private void readTelem(byte[] b, int len) {
+        if (len < HEAD_LEN + 2) return;
+        int code = (b[0] & 0xff) | ((b[1] & 0xff) << 8)
+                | ((b[2] & 0xff) << 16) | ((b[3] & 0xff) << 24);
+        if (code != TELEM_MOTION) return;
+        telemState = b[HEAD_LEN] & 0xff;
+        telemGait = b[HEAD_LEN + 1] & 0xff;
+        telemAt = System.currentTimeMillis();
+        if (telemUpright()) {
+            standing = true;
+            emergency = false;
+            // 力控站立 / 踏步是主机说的，比本地这两个标志准。切换指令是「按当前状态
+            // 取反」，标志错了会把力控点成位控、把起步点成停步。
+            torqued = telemState != ST_INITIAL_STANDING;
+            stepping = telemState == ST_STEPPING;
+        } else if (telemState == ST_EMERGENCY) {
+            emergency = true;
+            standing = false;
+            clearWalk();
+        } else if (telemState == ST_SITTING) {
+            // RL 起立后主机仍报坐下，这里分不清真趴着还是那种情况，不动 standing。
+            emergency = false;
+            clearWalk();
         }
     }
 

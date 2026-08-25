@@ -251,6 +251,30 @@
     if ($('set-app-dogcam-stat') && window.X30DogCam) {
       $('set-app-dogcam-stat').textContent = window.X30DogCam.status() || '—';
     }
+    if ($('set-app-radio-stat')) {
+      $('set-app-radio-stat').textContent = radioTelemLine();
+    }
+  }
+
+  // 2.4G 下狗的姿态取自它单播回来的遥测（0x1009）。狗只发给 network.toml 里
+  // 登记过的地址，没登记就一条都收不到，界面只能按「我点过什么」猜 —— 表现就是
+  // 切档后姿态对不上。所以这里要说清楚两件事：本机 2.4G 地址是多少（登记时照着填）、
+  // 现在到底收没收到。
+  function radioTelemLine() {
+    let st = null;
+    try {
+      st = JSON.parse(window.X30Native.radioStatus() || '{}');
+    } catch (e) {
+      st = null;
+    }
+    if (!st) return '—';
+    const ip = st.local || '未取到';
+    const port = 43897;
+    if (typeof st.basic === 'number' && st.basic >= 0) {
+      return '姿态遥测正常（本机 ' + ip + ':' + port + '）。';
+    }
+    return '收不到姿态遥测：狗的 network.toml 里要登记 ' + ip + ':' + port +
+           '。没登记也能操控，只是切档后姿态显示按本机记录来，可能与实际不符。';
   }
 
   function saveAppGateway() {

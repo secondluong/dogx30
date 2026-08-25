@@ -89,6 +89,10 @@
         <input class="set-input" id="set-app-dogcam" autocomplete="off" spellcheck="false">
       </label>
       <p class="set-sect-note" id="set-app-dogcam-stat">—</p>
+      <!-- 姿态遥测是狗**单播**回来的，只发给它 network.toml 里登记过的地址。
+           没登记就一条都收不到，界面只能按「我点过什么」猜姿态。这一行把本机
+           2.4G 地址和收没收到都说清楚，要登记时照着填。 -->
+      <p class="set-sect-note" id="set-app-radio-stat">—</p>
       <button type="button" class="btn sm" id="set-app-save">保存并重新连接</button>
     </div>
 
@@ -368,7 +372,7 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260825l"></script>
-<script src="app.js?v=20260825l"></script>
+<script src="dogcam24.js?v=20260825m"></script>
+<script src="app.js?v=20260825m"></script>
 </body>
 </html>

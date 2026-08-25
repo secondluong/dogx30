@@ -102,9 +102,18 @@ function stop() {
   playing = false;
   lastErr = '';
   document.documentElement.classList.remove('native-video-on');
-  // 交回 media.js 之前把占位图的话还原，否则切回 MESH 还挂着 2.4G 的提示。
+  // 先把占位图的话还原，否则切回 MESH 还挂着 2.4G 的提示；再交回 media.js，
+  // 它接手后自己会决定这一格是放画面还是继续显占位。
   const small = idleSmall();
   if (small && idleText) small.textContent = idleText;
+  handOver();
+}
+
+// 机身相机这一路归谁拉，是「原生」和「网关 WebRTC」二选一。归属一变就得让
+// media.js 重算，否则切到 2.4G 时它那条 WebRTC 还挂着：同一只相机两条流并行，
+// 白占本来就窄的 2.4G，还要抢同一块占位图。
+function handOver() {
+  if (window.X30Media && window.X30Media.resync) window.X30Media.resync();
 }
 
 function sync() {
@@ -116,7 +125,9 @@ function sync() {
   }
   pushRect();
   // 背景要立刻透出去：原生画面已经垫在下面，网页再铺一层黑就白拉了。
+  const had = document.documentElement.classList.contains('native-video-on');
   document.documentElement.classList.add('native-video-on');
+  if (!had) handOver();
   // 只在状态翻转时开一次。切布局、切档都会走到这里，反复 videoStart
   // 会把正在放的流打断。断流重试由原生自己带退避做，不靠这里轮询。
   if (!wantedNow) {

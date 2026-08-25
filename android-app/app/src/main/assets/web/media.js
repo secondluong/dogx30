@@ -269,10 +269,21 @@ function onMediaPlan(plan, showBanner) {
 }
 
 // App 只有一张底图，没露出来的路不要占带宽。网页一主三小 / 2×2 仍同时拉。
+// 2.4G 下机身相机由原生直拉狗身上的 RTSP（网关根本不在那条链路上）。
+// 平板同时连着 WiFi 时网关那一路也够得到，于是同一只相机被拉两遍：白占本来就窄的
+// 链路，还要跟原生抢同一块占位图 —— 现场看到的就是「有时候从 RTSP 拉、有时候不」。
+// 这一路交给原生，网关那侧就别再要了。
+function nativeOwnsDogCam() {
+  return typeof document !== 'undefined' &&
+         document.documentElement.classList.contains('native-video-on');
+}
+
 function wantedTiles(plan) {
-  if (!inAppShell()) return VIDEO_TILES;
+  const own = nativeOwnsDogCam();
+  if (!inAppShell()) return VIDEO_TILES.filter((t) => !(own && t.id === 'dog_cam'));
   const main = (media.layout && media.layout.main) || plan.main;
   if (!main || main === 'cloud') return [];
+  if (own && main === 'dog_cam') return [];
   return VIDEO_TILES.filter((t) => t.id === main);
 }
 
@@ -283,7 +294,8 @@ function syncTiles(plan, showBanner) {
       playTile(plan, tile, showBanner);
     } else {
       stopSource(tile.id);
-      setIdle(tile.idle, true);
+      // 原生在放这一路时占位图归它管：它出画面后要收起来，这里再显就盖住画面了。
+      if (!(tile.id === 'dog_cam' && nativeOwnsDogCam())) setIdle(tile.idle, true);
     }
   }
 }
@@ -410,4 +422,12 @@ function onLinkOpen() {
   if (sendRef) reportCaps(sendRef);
 }
 
-window.X30Media = { initMedia, onMediaPlan, stopAll, onLayout, setTalk, onLinkOpen };
+// resync：机身相机那一路的归属变了（切档进出 2.4G）要立刻重算。不然切到 2.4G 时
+// 网关那一路还在拉着，同一只相机两条流并行。
+function resync() {
+  if (media.plan) syncTiles(media.plan, talkBanner);
+}
+
+window.X30Media = {
+  initMedia, onMediaPlan, stopAll, onLayout, setTalk, onLinkOpen, resync,
+};

@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825l';
+const WEB_BUILD = '0825m';
 
 function nativeAppVersion() {
   try {
@@ -388,18 +388,53 @@ function nativeRadioStanding() {
 }
 
 
-function syncRadioStanding() {
+// 2.4G 下狗的姿态来自它自己的 UDP 遥测（RadioLink 解 0x1009），写进的是
+// MESH 那侧同一个 app.basicState。两条链路读同一份真相，切档时状态才对得上 ——
+// 以前 2.4G 只按「我点过什么」记，切回 MESH 前的旧读数还留在 app 里，
+// 于是切一次就总显示站立。
+function syncRadioStanding(st0) {
   if (!radioDirect()) return;
-  const up = nativeRadioStanding();
-  if (up === app.rlStanding) return;
-  app.rlStanding = up;
+  const st = st0 || nativeRadioStatus() || {};
+  const basic = typeof st.basic === 'number' ? st.basic : -1;
+  let changed = false;
+  if (basic >= 0 && basic !== app.basicState) {
+    app.basicState = basic;
+    if (basic === STATE_STEPPING) app.walkMode = 'step';
+    else if (basic === STATE_TORQUE_STANDING) app.walkMode = 'torque';
+    else app.walkMode = null;   // 其余状态都不在力控/踏步里，别留着旧的亮着
+    changed = true;
+  }
+  if (basic < 0 && app.basicState !== 0) {
+    // 收不到遥测（狗的 network.toml 里没登记这台平板）时，不能拿 MESH 那会儿的
+    // 旧读数当真 —— 那正是「切一次档就总显示站立」的来路。退回本地记的那份。
+    app.basicState = 0;
+    changed = true;
+  }
+  if (basic >= 0) {
+    const locked = basic === STATE_EMERGENCY;
+    if (locked !== app.emergencyLocked) {
+      app.emergencyLocked = locked;
+      changed = true;
+    }
+  }
+  // statusJson 里已经带了姿态，别再多走一次桥：每次桥调用都是一趟同步 Binder，
+  // 而这个回路按发轴频率在跑。
+  const up = typeof st.standing === 'boolean' ? st.standing : nativeRadioStanding();
+  if (up !== app.rlStanding) {
+    app.rlStanding = up;
+    if (!up) app.walkMode = null;
+    changed = true;
+  }
+  if (!changed) return;
   const wrap = $('stage-wrap');
   if (wrap) {
-    wrap.classList.toggle('dog-up', up);
-    wrap.classList.toggle('dog-prone', !up);
+    const standing = isStandingUi();
+    wrap.classList.toggle('dog-up', standing);
+    wrap.classList.toggle('dog-prone', !standing);
   }
   paintStandButton();
   paintWalkButtons();
+  updateStickAvailability();
 }
 
 // 2.4G 没有网关遥测时，本地先把起立后的步态/身高菜单亮出来。
@@ -587,8 +622,10 @@ function requestControl() {
 // 渲染
 // ---------------------------------------------------------------------------
 
-function radioStatusLine() {
-  const st = nativeRadioStatus() || {};
+// 传进来的是本轮已经读过的那份状态。每次读都是一趟同步 Binder，而这条回路
+// 按发轴频率在跑，一轮里读三遍没有必要。
+function radioStatusLine(st0) {
+  const st = st0 || nativeRadioStatus() || {};
   const bits = [st.ready ? '2.4G通' : '2.4G断'];
   // 画面和操控是两条链路：指令走 2.4G，视频走网关。分开报才看得出「狗能动
   // 但没画面」该去查哪一头。放在前面，芯片被顶栏挤窄截断也还看得见。
@@ -603,15 +640,15 @@ function radioStatusLine() {
   return bits.join(' ');
 }
 
-function paintRadioChip() {
+function paintRadioChip(st0) {
   if (!radioDirect()) return;
   const chip = $('chip-link');
   if (!chip) return;
-  const st = nativeRadioStatus() || {};
+  const st = st0 || nativeRadioStatus() || {};
   chip.classList.toggle('online', !!st.ready);
   chip.classList.add('radio-stat');
   const text = $('link-text');
-  if (text) text.textContent = radioStatusLine();
+  if (text) text.textContent = radioStatusLine(st);
   if (!st.ready && hasNativeRadio()) {
     const why = st.status === 'no-usb-net'
       ? 'G20 还没有 USB 网 192.168.144（射频/对频没起来）。关云卓助手和云深处后再切 2.4G'
@@ -972,16 +1009,30 @@ function paintStickChip() {
   updateStickAvailability();
 }
 
+// 2.4G 下屏幕上那两个摇杆也要能推。实体摇杆由原生自己读通道，这里只送触摸那份，
+// 免得同一支杆两边各读一遍、死区不一样打起来。
+// 云台在网关那侧，2.4G 够不到，所以摇杆指向云台时什么都不发。
+function sendRadioVel(c) {
+  const n = window.X30Native;
+  if (!n || typeof n.radioVel !== 'function') return;
+  if (g20Live() || stickTarget() === 'ptz') return;
+  n.radioVel(c.fwd || 0, c.lat || 0, c.turn || 0);
+}
+
 let ptzNeedControlAt = 0;
 let ptzClaimedAt = 0;
 
 setInterval(() => {
   syncNativeRadioPath();
   paintStickChip();
-  if (radioDirect() && hasNativeRadio()) paintRadioChip();
+  const onRadio = radioDirect() && hasNativeRadio();
+  // 一轮只读一次原生状态，芯片和姿态同步共用。
+  const radioSt = onRadio ? (nativeRadioStatus() || {}) : null;
+  if (onRadio) paintRadioChip(radioSt);
   const c = activeChannels();
-  if (radioDirect() && hasNativeRadio()) {
-    syncRadioStanding();
+  if (onRadio) {
+    syncRadioStanding(radioSt);
+    sendRadioVel(c);
     return;
   }
   if (stickTarget() === 'ptz') {

@@ -420,6 +420,58 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge) &&
       /radioStatus/.test(radioBridge));
+// 狗一直在往遥控器发遥测（0x1009 那一包头后第一个字节就是 basic_state），
+// 以前 drainRx 只数包不看内容，姿态全靠「我发过什么」猜。别的遥控器动过狗、
+// 或者刚从 MESH 切回来，猜的和实际就是两回事。
+check('2.4G 下读狗自己报的姿态，不靠本地猜',
+      /TELEM_MOTION = 0x1009/.test(radioJava) &&
+      /void readTelem\(byte\[\] b, int len\)/.test(radioJava) &&
+      /readTelem\(buf, p\.getLength\(\)\)/.test(radioJava) &&
+      /telemFresh\(\)/.test(radioJava) &&
+      /o\.put\("basic"/.test(radioJava) &&
+      /o\.put\("gait"/.test(radioJava));
+// 姿态要写进 MESH 那侧同一个 app.basicState：两条链路读同一份真相，
+// 切档时才对得上。以前 2.4G 只改 rlStanding，切回去还留着旧读数，于是总显示站立。
+check('两条链路共用一份姿态，切档不走散',
+      /function syncRadioStanding/.test(appJs) &&
+      /st\.basic/.test(appJs) &&
+      /app\.basicState = basic/.test(appJs) &&
+      /app\.emergencyLocked = locked/.test(appJs) &&
+      /STATE_TORQUE_STANDING/.test(appJs));
+// 我们起立发的是 0x21010223（RL 起立，原厂手柄同一条），运动主机在这之后仍报
+// basic_state=0，而原厂手柄此时就能走 —— 网关那侧的 AxisCommandsApply 早有这条，
+// 2.4G 这侧漏了，于是非要先点力控、起步。两侧规则必须一致。
+check('起立后就能走，不用先点力控起步',
+      /private boolean axesApply\(\)/.test(radioJava) &&
+      /if \(axesApply\(\)\) sendAxes/.test(radioJava) &&
+      /ST_TORQUE_STANDING \|\| telemState == ST_STEPPING/.test(radioJava) &&
+      /AXIS_AFTER_STAND_MS/.test(radioJava) &&
+      !/if \(torqued \|\| stepping\) \{/.test(radioJava));
+// 起立中 / 坐下中 / 急停仍然不发轴：那几个状态下轴没有文档定义，
+// 实测会把原厂柔和的起身趴下掐成猛起猛趴。
+check('过渡和急停期间不发轴',
+      /ST_SIT_TO_STAND/.test(radioJava) &&
+      /ST_STAND_TO_SIT/.test(radioJava) &&
+      /ST_EMERGENCY/.test(radioJava));
+// 上电时通道常是全 0，(0-1500)/500 会被读成满量程后退。以前要先点起步才发轴，
+// 现在起立后就发，这一脚会直接踹出去。
+check('通道没活起来之前不当摇杆量用',
+      /ch\.length > 0 && rcLive\(ch\)/.test(radioJava));
+// 桥接方法一直在，实现却是个空壳：2.4G 下推屏幕摇杆没有任何反应。
+// 姿态遥测是狗单播回来的，只发给 network.toml 里登记过的地址。收不到时姿态只能猜，
+// 而「为什么猜错」这件事没有别的办法看出来，所以设置里要能查到本机地址和收没收到。
+check('设置里查得到姿态遥测通不通',
+      !!htmlIds['set-app-radio-stat'] &&
+      /set-app-radio-stat/.test(read('settings.js')) &&
+      /network\.toml/.test(read('settings.js')) &&
+      /43897/.test(read('settings.js')) &&
+      /basic < 0 && app\.basicState !== 0/.test(appJs));
+check('屏幕摇杆在 2.4G 下也能推',
+      /void setScreenAxes\(float fwd, float lat, float turn\)/.test(radioJava) &&
+      /scrAt = System\.currentTimeMillis\(\)/.test(radioJava) &&
+      /SCREEN_AXIS_HOLD_MS/.test(radioJava) &&
+      /radioVel/.test(radioBridge) &&
+      /radioVel\(/.test(appJs));
 // 版本从顶栏挪进设置面板：遥控时顶栏要盯别的东西。但不能不印 ——
 // 装包漏拷 assets/web 时页面是旧的，除了对版本戳没有别的办法看出来。
 check('版本不占顶栏，但在设置里查得到',
@@ -474,6 +526,18 @@ var nativeVideo = fs.readFileSync(
             'com', 'dogx30', 'control', 'NativeVideo.java'), 'utf8');
 var appGradle = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'build.gradle'), 'utf8');
+// 机身相机这一路归谁拉是二选一。平板同时连着 WiFi 时网关那一路也够得到，
+// 于是同一只相机被拉两遍：白占本来就窄的 2.4G，两边还抢同一块占位图 ——
+// 现场看到的就是「有时候从 RTSP 拉、有时候不」。
+var mediaText = read('media.js');
+check('机身相机不会被原生和网关同时拉两遍',
+      /function nativeOwnsDogCam/.test(mediaText) &&
+      /native-video-on/.test(mediaText) &&
+      /if \(own && main === 'dog_cam'\) return \[\];/.test(mediaText) &&
+      /tile\.id === 'dog_cam' && nativeOwnsDogCam\(\)/.test(mediaText) &&
+      /resync/.test(mediaText) &&
+      /function handOver/.test(dogCamJs) &&
+      /X30Media\.resync/.test(dogCamJs));
 check('2.4G 的机身相机走原生 RTSP',
       /rtsp:\/\/192\.168\.1\.105:8554/.test(dogCamJs) &&
       /videoStart/.test(dogCamJs) &&
