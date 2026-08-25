@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825m';
+const WEB_BUILD = '0825n';
 
 function nativeAppVersion() {
   try {
@@ -520,13 +520,25 @@ function applyRadioPose(name) {
 }
 app.applyRadioPose = applyRadioPose;
 
-function paintRadioBtn() {
+// 这个按钮同时是档位和链路灯：字是走哪条路，颜色是那条路通不通 ——
+// 绿=通，黄=不通。以前顶栏另挂一条「2.4G通 网关通 ok/fail rx…」的状态串，
+// 遥控时那串东西既占地方又要费神读，而真正要一眼看清的只有通没通。
+// 出了问题「为什么不通」由黄条讲（见 paintRadioLink），不占顶栏。
+function paintRadioBtn(st0) {
   const btn = $('btn-radio');
   if (!btn) return;
   const radio = app.radioPath === 'radio';
   btn.textContent = radio ? '2.4G' : 'MESH';
-  btn.classList.toggle('radio-on', radio);
-  btn.classList.toggle('held', !radio && app.hasControl);
+  const up = radio ? radioLinkUp(st0) : linkOpen();
+  btn.classList.toggle('link-up', up);
+  btn.classList.toggle('link-down', !up);
+}
+
+// 2.4G 通的判据是「指令到得了运动主机」，不是「射频起来了」。
+function radioLinkUp(st0) {
+  if (!hasNativeRadio()) return false;
+  if (st0 && typeof st0.ready === 'boolean') return st0.ready;
+  return nativeRadioLinkOk();
 }
 
 function notifyNativeRadio() {
@@ -567,12 +579,11 @@ function applyRadioPath(announce) {
     } else if (announce) {
       showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
     }
-    paintRadioBtn();
-    paintRadioChip();
+    paintRadioLink();
     return;
   }
-  const chip = $('chip-link');
-  if (chip) chip.classList.remove('radio-stat');
+  // 切回 MESH 要把 2.4G 档留下的空文本换成网关那侧的说法，setLink 负责。
+  setLink(linkOpen());
   if (linkOpen()) requestControl();
   if (announce) {
     showBanner(linkOpen()
@@ -622,33 +633,16 @@ function requestControl() {
 // 渲染
 // ---------------------------------------------------------------------------
 
-// 传进来的是本轮已经读过的那份状态。每次读都是一趟同步 Binder，而这条回路
-// 按发轴频率在跑，一轮里读三遍没有必要。
-function radioStatusLine(st0) {
-  const st = st0 || nativeRadioStatus() || {};
-  const bits = [st.ready ? '2.4G通' : '2.4G断'];
-  // 画面和操控是两条链路：指令走 2.4G，视频走网关。分开报才看得出「狗能动
-  // 但没画面」该去查哪一头。放在前面，芯片被顶栏挤窄截断也还看得见。
-  bits.push(linkOpen() ? '网关通' : '网关断');
-  if (st.status) bits.push(st.status);
-  if (st.local) bits.push(st.local);
-  else if (st.nets) bits.push(st.nets);
-  bits.push('ok' + (st.sentOk || 0) + '/fail' + (st.sentFail || 0));
-  bits.push('rx' + (st.rx || 0));
-  if (st.cmd) bits.push(st.cmd);
-  if (st.err) bits.push(st.err);
-  return bits.join(' ');
-}
-
-function paintRadioChip(st0) {
+// 2.4G 档下顶栏不再挂状态串（通没通看按钮颜色）。不通时才需要细节，
+// 而那属于「出了事要查」，用黄条讲一次，比在顶栏常驻一行更合用。
+// 传进来的是本轮已经读过的那份原生状态：每次读都是一趟同步 Binder，
+// 而这条回路按发轴频率在跑。
+function paintRadioLink(st0) {
   if (!radioDirect()) return;
-  const chip = $('chip-link');
-  if (!chip) return;
   const st = st0 || nativeRadioStatus() || {};
-  chip.classList.toggle('online', !!st.ready);
-  chip.classList.add('radio-stat');
   const text = $('link-text');
-  if (text) text.textContent = radioStatusLine(st);
+  if (text) text.textContent = '';
+  paintRadioBtn(st);
   if (!st.ready && hasNativeRadio()) {
     const why = st.status === 'no-usb-net'
       ? 'G20 还没有 USB 网 192.168.144（射频/对频没起来）。关云卓助手和云深处后再切 2.4G'
@@ -660,12 +654,15 @@ function paintRadioChip(st0) {
 function setLink(online) {
   const chip = $('chip-link');
   if (radioDirect()) {
-    paintRadioChip();
+    paintRadioLink();
   } else {
     chip.classList.toggle('online', online && app.alive);
+    // 「网关通」这件事现在由 MESH 按钮的颜色说，这里只留网关连上之后才知道的事：
+    // 狗到底接没接通。
     $('link-text').textContent = online
         ? (app.alive ? '已连接' : '狗未接通')
         : (app.radioFallback ? '2.4G' : '重连中');
+    paintRadioBtn();
   }
   if ($('btn-settings')) $('btn-settings').classList.toggle('online', online);
   if (!online) {
@@ -1028,7 +1025,7 @@ setInterval(() => {
   const onRadio = radioDirect() && hasNativeRadio();
   // 一轮只读一次原生状态，芯片和姿态同步共用。
   const radioSt = onRadio ? (nativeRadioStatus() || {}) : null;
-  if (onRadio) paintRadioChip(radioSt);
+  if (onRadio) paintRadioLink(radioSt);
   const c = activeChannels();
   if (onRadio) {
     syncRadioStanding(radioSt);

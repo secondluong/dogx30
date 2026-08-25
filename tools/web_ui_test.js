@@ -370,9 +370,23 @@ check('切 2.4G 仍连网关，画面不跟着断',
       !/if \(app\.radioPath === 'radio'\) return;\s*setTimeout\(connect/.test(appJs) &&
       // 切档不许顺手把 ws 关掉
       !/app\.ws = null;/.test(appJs) &&
-      /if \(changed\) connect\(\);/.test(appJs) &&
-      // 网关通没通要单独报，不然「能动但没画面」查不到是哪一头
-      /'网关通' : '网关断'/.test(appJs));
+      /if \(changed\) connect\(\);/.test(appJs));
+// 顶栏原来挂一条「2.4G通 网关通 ok/fail rx…」的状态串。它当初是为了把「狗能动
+// 但没画面」拆成两头看 —— 那时 2.4G 下的画面还得靠网关。改成原生直拉 RTSP 之后
+// 2.4G 根本不经过网关，这条串就只剩占地方和费神了。
+// 现在通没通只看按钮颜色：字是档位，绿=这条路通，黄=不通；不通的原因用黄条讲一次。
+check('链路通没通看按钮颜色，不在顶栏挂状态串',
+      !/'网关通' : '网关断'/.test(appJs) &&
+      !/st\.ready \? '2\.4G/.test(appJs) &&
+      !/function radioStatusLine/.test(appJs) &&
+      /function radioLinkUp/.test(appJs) &&
+      /btn\.classList\.toggle\('link-up', up\)/.test(appJs) &&
+      /btn\.classList\.toggle\('link-down', !up\)/.test(appJs) &&
+      /const up = radio \? radioLinkUp\(st0\) : linkOpen\(\)/.test(appJs) &&
+      /#btn-radio\.link-up/.test(styleText) &&
+      /#btn-radio\.link-down/.test(styleText) &&
+      /html\.radio-24 #chip-link \{ display: none/.test(styleText) &&
+      !/radio-stat/.test(styleText));
 check('原生切 2.4G 能找到 window.app',
       /window\.app = app/.test(appJs) &&
       /function syncNativeRadioPath/.test(appJs) &&

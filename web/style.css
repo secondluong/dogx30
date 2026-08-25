@@ -130,7 +130,15 @@ body {
 .btn-ghost.held { background: var(--ok); border-color: var(--ok); color: #06210d; font-weight: 600; }
 /* 网页控制台只走 MESH，这个按钮只在安卓壳里露出来。 */
 #btn-radio { display: none; min-width: 4.6em; }
-#btn-radio.radio-on {
+/* 字是档位（2.4G / MESH），颜色是这条路通不通：绿=通，黄=不通。
+   顶栏原来另挂一条状态串，遥控时读它太费神，而要一眼看清的只有通没通。 */
+#btn-radio.link-up {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #06210d;
+  font-weight: 700;
+}
+#btn-radio.link-down {
   background: var(--warn);
   border-color: var(--warn);
   color: #1a1400;
@@ -888,16 +896,15 @@ html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
 html.shell-app #btn-radio { display: inline-block; }
 html.shell-app #btn-control { display: none !important; }
-html.shell-app:not(.radio-24) #chip-link.online,
+/* MESH 且一切正常时这颗芯片也不必占地方：网关通没通看 MESH 按钮的颜色，
+   它只在「重连中」「狗未接通」这些网关连上之后才知道的事情上才露出来。 */
+html.shell-app #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }
 /* 顶栏窄，芯片换行会被裁掉，版本戳就凭空消失了。 */
 html.shell-app .chips { flex-wrap: nowrap; min-width: 0; }
-html.shell-app #chip-link.radio-stat {
-  max-width: 46vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 2.4G 档下这颗芯片没内容了：通没通看按钮颜色，不通的原因用黄条讲。
+   不限定 shell-app：网页端若从 localStorage 读回 2.4G 档，也不该留一颗空芯片。 */
+html.radio-24 #chip-link { display: none !important; }
 html.shell-app .brand-wrap { gap: 8px; }
 html.shell-app .brand {
   font-size: 14px;
