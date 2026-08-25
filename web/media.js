@@ -67,7 +67,7 @@ async function confirmH265() {
       },
     });
     return !!r.supported;
-  } catch {
+  } catch (e) {
     return null;
   }
 }

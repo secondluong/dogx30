@@ -116,6 +116,33 @@ var js = ['app.js', 'settings.js', 'gamepad.js'].map(function (f) {
 var jsAll = js.map(function (f) { return f.text; }).join('\n');
 
 // ---------------------------------------------------------------------------
+console.log('\n== 旧 WebView 也要能解析 ==');
+// ---------------------------------------------------------------------------
+// G20 这类工业平板的 WebView 常年不更新。踩过的坑：app.js 里一处无绑定 catch
+// （Chrome 66 起才有）让整个文件解析失败，于是界面停在 HTML 静态默认值，
+// 屏幕按键一个都不发指令，而实体键走 Java 照样能动 —— 极难往语法上想。
+// 这些写法在 Node 里全都合法，所以只能按文本查。
+var LEGACY_TRAPS = [
+  { re: /catch\s*\{/, name: '无绑定 catch（Chrome 66+）' },
+  { re: /\?\./, name: '可选链 ?.（Chrome 80+）' },
+  { re: /\?\?/, name: '空值合并 ??（Chrome 80+）' },
+  { re: /\.replaceAll\(/, name: 'String.replaceAll（Chrome 85+）' },
+  { re: /\.flatMap\(|\.flat\(/, name: 'Array.flat/flatMap（Chrome 69+）' },
+  { re: /\.padStart\(|\.padEnd\(/, name: 'String.padStart（Chrome 57+）' },
+  { re: /Object\.fromEntries/, name: 'Object.fromEntries（Chrome 73+）' },
+  { re: /globalThis/, name: 'globalThis（Chrome 71+）' },
+];
+var webJsFiles = fs.readdirSync(WEB).filter(function (f) {
+  return /\.js$/.test(f);
+});
+webJsFiles.forEach(function (f) {
+  var text = read(f).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  var hits = LEGACY_TRAPS.filter(function (t) { return t.re.test(text); })
+                         .map(function (t) { return t.name; });
+  check(f + ' 没有旧 WebView 不认的语法', hits.length === 0, hits.join('，'));
+});
+
+// ---------------------------------------------------------------------------
 console.log('\n== .hidden 必须真的能隐藏 ==');
 // ---------------------------------------------------------------------------
 
@@ -324,6 +351,15 @@ check('界面上印出网页与安装包版本',
       /function paintVerChip/.test(appJs) &&
       /getAppVersion/.test(appJs) &&
       /getAppVersion/.test(radioBridge));
+check('网页启动不受挂按钮那段成败影响',
+      /function bootstrap\(\)/.test(appJs) &&
+      /setTimeout\(bootstrap, 0\)/.test(appJs) &&
+      /if \(booted\) return;/.test(appJs));
+check('原生把网页 JS 死活和报错显示出来',
+      /setWebChromeClient/.test(radioBridge) &&
+      /onConsoleMessage/.test(radioBridge) &&
+      /网页JS未运行/.test(radioBridge) &&
+      /void probeJs\(\)/.test(radioBridge));
 // 版本戳必须由原生给出。让网页自己印，资源没更新时它也不显示，等于没有指示。
 check('原生读安装包里的网页版本戳',
       /String versionLine\(\)/.test(radioBridge) &&

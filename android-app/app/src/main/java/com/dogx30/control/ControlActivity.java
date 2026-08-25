@@ -11,7 +11,9 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -43,6 +45,8 @@ public class ControlActivity extends AppCompatActivity {
     private EditText overlayHost;
     private EditText overlayPort;
     @Nullable private String versionLine;
+    @Nullable private String jsErr;
+    private boolean jsAlive;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
 
@@ -92,6 +96,19 @@ public class ControlActivity extends AppCompatActivity {
         txtRadioStat = findViewById(R.id.txt_radio_stat);
         txtRadioStat.setOnClickListener(v -> showRadioStatDialog());
         paintNativeRadioBtn();
+
+        // 网页脚本挂了的时候界面看起来只是「没反应」，没有 adb 根本查不出来。
+        // 把第一条 JS 报错捞上来显示，省得靠猜。
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage cm) {
+                if (cm != null && cm.messageLevel() == ConsoleMessage.MessageLevel.ERROR
+                        && jsErr == null) {
+                    jsErr = cm.message() + " @" + cm.lineNumber();
+                }
+                return true;
+            }
+        });
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -191,8 +208,16 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     private void tickRadioStat() {
+        probeJs();
         paintRadioStat();
         uiHandler.postDelayed(radioStatTick, 1000);
+    }
+
+    /** 网页脚本活着才有屏幕按键。挂了就在状态行说出来，而不是让人对着按钮反复点。 */
+    private void probeJs() {
+        if (web == null) return;
+        web.evaluateJavascript("!!(window.app&&window.app.adoptRadioPath)",
+                v -> jsAlive = "true".equals(v));
     }
 
     private void paintRadioStat() {
@@ -201,9 +226,11 @@ public class ControlActivity extends AppCompatActivity {
         // 版本行一直显示。让网页自己印版本是没用的：网页没更新时它恰好也不显示，
         // 反而分不清「资源旧」和「功能没生效」。这行由原生读安装包里的文件得出。
         txtRadioStat.setVisibility(View.VISIBLE);
-        txtRadioStat.setText(radio
-                ? versionLine() + "\n" + RadioLink.get().statusLine()
-                : versionLine() + " MESH");
+        StringBuilder sb = new StringBuilder(versionLine());
+        sb.append(jsAlive ? " 网页JS通" : " 网页JS未运行");
+        if (!jsAlive && jsErr != null) sb.append("\n").append(jsErr);
+        sb.append("\n").append(radio ? RadioLink.get().statusLine() : "MESH");
+        txtRadioStat.setText(sb.toString());
     }
 
     private String versionLine() {

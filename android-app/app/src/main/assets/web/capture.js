@@ -23,7 +23,7 @@ const recorders = new Map(); // view -> { rec, chunks, btn }
 
 function stamp() {
   const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
+  const p = (n) => (n < 10 ? '0' : '') + n;
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-` +
          `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
@@ -105,7 +105,7 @@ function streamOf(view) {
 function stopRec(view) {
   const slot = recorders.get(view);
   if (!slot) return;
-  try { if (slot.rec.state !== 'inactive') slot.rec.stop(); } catch { /* 已经停了 */ }
+  try { if (slot.rec.state !== 'inactive') slot.rec.stop(); } catch (e) { /* 已经停了 */ }
 }
 
 function startRec(view, btn, showBanner) {

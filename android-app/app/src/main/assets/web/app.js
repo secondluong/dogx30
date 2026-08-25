@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825d';
+const WEB_BUILD = '0825e';
 
 function nativeAppVersion() {
   try {
@@ -91,6 +91,10 @@ const app = {
 };
 app.radioFallback = app.radioPath === 'radio';
 window.app = app;
+
+// 定时器在本脚本抛错时依然会触发，所以先把启动排进队列，再往下挂按钮。
+let booted = false;
+setTimeout(bootstrap, 0);
 
 // 踏步态才走速度通道，力控站立走姿态通道。其余状态下摇杆无意义，直接禁用，
 // 免得用户对着没反应的摇杆反复推。
@@ -222,7 +226,7 @@ function connect() {
       return;
     }
     let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
     switch (msg.t) {
       case 'hello':
         app.clientId = msg.client_id;
@@ -1428,24 +1432,32 @@ document.addEventListener('visibilitychange', () => {
   // document.hidden 置上，退订后再回来要重新点，操作员会以为订不住。
 });
 
-// 网页、App 指标和气体都默认藏。网页靠按钮打开，App 靠 G20 R1/R2。
-if ($('telemetry')) {
-  $('telemetry').classList.add('hidden');
-  if ($('btn-telem')) $('btn-telem').classList.remove('active');
-}
-if ($('gas-panel')) {
-  $('gas-panel').classList.add('hidden');
-  if ($('btn-gas')) $('btn-gas').classList.remove('active');
-}
-if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
-paintVerChip();
-syncNativeRadioPath();
-applyRadioPath(false);
+// 启动。挂按钮那一大段在本文件更前面，任何一处抛错都会连带把这里整段跳过 ——
+// 现场表现是界面停在 HTML 静态默认值、一条指令都发不出去，且完全看不出原因。
+// 所以本函数由文件开头的定时器排队执行，不受后面语句成败影响。
+function bootstrap() {
+  if (booted) return;
+  booted = true;
+  // 网页、App 指标和气体都默认藏。网页靠按钮打开，App 靠 G20 R1/R2。
+  if ($('telemetry')) {
+    $('telemetry').classList.add('hidden');
+    if ($('btn-telem')) $('btn-telem').classList.remove('active');
+  }
+  if ($('gas-panel')) {
+    $('gas-panel').classList.add('hidden');
+    if ($('btn-gas')) $('btn-gas').classList.remove('active');
+  }
+  if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
+  paintVerChip();
+  syncNativeRadioPath();
+  applyRadioPath(false);
 
-connect();
+  connect();
 
-if (window.X30Media) window.X30Media.initMedia(send, showBanner);
-if (window.X30Capture) window.X30Capture.initCapture(showBanner);
-if (window.X30Cloud) window.X30Cloud.initCloud(send);
-if (window.X30Gamepad) window.X30Gamepad.initGamepad(send, showBanner, () => app);
-if (window.X30Settings) window.X30Settings.initSettings(send);
+  if (window.X30Media) window.X30Media.initMedia(send, showBanner);
+  if (window.X30Capture) window.X30Capture.initCapture(showBanner);
+  if (window.X30Cloud) window.X30Cloud.initCloud(send);
+  if (window.X30Gamepad) window.X30Gamepad.initGamepad(send, showBanner, () => app);
+  if (window.X30Settings) window.X30Settings.initSettings(send);
+}
+bootstrap();
