@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825j';
+const WEB_BUILD = '0825k';
 
 function nativeAppVersion() {
   try {
@@ -553,9 +553,11 @@ function adoptRadioPath(path, announce) {
   if (changed) notifyNativeRadio();
   applyRadioPath(!!announce);
   renderControl();
-  // 切到 2.4G 也要保住网关连接，否则画面会跟着操控一起没。切档只改指令走哪条路，
-  // 控制权已在 applyRadioPath 里交还，网关不会跟 2.4G 抢着下发运动。
+  // 切档只改指令走哪条路，不主动断网关：两条链路同时在（平板既连着 WiFi 又开着
+  // 2.4G）时，操控走 2.4G、画面和遥测仍可走网关。纯 2.4G 现场网关本来就够不到，
+  // 这里的重连会一直失败但无害，机身相机那一路由 X30DogCam 原生直拉。
   if (changed) connect();
+  if (window.X30DogCam) window.X30DogCam.onRadioPath();
 }
 function setRadioPath(path) {
   adoptRadioPath(path, true);
@@ -1283,6 +1285,8 @@ function applyLayout() {
   requestAnimationFrame(() => {
     if (window.X30Cloud && window.X30Cloud.resize) window.X30Cloud.resize();
     if (window.X30Media && window.X30Media.onLayout) window.X30Media.onLayout(viewLayout);
+    // 2.4G 的机身相机是原生画面，格子挪了要跟着挪。
+    if (window.X30DogCam) window.X30DogCam.onStageLayout();
   });
 }
 
@@ -1451,6 +1455,7 @@ function bootstrap() {
   connect();
 
   if (window.X30Media) window.X30Media.initMedia(send, showBanner);
+  if (window.X30DogCam) window.X30DogCam.init();
   if (window.X30Capture) window.X30Capture.initCapture(showBanner);
   if (window.X30Cloud) window.X30Cloud.initCloud(send);
   if (window.X30Gamepad) window.X30Gamepad.initGamepad(send, showBanner, () => app);

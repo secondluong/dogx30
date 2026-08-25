@@ -242,6 +242,10 @@
     box.classList.remove('hidden');
     $('set-app-host').value = window.X30Native.getGatewayHost() || '';
     $('set-app-port').value = String(window.X30Native.getGatewayPort() || 8080);
+    // 2.4G 的相机地址存在网页这侧（localStorage），原生只管播它给的那个串。
+    if ($('set-app-dogcam') && window.X30DogCam) {
+      $('set-app-dogcam').value = window.X30DogCam.url();
+    }
   }
 
   function saveAppGateway() {
@@ -256,6 +260,13 @@
       setNote('服务端口不合法。', 'bad');
       return;
     }
+    const cam = $('set-app-dogcam') ? $('set-app-dogcam').value.trim() : '';
+    if (cam && cam.indexOf('rtsp://') !== 0) {
+      setNote('机身相机地址要以 rtsp:// 开头。', 'bad');
+      return;
+    }
+    // 相机地址先落盘：下面 setGateway 会重载页面，晚了就丢了。
+    if (window.X30DogCam) window.X30DogCam.setUrl(cam);
     setNote('正在按新地址重新连接…');
     window.X30Native.setGateway(host, port);
   }

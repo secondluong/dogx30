@@ -2,6 +2,7 @@ package com.dogx30.control;
 
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.InputDevice;
@@ -31,6 +32,7 @@ import androidx.appcompat.app.AppCompatActivity;
 public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
+    private NativeVideo video;
     private LinearLayout overlay;
     private TextView overlayMsg;
     private EditText overlayHost;
@@ -60,6 +62,10 @@ public class ControlActivity extends AppCompatActivity {
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
         web.requestFocus();
+        // 原生画面垫在 WebView 底下，网页那层不透明就永远看不到它。
+        // 根布局是 #0D1117，与网页 --bg 同色，所以没画面时观感不变。
+        web.setBackgroundColor(Color.TRANSPARENT);
+        video = new NativeVideo(findViewById(R.id.native_video), this::pushVideoState);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -273,6 +279,29 @@ public class ControlActivity extends AppCompatActivity {
             RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz);
         }
 
+        /** 2.4G 下的机身相机。地址由网页给：现场换相机不该为此重新编包。 */
+        @JavascriptInterface
+        public void videoStart(String url) {
+            runOnUiThread(() -> {
+                if (video != null) video.start(url);
+            });
+        }
+
+        @JavascriptInterface
+        public void videoStop() {
+            runOnUiThread(() -> {
+                if (video != null) video.stop();
+            });
+        }
+
+        /** 画面画在哪块矩形里，单位是设备像素，由网页按 devicePixelRatio 换算后给。 */
+        @JavascriptInterface
+        public void videoRect(int x, int y, int w, int h) {
+            runOnUiThread(() -> {
+                if (video != null) video.setRect(x, y, w, h);
+            });
+        }
+
         @JavascriptInterface
         public void setGateway(String host, int port) {
             if (host == null) return;
@@ -323,6 +352,17 @@ public class ControlActivity extends AppCompatActivity {
                     + ",\"hatx\":" + event.getAxisValue(MotionEvent.AXIS_HAT_X)
                     + ",\"haty\":" + event.getAxisValue(MotionEvent.AXIS_HAT_Y) + "}";
         }
+    }
+
+    /** 把播放状态送回网页，占位图上就能写清楚卡在哪，而不是干等。 */
+    private void pushVideoState(boolean playing, String err) {
+        if (web == null) return;
+        String safe = err == null ? "" : err.replace("\\", " ").replace("\"", "'")
+                .replace("\n", " ").replace("\r", " ");
+        web.evaluateJavascript(
+                "window.X30DogCam&&X30DogCam.onState({playing:" + playing
+                        + ",err:\"" + safe + "\"})",
+                null);
     }
 
     private void injectRc(G20Rc.Snapshot snap) {
@@ -394,6 +434,8 @@ public class ControlActivity extends AppCompatActivity {
         // 切后台时页面里的 visibilitychange 会发 release 停车，
         // 这里再显式停一次 JS 定时器，避免系统节流下指令断续送达。
         web.onPause();
+        // 解码器和 2.4G 带宽都不该在后台白占。
+        if (video != null) video.pauseForBackground();
     }
 
     @Override
@@ -401,10 +443,12 @@ public class ControlActivity extends AppCompatActivity {
         super.onResume();
         G20Rc.get().addListener(rcToJs);
         web.onResume();
+        if (video != null) video.resumeIfWanted();
     }
 
     @Override
     protected void onDestroy() {
+        if (video != null) video.stop();
         if (web != null) {
             web.loadUrl("about:blank");
             web.destroy();

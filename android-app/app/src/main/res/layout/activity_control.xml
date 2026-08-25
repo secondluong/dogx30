@@ -4,6 +4,18 @@
     android:layout_height="match_parent"
     android:background="#0D1117">
 
+    <!-- 2.4G 下机身相机的画面。狗只给 RTSP，WebView 放不了，只能原生解码。
+         必须排在 WebView 前面：SurfaceView 会把自己那块矩形从窗口上凿成透明，
+         排在后面的 WebView 又是透明的，底下的画面才露得出来。顺序反了，或者网页
+         那层没透，结果都是「明明在放却看不到」。位置由网页报的矩形决定，
+         见 web/dogcam24.js 与 docs/media-architecture.md 第十一节。 -->
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/native_video"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:visibility="gone" />
+
     <WebView
         android:id="@+id/web"
         android:layout_width="match_parent"

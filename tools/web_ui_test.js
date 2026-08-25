@@ -458,6 +458,69 @@ check('链路只跟顶栏 MESH/2.4G 按钮',
       !/已自动切到 2\.4G/.test(appJs));
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));
+
+// 2.4G 是遥控器与狗直连，网关不在链路上：拿不到媒体计划，也够不到 MediaMTX。
+// 狗只给 RTSP，而 WebView 放不了 RTSP —— 所以这一路必须原生解码。
+// 这几条断言盯的是最容易被后人「顺手简化」掉、且一简化就整路黑屏的地方。
+var dogCamJs = read('dogcam24.js');
+var nativeVideo = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+            'com', 'dogx30', 'control', 'NativeVideo.java'), 'utf8');
+var appGradle = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'build.gradle'), 'utf8');
+check('2.4G 的机身相机走原生 RTSP',
+      /rtsp:\/\/192\.168\.1\.105:8554/.test(dogCamJs) &&
+      /videoStart/.test(dogCamJs) &&
+      /videoStart/.test(radioBridge) &&
+      /videoRect/.test(radioBridge) &&
+      /RtspMediaSource/.test(nativeVideo) &&
+      /media3-exoplayer-rtsp/.test(appGradle));
+// 默认先试 UDP、超时再退 TCP：既白等一个超时，还要额外操心那几个临时 UDP 端口
+// 有没有绑对网卡。走 TCP 时 RTSP 与 RTP 复用同一条连接，绑一条就全在 2.4G 上。
+// 但不能死磕 TCP：个别 RTSP 服务只认 UDP。失败后换一种再试，报错里带上是哪种。
+check('拉流先走 RTP over TCP，失败了换一种再试',
+      /setForceUseRtpTcp\(forceTcp\)/.test(nativeVideo) &&
+      /forceTcp = true/.test(nativeVideo) &&
+      /forceTcp = !forceTcp/.test(nativeVideo) &&
+      /"TCP: " : "UDP: "/.test(nativeVideo));
+// ar_net0 是虚口，ConnectivityManager 常看不见它，普通 socket 会被安卓按默认网络
+// 路由出去，直接 Network unreachable —— 和 RadioLink 里 UDP 踩过的是同一个坑。
+check('拉流的 socket 绑到 2.4G 那张网卡',
+      /setSocketFactory/.test(nativeVideo) &&
+      /extends SocketFactory/.test(nativeVideo) &&
+      /bindToDevice/.test(nativeVideo) &&
+      /airNetwork/.test(nativeVideo) &&
+      /static void bindToDevice\(Socket/.test(radioJava) &&
+      /synchronized String ifaceName\(\)/.test(radioJava));
+// 原生画面垫在 WebView 底下。网页那层不透明，或者 PlayerView 排到 WebView 后面，
+// 结果都是「明明在放却看不到」。
+check('原生画面垫在网页底下且背景透出',
+      /native_video/.test(radioLayout) &&
+      radioLayout.indexOf('native_video') < radioLayout.indexOf('@+id/web') &&
+      /setBackgroundColor\(Color\.TRANSPARENT\)/.test(radioBridge) &&
+      /html\.native-video-on[\s\S]*?background:\s*transparent/.test(styleText) &&
+      /native-video-on/.test(dogCamJs));
+// 画面格子的位置只有网页知道（横幅、布局都会挪它），原生按它报的矩形摆。
+check('画面矩形按设备像素报给原生',
+      /devicePixelRatio/.test(dogCamJs) &&
+      /videoRect\(r\.x, r\.y, r\.w, r\.h\)/.test(dogCamJs) &&
+      /void setRect\(int x, int y, int w, int h\)/.test(nativeVideo) &&
+      /X30DogCam\.onStageLayout\(\)/.test(appJs));
+// 相机没起来、地址填错、网卡没绑上，报错完全不同。不写到占位图上就只能翻日志。
+check('没画面时占位图说得出原因',
+      /onVideoState/.test(nativeVideo) &&
+      /X30DogCam&&X30DogCam\.onState/.test(radioBridge) &&
+      /拉流失败/.test(dogCamJs) &&
+      /RETRY_MS/.test(nativeVideo));
+// 布控球挂在网关那侧的 192.168.10.0/24，2.4G 到不了。不说清楚就像设备坏了。
+check('2.4G 下布控球如实标不可用',
+      /布控球在网关那侧/.test(dogCamJs) &&
+      /media-idle-ptz-vis/.test(dogCamJs));
+// 相机地址不该写死在包里：现场换过相机或改过端口，不能为此重新编包。
+check('机身相机地址能在设置里改',
+      !!htmlIds['set-app-dogcam'] &&
+      /X30DogCam\.url\(\)/.test(read('settings.js')) &&
+      /X30DogCam\.setUrl/.test(read('settings.js')));
 var mediaJs = read('media.js');
 // 能力上报发在启动那一刻，那时 WebSocket 还没连上，send 会把它丢掉，
 // 网关便一直按「只支持 H.264」下发计划。

@@ -33,6 +33,7 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.InterfaceAddress;
+import java.net.Socket;
 import java.io.FileDescriptor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -118,6 +119,27 @@ final class RadioLink {
     synchronized void attach(Context ctx) {
         if (ctx != null) appCtx = ctx.getApplicationContext();
         ensureWorker();
+    }
+
+    // 下面三个是给 NativeVideo 用的：2.4G 下机身相机的 RTSP 也得走这张网卡，
+    // 和这里的 UDP 面临同一个「安卓按默认网络路由」的坑，所以把绑定所需的三样
+    // 东西一并露出去，而不是让它自己再找一遍网卡。
+
+    /** 系统能看见这条链路时的 Network，看不见则为 null（ar_net0 常见如此）。 */
+    @Nullable
+    synchronized Network airNetwork() {
+        return airNet;
+    }
+
+    /** 2.4G 那张网卡上的本机地址，未就绪时为 null。 */
+    @Nullable
+    synchronized InetAddress localAddress() {
+        return boundLocal;
+    }
+
+    /** 2.4G 那张网卡的名字（如 ar_net0），未就绪时为空串。 */
+    synchronized String ifaceName() {
+        return ifaceName == null ? "" : ifaceName;
     }
 
     private void ensureWorker() {
@@ -884,7 +906,15 @@ final class RadioLink {
     }
 
     private static void bindToDevice(DatagramSocket sock, String ifname) throws Exception {
-        FileDescriptor fd = fdOf(sock);
+        bindFd(fdOf(sock), ifname);
+    }
+
+    /** TCP 版。2.4G 下机身相机的 RTSP 走这条，见 NativeVideo。 */
+    static void bindToDevice(Socket sock, String ifname) throws Exception {
+        bindFd(fdOf(sock), ifname);
+    }
+
+    private static void bindFd(FileDescriptor fd, String ifname) throws Exception {
         int opt = 25;
         try {
             Field f = OsConstants.class.getField("SO_BINDTODEVICE");
@@ -916,10 +946,39 @@ final class RadioLink {
         Field implF = DatagramSocket.class.getDeclaredField("impl");
         implF.setAccessible(true);
         Object impl = implF.get(sock);
-        Method getFd = impl.getClass().getDeclaredMethod("getFileDescriptor");
-        getFd.setAccessible(true);
-        FileDescriptor fd = (FileDescriptor) getFd.invoke(impl);
+        FileDescriptor fd = (FileDescriptor) invokeUp(impl, "getFileDescriptor");
         if (fd == null) throw new IllegalStateException("no-fd");
         return fd;
+    }
+
+    private static FileDescriptor fdOf(Socket sock) throws Exception {
+        try {
+            Method m = Socket.class.getDeclaredMethod("getFileDescriptor$");
+            m.setAccessible(true);
+            FileDescriptor fd = (FileDescriptor) m.invoke(sock);
+            // 没 bind 也没 connect 过的 socket 还没有 fd，这里会拿到个无效的。
+            if (fd != null && fd.valid()) return fd;
+        } catch (Throwable ignored) {
+        }
+        Field implF = Socket.class.getDeclaredField("impl");
+        implF.setAccessible(true);
+        Object impl = implF.get(sock);
+        if (impl == null) throw new IllegalStateException("no-impl");
+        FileDescriptor fd = (FileDescriptor) invokeUp(impl, "getFileDescriptor");
+        if (fd == null) throw new IllegalStateException("no-fd");
+        return fd;
+    }
+
+    /** getFileDescriptor 声明在 SocketImpl 上，实际对象往往是它的子类，得往上找。 */
+    private static Object invokeUp(Object target, String name) throws Exception {
+        for (Class<?> c = target.getClass(); c != null; c = c.getSuperclass()) {
+            try {
+                Method m = c.getDeclaredMethod(name);
+                m.setAccessible(true);
+                return m.invoke(target);
+            } catch (NoSuchMethodException ignored) {
+            }
+        }
+        throw new NoSuchMethodException(name);
     }
 }

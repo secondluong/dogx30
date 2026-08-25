@@ -10,8 +10,8 @@ android {
         applicationId "com.dogx30.control"
         minSdk 24
         targetSdk 34
-        versionCode 24
-        versionName "0.3.21"
+        versionCode 25
+        versionName "0.4.0"
     }
 
     buildTypes {
@@ -45,4 +45,13 @@ dependencies {
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
     implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24'
     implementation files('libs/rcsdk-v1.9.2.aar')
+    // 2.4G 下机身相机只有 RTSP，WebView 放不了，得原生解。
+    // 版本锁在 1.4.1：1.5 起要求 compileSdk 35，这里是 34。
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.4.1'
+    implementation 'androidx.media3:media3-ui:1.4.1'
+    // NativeVideo 用 @OptIn 显式接受 media3 的 UnstableApi。这个注解来自
+    // annotation-experimental，虽然多半已被上面几个传递带进来，但它是否出现在
+    // **编译**类路径上取决于别人怎么声明依赖，写明了才不会哪天忽然编不过。
+    implementation 'androidx.annotation:annotation-experimental:1.4.1'
 }

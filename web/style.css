@@ -176,6 +176,20 @@ body {
    .set-mask 在 .hidden 之后 267 行，于是 display:flex 永远赢，加 .hidden 没有任何效果。 */
 .hidden { display: none !important; }
 
+/* ---------- 2.4G 原生画面 ---------- */
+
+/* 2.4G 是遥控器与狗直连，网关不在链路上，机身相机只有 RTSP，而 WebView 放不了
+   RTSP。所以那一路由安卓原生解码，画面垫在 WebView 底下。这里把网页这几层的
+   背景透出去，否则底下的画面被网页的黑底盖住，看着就是「一直没画面」。
+   透出去不会影响别处观感：原生画面只铺在机身相机那块矩形里，其余区域露出的是
+   安卓根布局的 #0d1117，和 --bg 同色。 */
+html.native-video-on,
+html.native-video-on body,
+html.native-video-on .stage-wrap,
+html.native-video-on #pane-video.is-main { background: transparent; }
+/* 这一路不走 <video>，留着只会在画面上盖一层黑。 */
+html.native-video-on #pane-video.is-main .media-video { display: none; }
+
 /* ---------- 全屏底图 ---------- */
 
 .stage-wrap {
