@@ -464,13 +464,6 @@ var mediaJs = read('media.js');
 check('链路连上后补发编码能力',
       /function onLinkOpen/.test(mediaJs) &&
       /X30Media\.onLinkOpen/.test(appJs));
-// 没画面时界面上只有「等待拉流」四个字。是没收到计划、没选到这一路、拉流被拒，
-// 还是网关自己没从相机拿到流，全看不出来 —— 只能去翻网关日志，而网关常不在手边。
-check('没画面时点占位图能问出卡在哪',
-      /function whyNoVideo/.test(mediaJs) &&
-      /lastPlayErr/.test(mediaJs) &&
-      /点此查原因/.test(html) &&
-      /\.media-idle \{[^}]*cursor:\s*pointer/.test(styleText));
 check('桌面网页大屏也走布控球子码流',
       /function webH265Ok/.test(mediaJs) &&
       /media\.caps\.h265 = false/.test(mediaJs) &&

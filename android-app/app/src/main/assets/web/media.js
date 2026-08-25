@@ -16,7 +16,6 @@ const media = {
 };
 
 const playingPath = new Map();
-const lastPlayErr = new Map();
 
 // 名字不能叫 isAppShell：本文件和 app.js 共用一个全局作用域，app.js 里有同名
 // const，重名会让 app.js 整份解析失败（SyntaxError），一条指令都发不出去。
@@ -193,12 +192,8 @@ function playTile(plan, tile, showBanner) {
   playingPath.set(tile.id, path);
   setIdle(tile.idle, false);
   whepPlay(plan.webrtc_base, path, videoEl)
-    .then((pc) => {
-      media.pcs.set(tile.id, pc);
-      lastPlayErr.delete(tile.id);
-    })
+    .then((pc) => { media.pcs.set(tile.id, pc); })
     .catch((e) => {
-      lastPlayErr.set(tile.id, e.message);
       setIdle(tile.idle, true);
       stopSource(tile.id);
       playingPath.delete(tile.id);
@@ -206,35 +201,6 @@ function playTile(plan, tile, showBanner) {
         showBanner(`机身相机拉流失败：${e.message}`, 6000);
       }
     });
-}
-
-// 没画面时界面上只有「等待拉流」四个字，看不出是没收到计划、没选到这一路、
-// 还是拉流被拒 —— 现场只能去翻网关日志，而网关往往不在手边。点占位图即报卡点。
-// 入口只在没画面时才存在（有画面时占位图是隐藏的），所以不会常驻界面。
-function whyNoVideo(tileId) {
-  const plan = media.plan;
-  if (!plan) {
-    return '还没收到网关下发的媒体计划。先看顶栏链路，网关不通就不会有画面';
-  }
-  if (!plan.webrtc_base) {
-    return '媒体计划里没有拉流地址：网关 media.json 的 webrtc_base 没填';
-  }
-  const main = (media.layout && media.layout.main) || plan.main;
-  if (inAppShell() && main !== tileId) {
-    return 'App 只拉当前背景那一路，现在的背景不是它。用顶栏「背景」切过来';
-  }
-  const src = (plan.sources || []).find((s) => s.id === tileId);
-  const name = (src && src.name) || tileId;
-  if (!src) return '网关没配这一路视频源（media.json 的 sources 里没有 ' + tileId + '）';
-  if (!src.available) return name + '不可用：' + (src.reason || '网关没给原因');
-  const err = lastPlayErr.get(tileId);
-  if (err) return name + ' 拉流被拒：' + err + '（拉流地址 ' + plan.webrtc_base + '）';
-  if (!media.pcs.has(tileId)) {
-    return name + ' 还没开始拉流（拉流地址 ' + plan.webrtc_base + '）';
-  }
-  // 会话建起来了却一帧都没有，几乎只剩一种原因：网关自己也没从相机拿到流。
-  return name + ' 会话已建立但没有画面，通常是网关到相机那一段不通。'
-       + '在网关上查 curl -s http://127.0.0.1:9997/v3/paths/list';
 }
 
 function renderMediaPanel(plan, showBanner) {
@@ -409,17 +375,6 @@ function initMedia(sendFn, showBanner) {
   sendRef = sendFn;
   talkBanner = showBanner;
   reportCaps(sendFn);
-
-  VIDEO_TILES.forEach((tile) => {
-    const ph = document.getElementById(tile.idle);
-    if (!ph) return;
-    // 不冒泡：占位图罩在画面格子上，格子本身点了会切主视图。
-    ph.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (showBanner) showBanner(whyNoVideo(tile.id), 12000);
-    });
-  });
 
   const talkBtns = document.querySelectorAll('.btn-talk');
   talkBtns.forEach((talkBtn) => {
