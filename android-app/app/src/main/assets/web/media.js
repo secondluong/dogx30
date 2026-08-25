@@ -17,7 +17,9 @@ const media = {
 
 const playingPath = new Map();
 
-function isAppShell() {
+// 名字不能叫 isAppShell：本文件和 app.js 共用一个全局作用域，app.js 里有同名
+// const，重名会让 app.js 整份解析失败（SyntaxError），一条指令都发不出去。
+function inAppShell() {
   return typeof document !== 'undefined' &&
     document.documentElement.classList.contains('shell-app');
 }
@@ -26,7 +28,7 @@ function isAppShell() {
 // 桌面浏览器（Linux / 不少 Windows 核显）常见结果就是白光整幅发绿，
 // 同一台球机的 H.264 热成像子码流却是正常的。安卓壳走 SoC 硬解，可以继续用。
 function webH265Ok() {
-  return isAppShell();
+  return inAppShell();
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +270,7 @@ function onMediaPlan(plan, showBanner) {
 
 // App 只有一张底图，没露出来的路不要占带宽。网页一主三小 / 2×2 仍同时拉。
 function wantedTiles(plan) {
-  if (!isAppShell()) return VIDEO_TILES;
+  if (!inAppShell()) return VIDEO_TILES;
   const main = (media.layout && media.layout.main) || plan.main;
   if (!main || main === 'cloud') return [];
   return VIDEO_TILES.filter((t) => t.id === main);

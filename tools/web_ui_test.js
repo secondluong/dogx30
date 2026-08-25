@@ -163,6 +163,45 @@ webJsFiles.forEach(function (f) {
 });
 
 // ---------------------------------------------------------------------------
+console.log('\n== 各 js 顶层的名字不能互相撞车 ==');
+// ---------------------------------------------------------------------------
+// index.html 里这几个 <script> 不是模块，顶层声明全都落在同一个全局作用域。
+// media.js 的 function isAppShell 和 app.js 的 const isAppShell 撞在一起，
+// 后加载的 app.js 整份报 SyntaxError —— 界面于是停在 HTML 静态默认值，屏幕按键
+// 全哑，而实体键走 Java 照样能动。单看任一文件都毫无破绽，只有合起来才犯规。
+var loadOrder = (read('index.html').match(/<script src="[^"?]+/g) || [])
+  .map(function (s) { return s.replace(/^<script src="/, ''); });
+check('index.html 的脚本都找得到', loadOrder.every(function (f) {
+  return webJsFiles.indexOf(f) >= 0;
+}), loadOrder.join(' '));
+
+var owner = {};
+var clashes = [];
+loadOrder.forEach(function (f) {
+  var seen = {};
+  read(f).split('\n').forEach(function (line, i) {
+    // 只认顶层：缩进了的就是函数或块里面的，各自独立作用域。
+    var m = /^(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/.exec(line);
+    if (!m || seen[m[1]]) return;
+    seen[m[1]] = true;
+    var where = f + ':' + (i + 1);
+    if (owner[m[1]]) clashes.push(m[1] + '（' + owner[m[1]] + ' 与 ' + where + '）');
+    else owner[m[1]] = where;
+  });
+});
+check('没有跨文件重名的顶层声明', clashes.length === 0, clashes.join('；'));
+
+// 上面按行文本查，漏得掉写法特别的声明。再让 V8 真的解析一遍：按加载顺序拼成
+// 一份（只解析不执行），重名、括号不配对这类早期错误都会在这里现原形。
+var catErr = null;
+try {
+  new (require('vm').Script)(loadOrder.map(read).join('\n;\n'));
+} catch (e) {
+  catErr = e.message;
+}
+check('六个脚本合起来能被解析', catErr === null, catErr || '');
+
+// ---------------------------------------------------------------------------
 console.log('\n== .hidden 必须真的能隐藏 ==');
 // ---------------------------------------------------------------------------
 
@@ -423,7 +462,7 @@ check('点大布控球时摇杆改控云台',
       /viewLayout\.main === 'ptz_vis'/.test(appJs));
 check('App 壳只拉当前大屏那一路视频',
       /function wantedTiles/.test(mediaJs) &&
-      /isAppShell\(\)/.test(mediaJs) &&
+      /inAppShell\(\)/.test(mediaJs) &&
       /main === 'cloud'/.test(mediaJs));
 check('网页打开时指标默认隐藏',
       /telemetry[\s\S]*classList\.add\('hidden'\)/.test(appJs) &&
