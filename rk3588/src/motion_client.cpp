@@ -571,16 +571,17 @@ void MotionClient::ArmForWalk() {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (Clock::now() < arm_next_) return;
     st = state_.basic_state;
-    // 没起立就别自作聪明：万一姿态记错了，替它踩台阶就等于替它站起来，
-    // 而起立必须是人按的。
-    if (last_stand_sit_ != LastStandSit::kStood) return;
+    const bool stood = last_stand_sit_ == LastStandSit::kStood;
     if (state_.telemetry_alive) {
       if (st == BasicState::kStepping) return;  // 已经能走了
       if (st == BasicState::kTorqueStanding) {
         step = true;
-      } else if (st == BasicState::kInitialStanding ||
-                 st == BasicState::kSitting) {
-        // RL 起立之后遥测仍报坐下（见 protocol.hpp），与初始站立同样对待。
+      } else if (st == BasicState::kInitialStanding) {
+        // 站着就能踩，哪怕是原厂手柄扶起来的 —— 遥测这两档不含糊。
+        step = false;
+      } else if (st == BasicState::kSitting && stood) {
+        // RL 起立之后遥测仍报坐下（见 protocol.hpp）。这一档有歧义，只有我们
+        // 自己发过起立才敢当站着看：否则就是对趴着的狗踩台阶，而起立必须人按。
         step = false;
       } else {
         return;  // 起立中 / 坐下中 / 急停，不插手
@@ -588,7 +589,7 @@ void MotionClient::ArmForWalk() {
     } else {
       // 没遥测（狗的 network.toml 没登记本机）时只能按顺序踩。踏步是切换指令，
       // 重发会停步，所以每级只发一次；起立/趴下时 ReleaseAxes 清掉重来。
-      if (armed_ == Armed::kStepped) return;
+      if (!stood || armed_ == Armed::kStepped) return;
       step = armed_ == Armed::kTorqued;
     }
     // 两级之间要留时间：力控刚发就跟一条踏步，主机还在过渡里，后一条会被忽略。

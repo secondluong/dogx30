@@ -568,7 +568,7 @@ check('人点了力控就不替他起步',
       /app\.torqueByUser = true/.test(appJs) &&
       /if \(app\.torqueByUser &&/.test(appJs) &&
       /if \(app\.basicState === STATE_TORQUE_STANDING\) return 'vel'/.test(appJs) &&
-      /!standing \|\| emergency \|\| torqueByUser/.test(radioJava) &&
+      /if \(emergency \|\| torqueByUser\) return;/.test(radioJava) &&
       /torqueByUser = true/.test(radioJava));
 // 上下楼那三档是必选一项：狗还没进楼梯步态时也得亮着一个，否则操作员不知道上楼
 // 会用哪种。「上楼用这个」（pick）与「狗真在这个步态」（active）分开记 ——

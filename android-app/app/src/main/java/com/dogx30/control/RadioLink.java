@@ -1026,7 +1026,7 @@ final class RadioLink {
      * 顺序也没人记得。操作员自己点过力控就不插手：那时他要的是用摇杆调身高/俯仰。
      */
     private void armForWalk() {
-        if (!standing || emergency || torqueByUser) return;
+        if (emergency || torqueByUser) return;
         long now = System.currentTimeMillis();
         if (now < armNextAt) return;
         // 起立本身是一段柔和轨迹，等它站稳再踩，免得把起身掐硬。
@@ -1036,15 +1036,19 @@ final class RadioLink {
             if (telemState == ST_STEPPING) return;               // 已经能走了
             if (telemState == ST_TORQUE_STANDING) {
                 step = true;
-            } else if (telemState == ST_INITIAL_STANDING || telemState == ST_SITTING) {
-                // RL 起立后遥测仍报坐下（见 protocol.hpp），与初始站立同样对待。
+            } else if (telemState == ST_INITIAL_STANDING) {
+                // 站着就能踩，哪怕是原厂手柄或别人扶起来的 —— 遥测这两档不含糊。
+                step = false;
+            } else if (telemState == ST_SITTING && standing) {
+                // RL 起立后遥测仍报坐下（见 protocol.hpp）。这一档有歧义，
+                // 只有我们自己发过起立才敢当站着看，否则就是对趴着的狗踩台阶。
                 step = false;
             } else {
                 return;                                          // 过渡/急停，不插手
             }
         } else {
             // 没遥测时只能按顺序踩。踏步是切换指令，重发会停步，所以每级只发一次。
-            if (stepping) return;
+            if (!standing || stepping) return;
             step = torqued;
         }
         if (step) {
