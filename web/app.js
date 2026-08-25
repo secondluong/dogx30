@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825k';
+const WEB_BUILD = '0825l';
 
 function nativeAppVersion() {
   try {
@@ -39,11 +39,13 @@ function nativeAppVersion() {
   }
 }
 
+// 版本印在设置面板里，不占顶栏 —— 顶栏是遥控时要盯着的地方。
+// 但不能不印：装包时漏拷 assets/web，页面就是旧的，而这一点光看界面看不出来。
 function paintVerChip() {
-  const el = $('chip-ver');
+  const el = $('set-app-ver');
   if (!el) return;
   const apk = nativeAppVersion();
-  el.textContent = apk ? ('包' + apk + ' 网页' + WEB_BUILD) : ('网页' + WEB_BUILD);
+  el.textContent = apk ? ('包 ' + apk + ' · 网页 ' + WEB_BUILD) : ('网页 ' + WEB_BUILD);
 }
 
 function nativeRadioPath() {

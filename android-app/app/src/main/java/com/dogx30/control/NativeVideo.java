@@ -9,10 +9,12 @@ import android.widget.FrameLayout;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
+import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.rtsp.RtspMediaSource;
 import androidx.media3.ui.AspectRatioFrameLayout;
@@ -53,9 +55,31 @@ final class NativeVideo {
     /** 断流重试间隔。相机可能比 App 后起来，不能一次失败就再也不试。 */
     private static final long RETRY_MS = 3000;
 
+    // 低延迟：默认的 DefaultLoadControl 是照点播调的，起播前先攒 2.5 秒，
+    // 而直播流攒下的每一毫秒都会变成永久延迟 —— 播放器按 1 倍速从起点往后放，
+    // 攒进去的那段再也吐不出来。遥控看画面宁可偶尔卡一下，也不要慢一大截。
+    private static final int BUFFER_MIN_MS = 200;
+    private static final int BUFFER_MAX_MS = 1000;
+    private static final int PLAY_AFTER_MS = 100;
+    private static final int PLAY_AFTER_REBUFFER_MS = 200;
+
+    // 光把缓冲调小不够：链路抖一下就会攒出一段，之后一直背着走。
+    // 所以盯着「已缓冲但还没放」的那段，超了就稍微快放把它排掉。
+    // RTSP 直播不能 seek，追不上只能重连（重连即回到实时点）。
+    private static final long CATCHUP_MS = 350;
+    private static final long RESYNC_MS = 2500;
+    private static final float CATCHUP_SPEED = 1.12f;
+    private static final long WATCH_MS = 500;
+
     interface StateListener {
-        /** err 为空表示正常出画面。回调在主线程。 */
-        void onVideoState(boolean playing, String err);
+        /**
+         * err 为空表示正常出画面。回调在主线程。
+         *
+         * bufferedMs 是播放器里「已收到但还没放」的那段，也就是本机这一侧贡献的
+         * 延迟。它接近 0 却仍然觉得慢，说明延迟在上游（相机转码、链路排队），
+         * 客户端再怎么调都没用 —— 这个数就是为了分清这两种情况。
+         */
+        void onVideoState(boolean playing, String err, long bufferedMs);
     }
 
     private final PlayerView view;
@@ -72,6 +96,8 @@ final class NativeVideo {
      * 「先 UDP、收不到再自己退 TCP」，覆盖面更广。用的是哪种会写进报错里。
      */
     private boolean forceTcp = true;
+    private float speed = 1.0f;
+    private long lastBufferedMs;
 
     private final Runnable retry = new Runnable() {
         @Override
@@ -79,6 +105,14 @@ final class NativeVideo {
             if (!wanted) return;
             Log.i(TAG, "retry " + url);
             open();
+        }
+    };
+
+    private final Runnable watch = new Runnable() {
+        @Override
+        public void run() {
+            trimLatency();
+            if (wanted && player != null) ui.postDelayed(this, WATCH_MS);
         }
     };
 
@@ -137,6 +171,8 @@ final class NativeVideo {
     }
 
     void release() {
+        ui.removeCallbacks(watch);
+        lastBufferedMs = 0;
         if (player != null) {
             player.release();
             player = null;
@@ -148,7 +184,15 @@ final class NativeVideo {
         release();
         view.setVisibility(View.VISIBLE);
         try {
-            ExoPlayer p = new ExoPlayer.Builder(view.getContext()).build();
+            ExoPlayer p = new ExoPlayer.Builder(view.getContext())
+                    .setLoadControl(new DefaultLoadControl.Builder()
+                            .setBufferDurationsMs(BUFFER_MIN_MS, BUFFER_MAX_MS,
+                                    PLAY_AFTER_MS, PLAY_AFTER_REBUFFER_MS)
+                            // 直播流按时间判断够不够放，别按字节数 —— 码率一变
+                            // 字节阈值对应的时长就跟着变，延迟也跟着飘。
+                            .setPrioritizeTimeOverSizeThresholds(true)
+                            .build())
+                    .build();
             p.addListener(new Player.Listener() {
                 @Override
                 public void onRenderedFirstFrame() {
@@ -167,6 +211,14 @@ final class NativeVideo {
                     scheduleRetry();
                 }
             });
+            // 关掉音轨。这一路只是拿来看的（网页那侧的 video 一直是 muted，
+            // 2.4G 下也没有对讲，对讲在网关那侧）。留着它有两处坏处：画面要跟
+            // 音频时钟对齐，AudioTrack 自己那点缓冲就成了延迟下限；而且窄链路上
+            // 白占码率。
+            p.setTrackSelectionParameters(p.getTrackSelectionParameters()
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                    .build());
             view.setPlayer(p);
             p.setMediaSource(new RtspMediaSource.Factory()
                     .setForceUseRtpTcp(forceTcp)
@@ -176,6 +228,9 @@ final class NativeVideo {
             p.prepare();
             p.setPlayWhenReady(true);
             player = p;
+            speed = 1.0f;
+            ui.removeCallbacks(watch);
+            ui.postDelayed(watch, WATCH_MS);
             report(false, "");
         } catch (Throwable t) {
             // 建播放器本身失败（缺库、地址串不合法）也要说出来，不能只留个黑框。
@@ -185,13 +240,41 @@ final class NativeVideo {
         }
     }
 
+    /**
+     * 把攒下来的那段延迟排掉。
+     *
+     * 直播流没有「跳到最新」这回事（RTSP 不给 seek），只能靠稍微快放慢慢排；
+     * 一次抖动攒得太多就直接重连，重连后 RTSP 从实时点重新 PLAY，等于一步归零。
+     */
+    private void trimLatency() {
+        ExoPlayer p = player;
+        if (p == null) return;
+        long buffered = p.getTotalBufferedDuration();
+        lastBufferedMs = buffered;
+        if (playing && buffered > RESYNC_MS) {
+            Log.i(TAG, "resync, buffered=" + buffered);
+            open();
+            return;
+        }
+        float want = buffered > CATCHUP_MS ? CATCHUP_SPEED : 1.0f;
+        if (speed != want) {
+            speed = want;
+            p.setPlaybackSpeed(want);
+        }
+        if (playing) report(true, "", buffered);
+    }
+
     private void scheduleRetry() {
         ui.removeCallbacks(retry);
         if (wanted) ui.postDelayed(retry, RETRY_MS);
     }
 
     private void report(boolean isPlaying, String err) {
-        if (listener != null) listener.onVideoState(isPlaying, err);
+        report(isPlaying, err, lastBufferedMs);
+    }
+
+    private void report(boolean isPlaying, String err, long bufferedMs) {
+        if (listener != null) listener.onVideoState(isPlaying, err, bufferedMs);
     }
 
     boolean isPlaying() {

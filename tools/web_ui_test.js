@@ -420,8 +420,13 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge) &&
       /radioStatus/.test(radioBridge));
-check('界面上印出网页与安装包版本',
-      !!htmlIds['chip-ver'] &&
+// 版本从顶栏挪进设置面板：遥控时顶栏要盯别的东西。但不能不印 ——
+// 装包漏拷 assets/web 时页面是旧的，除了对版本戳没有别的办法看出来。
+check('版本不占顶栏，但在设置里查得到',
+      !htmlIds['chip-ver'] &&
+      !/chip-ver/.test(html) &&
+      !!htmlIds['set-app-ver'] &&
+      /\$\('set-app-ver'\)/.test(appJs) &&
       /const WEB_BUILD/.test(appJs) &&
       /function paintVerChip/.test(appJs) &&
       /getAppVersion/.test(appJs) &&
@@ -435,7 +440,8 @@ var radioLayout = fs.readFileSync(
             'layout', 'activity_control.xml'), 'utf8');
 // 那层左上角的版本 / JS 报错 / 2.4G 状态浮层是查「屏幕按键全哑」时的临时手段，
 // 根因（顶层重名让 app.js 整份没跑）修掉后就撤了 —— 它遮画面且一直在抢注意力。
-// 版本仍然看得到，在顶栏 chip-ver 那一处。诊断要再上，请另开一个入口，别压回画面上。
+// 版本仍然看得到，在设置面板 set-app-ver 那一处。诊断要再上，请另开一个入口，
+// 别压回画面上。
 check('App 壳不再有原生诊断浮层',
       !/setWebChromeClient/.test(radioBridge) &&
       !/probeJs/.test(radioBridge) &&
@@ -521,6 +527,29 @@ check('机身相机地址能在设置里改',
       !!htmlIds['set-app-dogcam'] &&
       /X30DogCam\.url\(\)/.test(read('settings.js')) &&
       /X30DogCam\.setUrl/.test(read('settings.js')));
+// ExoPlayer 默认起播前先攒 2.5 秒，那是点播的调法；直播流攒进去的每一毫秒都变成
+// 永久延迟（按 1 倍速从起点往后放，吐不出来）。遥控宁可偶尔卡一下也不要慢一截。
+// 音轨也要关：画面得跟音频时钟对齐，AudioTrack 那点缓冲就成了延迟下限，
+// 而这一路只是拿来看的（网页侧一直 muted，2.4G 下也没有对讲）。
+check('拉流按低延迟配，不用点播那套缓冲',
+      /setLoadControl/.test(nativeVideo) &&
+      /setBufferDurationsMs/.test(nativeVideo) &&
+      /setPrioritizeTimeOverSizeThresholds\(true\)/.test(nativeVideo) &&
+      /BUFFER_MIN_MS = 200/.test(nativeVideo) &&
+      /setTrackTypeDisabled\(C\.TRACK_TYPE_AUDIO, true\)/.test(nativeVideo));
+// 光调小缓冲不够：链路抖一下就攒出一段，之后一直背着走。
+check('攒出来的延迟会被追掉',
+      /function trimLatency|private void trimLatency/.test(nativeVideo) &&
+      /getTotalBufferedDuration/.test(nativeVideo) &&
+      /setPlaybackSpeed/.test(nativeVideo) &&
+      /CATCHUP_SPEED/.test(nativeVideo) &&
+      /RESYNC_MS/.test(nativeVideo));
+// 本机缓冲接近 0 而画面仍然慢，说明慢在上游，调客户端没用。要能分清。
+check('设置里看得到本机缓冲了多少',
+      !!htmlIds['set-app-dogcam-stat'] &&
+      /function status\(\)/.test(dogCamJs) &&
+      /X30DogCam\.status\(\)/.test(read('settings.js')) &&
+      /bufferedMs/.test(radioBridge));
 var mediaJs = read('media.js');
 // 能力上报发在启动那一刻，那时 WebSocket 还没连上，send 会把它丢掉，
 // 网关便一直按「只支持 H.264」下发计划。

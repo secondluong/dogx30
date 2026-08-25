@@ -22,6 +22,7 @@ const DOGCAM_DEFAULT = 'rtsp://192.168.1.105:8554/test';
 let lastRect = '';
 let playing = false;
 let lastErr = '';
+let lastBuf = 0;
 let wantedNow = false;
 let idleText = '';
 
@@ -160,12 +161,25 @@ function paint() {
                              : ('正在从 ' + url() + ' 拉流…');
 }
 
-// 原生回调：{playing:bool, err:string}
+// 原生回调：{playing:bool, err:string, buf:number}
 function onState(st) {
   const s = st || {};
   playing = !!s.playing;
   lastErr = s.err || '';
+  lastBuf = typeof s.buf === 'number' ? s.buf : 0;
   paint();
+}
+
+// 给设置面板看的一行。buf 是播放器里「已收到但还没放」的那段，也就是本机贡献的
+// 延迟：它接近 0 而画面仍然慢，说明慢在上游（相机转码、链路排队），
+// 调客户端没用。分清这两种情况，比继续猜有用得多。
+function status() {
+  if (!nativeVideo()) return '';
+  if (!radio24()) return 'MESH 链路下这一路走网关，不用原生拉流。';
+  if (!wantedNow) return '未在拉流（机身相机不是当前主画面）。';
+  if (!playing) return lastErr ? ('拉流失败：' + lastErr) : '正在连接…';
+  return '正在放，本机缓冲 ' + Math.round(lastBuf) + ' ms'
+    + (lastBuf > 400 ? '（偏大，正在快放追）' : '（延迟主要在上游）');
 }
 
 function onStageLayout() {
@@ -197,4 +211,6 @@ function init() {
   onRadioPath();
 }
 
-window.X30DogCam = { init, onStageLayout, onRadioPath, onState, url, setUrl, stop };
+window.X30DogCam = {
+  init, onStageLayout, onRadioPath, onState, url, setUrl, stop, status,
+};

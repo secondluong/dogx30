@@ -32,8 +32,6 @@
     <span class="chip" id="chip-state">—</span>
     <span class="chip" id="chip-batt">—</span>
     <span class="chip hidden" id="chip-stick" title="点一下：摇杆改控布控球或改回控狗">摇杆 · 狗</span>
-    <!-- 版本戳。装包时最容易漏拷 assets/web，光看不出来，故直接印在界面上。 -->
-    <span class="chip" id="chip-ver">—</span>
   </div>
 
   <div class="bar-right">
@@ -69,6 +67,10 @@
       <button class="btn sm btn-ghost" id="set-close">关闭</button>
     </div>
 
+    <!-- 版本戳。装包时最容易漏拷 assets/web，页面是旧的却看不出来，
+         所以留一处能查。放这里而不是顶栏：顶栏是遥控时要盯的地方。 -->
+    <p class="set-sect-note" id="set-app-ver">—</p>
+
     <div id="set-app-box" class="set-form hidden">
       <div class="set-sect">本机连接网关</div>
       <p class="set-sect-note">App 打开时连这个地址。WiFi 不通时摇杆走 2.4G，不经过这里。</p>
@@ -86,6 +88,7 @@
         <span class="set-label">RTSP 地址</span>
         <input class="set-input" id="set-app-dogcam" autocomplete="off" spellcheck="false">
       </label>
+      <p class="set-sect-note" id="set-app-dogcam-stat">—</p>
       <button type="button" class="btn sm" id="set-app-save">保存并重新连接</button>
     </div>
 
@@ -365,7 +368,7 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260825k"></script>
-<script src="app.js?v=20260825k"></script>
+<script src="dogcam24.js?v=20260825l"></script>
+<script src="app.js?v=20260825l"></script>
 </body>
 </html>

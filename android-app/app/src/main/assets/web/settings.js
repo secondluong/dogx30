@@ -246,6 +246,11 @@
     if ($('set-app-dogcam') && window.X30DogCam) {
       $('set-app-dogcam').value = window.X30DogCam.url();
     }
+    // 画面慢的时候，先在这里看本机缓冲了多少：接近 0 说明慢在上游，
+    // 不必再去调客户端。
+    if ($('set-app-dogcam-stat') && window.X30DogCam) {
+      $('set-app-dogcam-stat').textContent = window.X30DogCam.status() || '—';
+    }
   }
 
   function saveAppGateway() {

@@ -355,13 +355,13 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     /** 把播放状态送回网页，占位图上就能写清楚卡在哪，而不是干等。 */
-    private void pushVideoState(boolean playing, String err) {
+    private void pushVideoState(boolean playing, String err, long bufferedMs) {
         if (web == null) return;
         String safe = err == null ? "" : err.replace("\\", " ").replace("\"", "'")
                 .replace("\n", " ").replace("\r", " ");
         web.evaluateJavascript(
                 "window.X30DogCam&&X30DogCam.onState({playing:" + playing
-                        + ",err:\"" + safe + "\"})",
+                        + ",err:\"" + safe + "\",buf:" + bufferedMs + "})",
                 null);
     }
 

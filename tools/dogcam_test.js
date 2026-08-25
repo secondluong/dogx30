@@ -146,6 +146,19 @@ check('拉不到时占位图还留着', !h.nodes['media-idle'].hiddenNow);
 h.mod.onState({ playing: true, err: '' });
 check('出画面后收起占位图', h.nodes['media-idle'].hiddenNow);
 
+// 画面慢的时候要能分清慢在哪：本机缓冲接近 0 说明慢在上游（相机转码、链路排队），
+// 再怎么调客户端都没用。这一行就是为了不再靠猜。
+console.log('\n== 延迟出在哪 ==');
+
+h.mod.onState({ playing: true, err: '', buf: 60 });
+check('缓冲小就点明延迟在上游',
+      h.mod.status().indexOf('60 ms') !== -1 &&
+      h.mod.status().indexOf('上游') !== -1, h.mod.status());
+h.mod.onState({ playing: true, err: '', buf: 1200 });
+check('缓冲大就说明正在快放追',
+      h.mod.status().indexOf('1200 ms') !== -1 &&
+      h.mod.status().indexOf('快放追') !== -1, h.mod.status());
+
 // --- 切后台 -----------------------------------------------------------------
 console.log('\n== 切后台 ==');
 
