@@ -27,6 +27,25 @@ if (isAppShell) document.documentElement.classList.add('shell-app');
 
 const RADIO_STORE = 'x30.radioPath';
 
+// 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
+// assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
+const WEB_BUILD = '0825d';
+
+function nativeAppVersion() {
+  try {
+    return String(window.X30Native.getAppVersion() || '');
+  } catch (e) {
+    return '';
+  }
+}
+
+function paintVerChip() {
+  const el = $('chip-ver');
+  if (!el) return;
+  const apk = nativeAppVersion();
+  el.textContent = apk ? ('包' + apk + ' 网页' + WEB_BUILD) : ('网页' + WEB_BUILD);
+}
+
 function nativeRadioPath() {
   try {
     const v = window.X30Native.getRadioPath();
@@ -1028,6 +1047,12 @@ $('btn-control').addEventListener('click', () => {
 });
 
 function toggleRadioPath() {
+  try {
+    if (window.X30Native && window.X30Native.toggleRadioPath) {
+      window.X30Native.toggleRadioPath();
+      return;
+    }
+  } catch (e) { /* 网页没有原生桥 */ }
   setRadioPath(app.radioPath === 'radio' ? 'mesh' : 'radio');
 }
 app.toggleRadioPath = toggleRadioPath;
@@ -1413,6 +1438,7 @@ if ($('gas-panel')) {
   if ($('btn-gas')) $('btn-gas').classList.remove('active');
 }
 if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
+paintVerChip();
 syncNativeRadioPath();
 applyRadioPath(false);
 

@@ -10,8 +10,8 @@ android {
         applicationId "com.dogx30.control"
         minSdk 24
         targetSdk 34
-        versionCode 15
-        versionName "0.3.12"
+        versionCode 18
+        versionName "0.3.15"
     }
 
     buildTypes {
@@ -25,6 +25,17 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+// 编包最常见的坑是忘了把仓库 web/ 拷进 assets，页面就是旧的，改了像没改。
+// 能找到源目录就每次自动拷一遍。
+def webSrc = [file("../../web"), file("../web")].find { it.isDirectory() }
+if (webSrc != null) {
+    tasks.register("copyWebAssets", Copy) {
+        from webSrc
+        into "src/main/assets/web"
+    }
+    tasks.named("preBuild").configure { dependsOn("copyWebAssets") }
 }
 
 dependencies {

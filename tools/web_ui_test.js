@@ -279,9 +279,10 @@ check('原生切 2.4G 能找到 window.app',
       /window\.app = app/.test(appJs) &&
       /function syncNativeRadioPath/.test(appJs) &&
       /function fireRadioFromEl/.test(appJs) &&
-      /radioDirect\(\) && hasNativeRadio/.test(appJs));
-check('App 壳顶栏用网页 2.4G 按钮',
-      /html\.shell-app #btn-radio \{[^}]*display:\s*inline-block/.test(styleText) &&
+      /radioDirect\(\) && hasNativeRadio/.test(appJs) &&
+      /X30Native\.toggleRadioPath/.test(appJs));
+check('App 壳不把网页 2.4G 按钮叠在模式上',
+      /html\.shell-app #btn-radio \{[^}]*display:\s*none/.test(styleText) &&
       /html\.shell-app #radio-slot \{[^}]*display:\s*none/.test(styleText));
 var radioJava = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
@@ -312,9 +313,24 @@ check('2.4G RadioLink 含起立趴下行走指令',
       !/maybeStep/.test(radioJava) &&
       !/createG12G20Pipeline/.test(radioJava) &&
       /void command\(String name\)/.test(radioJava) &&
+      /void standUp\(\)/.test(radioJava) &&
+      /STAND_AFTER_UNLOAD_MS/.test(radioJava) &&
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge) &&
       /radioStatus/.test(radioBridge));
+check('界面上印出网页与安装包版本',
+      !!htmlIds['chip-ver'] &&
+      /const WEB_BUILD/.test(appJs) &&
+      /function paintVerChip/.test(appJs) &&
+      /getAppVersion/.test(appJs) &&
+      /getAppVersion/.test(radioBridge));
+// 版本戳必须由原生给出。让网页自己印，资源没更新时它也不显示，等于没有指示。
+check('原生读安装包里的网页版本戳',
+      /String versionLine\(\)/.test(radioBridge) &&
+      /packagedWebBuild/.test(radioBridge) &&
+      /WEB_BUILD/.test(radioBridge) &&
+      /getAssets\(\)\.open\("web\/app\.js"\)/.test(radioBridge) &&
+      !/txtRadioStat\.setVisibility\(View\.GONE\)/.test(radioBridge));
 var radioLayout = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'res',
             'layout', 'activity_control.xml'), 'utf8');
@@ -330,7 +346,7 @@ check('链路只跟顶栏 MESH/2.4G 按钮',
       /txt_radio_stat/.test(radioLayout) &&
       /statusLine/.test(radioJava) &&
       /void toggleRadioPath\(/.test(radioBridge) &&
-      /btnRadioPath\.setVisibility\(View\.GONE\)/.test(radioBridge) &&
+      /void pushRadioPathToWeb\(/.test(radioBridge) &&
       /saveRadioPath/.test(radioBridge) &&
       /android_asset\/web\/index\.html/.test(radioBridge) &&
       !/gatewayReachable/.test(radioBridge) &&

@@ -54,6 +54,8 @@ final class RadioLink {
     private static final int LOCAL_PORT = 43897;
     private static final int TICK_MS = 20;
     private static final int HB_EVERY = 10;
+    /** 卸力到起立之间的间隔。太短运动主机还在切状态，会把起立丢掉。 */
+    private static final int STAND_AFTER_UNLOAD_MS = 400;
     private static final int AXIS_MAX = 32767;
     private static final int AXIS_DZ = 655;
 
@@ -111,6 +113,7 @@ final class RadioLink {
     @Nullable private ConnectivityManager.NetworkCallback netCb;
 
     private final Runnable loop = this::onTick;
+    private final Runnable standTask = this::standNow;
 
     synchronized void attach(Context ctx) {
         if (ctx != null) appCtx = ctx.getApplicationContext();
@@ -207,6 +210,38 @@ final class RadioLink {
         stepping = false;
     }
 
+    /**
+     * 起立总是先卸力再站。
+     *
+     * 运动主机可能在我们连上之前就被急停锁住（开机抖一下就会），本机的 emergency
+     * 标志看不到这种情况，只发 0x21010223 会被静默忽略 —— 现场表现就是「按了没反应」。
+     * 狗趴着时卸力没有副作用，所以无条件先发一发。
+     */
+    private void standUp() {
+        sendSimple(UNLOAD);
+        emergency = false;
+        standing = false;
+        clearWalk();
+        onRadioDelayed(standTask, STAND_AFTER_UNLOAD_MS);
+    }
+
+    /** 卸力后那一发起立还没到，用户又按了趴下/急停，就别再站起来了。 */
+    private void cancelPendingStand() {
+        if (handler != null) handler.removeCallbacks(standTask);
+    }
+
+    private synchronized void standNow() {
+        if (!enabled) return;
+        sendSimple(STAND);
+        standing = true;
+        clearWalk();
+    }
+
+    private void onRadioDelayed(Runnable r, long delayMs) {
+        ensureWorker();
+        handler.postDelayed(r, delayMs);
+    }
+
     void command(String name) {
         if (name == null) return;
         onRadio(() -> commandOnRadio(name));
@@ -221,40 +256,26 @@ final class RadioLink {
         if (udp == null) openUdp();
         switch (name) {
             case "stand_up":
-                if (emergency) {
-                    sendSimple(UNLOAD);
-                    emergency = false;
-                    standing = false;
-                    clearWalk();
-                } else {
-                    sendSimple(STAND);
-                    standing = true;
-                    clearWalk();
-                }
+                standUp();
                 break;
             case "sit":
             case "sit_down":
+                cancelPendingStand();
                 sendSimple(SIT);
                 standing = false;
                 clearWalk();
                 break;
             case "stand":
-                if (emergency) {
-                    sendSimple(UNLOAD);
-                    emergency = false;
-                    standing = false;
-                    clearWalk();
-                } else if (standing) {
+                if (standing && !emergency) {
                     sendSimple(SIT);
                     standing = false;
                     clearWalk();
                 } else {
-                    sendSimple(STAND);
-                    standing = true;
-                    clearWalk();
+                    standUp();
                 }
                 break;
             case "unload":
+                cancelPendingStand();
                 sendSimple(UNLOAD);
                 emergency = false;
                 standing = false;
@@ -281,6 +302,7 @@ final class RadioLink {
                 }
                 break;
             case "estop":
+                cancelPendingStand();
                 sendSimple(ESTOP);
                 emergency = true;
                 standing = false;
@@ -699,6 +721,7 @@ final class RadioLink {
     private synchronized void stop() {
         running = false;
         if (handler != null) handler.removeCallbacks(loop);
+        cancelPendingStand();
         standing = false;
         clearWalk();
         confirmed = false;
@@ -883,7 +906,17 @@ final class RadioLink {
             opt = f.getInt(null);
         } catch (Throwable ignored) {
         }
-        Os.setsockoptIfreq(fd, OsConstants.SOL_SOCKET, opt, ifname);
+        // setsockoptIfreq 是 @hide，公开 SDK 没有这个符号，只能反射。
+        try {
+            Method m = Os.class.getMethod(
+                    "setsockoptIfreq", FileDescriptor.class, int.class, int.class, String.class);
+            m.invoke(null, fd, OsConstants.SOL_SOCKET, opt, ifname);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable c = e.getCause();
+            if (c instanceof Exception) throw (Exception) c;
+            if (c instanceof Error) throw (Error) c;
+            throw e;
+        }
         Log.i(TAG, "bind " + ifname);
     }
 

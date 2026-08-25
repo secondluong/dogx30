@@ -21,6 +21,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
 /**
@@ -41,6 +42,7 @@ public class ControlActivity extends AppCompatActivity {
     private TextView overlayMsg;
     private EditText overlayHost;
     private EditText overlayPort;
+    @Nullable private String versionLine;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
 
@@ -86,7 +88,6 @@ public class ControlActivity extends AppCompatActivity {
         web.addJavascriptInterface(nativeBridge, "X30Native");
 
         btnRadioPath = findViewById(R.id.btn_radio_path);
-        btnRadioPath.setVisibility(View.GONE);
         btnRadioPath.setOnClickListener(v -> toggleRadioPath());
         txtRadioStat = findViewById(R.id.txt_radio_stat);
         txtRadioStat.setOnClickListener(v -> showRadioStatDialog());
@@ -97,12 +98,7 @@ public class ControlActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String u) {
                 hideOverlay();
                 view.requestFocus();
-                String path = GatewayStore.radioPath(ControlActivity.this);
-                view.evaluateJavascript(
-                        "document.documentElement.classList.add('shell-app');"
-                                + "if(window.app&&app.adoptRadioPath)app.adoptRadioPath('"
-                                + path + "');",
-                        null);
+                pushRadioPathToWeb();
             }
         });
 
@@ -163,17 +159,27 @@ public class ControlActivity extends AppCompatActivity {
         GatewayStore.saveRadioPath(this, next);
         G20Rc.get().setBackupRadio("radio".equals(next));
         paintNativeRadioBtn();
-        if (web != null) {
-            web.evaluateJavascript(
-                    "window.app&&app.adoptRadioPath&&app.adoptRadioPath('" + next + "')",
-                    null);
-        }
+        pushRadioPathToWeb();
+    }
+
+    /** 页面脚本可能比 onPageFinished 晚一拍，多试几次才能切到 2.4G。 */
+    private void pushRadioPathToWeb() {
+        if (web == null) return;
+        String path = GatewayStore.radioPath(this);
+        web.evaluateJavascript(
+                "(function(){"
+                        + "document.documentElement.classList.add('shell-app');"
+                        + "var n=0;function go(){"
+                        + "if(window.app&&app.adoptRadioPath){app.adoptRadioPath('"
+                        + path + "');return;}"
+                        + "if(++n<25)setTimeout(go,80);}"
+                        + "go();})()",
+                null);
     }
 
     private void paintNativeRadioBtn() {
         if (btnRadioPath == null) return;
-        // 顶栏改由网页 #btn-radio 切换，避免原生按钮盖住「模式」。
-        btnRadioPath.setVisibility(View.GONE);
+        btnRadioPath.setVisibility(View.VISIBLE);
         boolean radio = "radio".equals(GatewayStore.radioPath(this));
         btnRadioPath.setText(radio ? R.string.radio_24g : R.string.radio_mesh);
         btnRadioPath.setBackgroundResource(radio ? R.drawable.btn_radio_on : R.drawable.btn_radio);
@@ -192,12 +198,47 @@ public class ControlActivity extends AppCompatActivity {
     private void paintRadioStat() {
         if (txtRadioStat == null) return;
         boolean radio = "radio".equals(GatewayStore.radioPath(this));
-        if (!radio) {
-            txtRadioStat.setVisibility(View.GONE);
-            return;
-        }
+        // 版本行一直显示。让网页自己印版本是没用的：网页没更新时它恰好也不显示，
+        // 反而分不清「资源旧」和「功能没生效」。这行由原生读安装包里的文件得出。
         txtRadioStat.setVisibility(View.VISIBLE);
-        txtRadioStat.setText(RadioLink.get().statusLine());
+        txtRadioStat.setText(radio
+                ? versionLine() + "\n" + RadioLink.get().statusLine()
+                : versionLine() + " MESH");
+    }
+
+    private String versionLine() {
+        if (versionLine == null) {
+            versionLine = "包" + appVersionName() + " 网页" + packagedWebBuild();
+        }
+        return versionLine;
+    }
+
+    private String appVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "?";
+        }
+    }
+
+    /** 读安装包里的 assets/web/app.js 取 WEB_BUILD。漏拷 web/ 时这里会停在旧值。 */
+    private String packagedWebBuild() {
+        try (java.io.InputStream in = getAssets().open("web/app.js")) {
+            byte[] head = new byte[8192];
+            int n = 0;
+            while (n < head.length) {
+                int r = in.read(head, n, head.length - n);
+                if (r < 0) break;
+                n += r;
+            }
+            if (n <= 0) return "?";
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("WEB_BUILD\\s*=\\s*'([^']+)'")
+                    .matcher(new String(head, 0, n, "UTF-8"));
+            return m.find() ? m.group(1) : "无戳";
+        } catch (Exception e) {
+            return "?";
+        }
     }
 
     private void showRadioStatDialog() {
@@ -262,6 +303,16 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public String getAppVersion() {
+            try {
+                return getPackageManager()
+                        .getPackageInfo(getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
         public String getRadioPath() {
             return GatewayStore.radioPath(ControlActivity.this);
         }
@@ -271,6 +322,11 @@ public class ControlActivity extends AppCompatActivity {
             GatewayStore.saveRadioPath(ControlActivity.this, path);
             G20Rc.get().setBackupRadio(path != null && path.equals("radio"));
             runOnUiThread(ControlActivity.this::paintNativeRadioBtn);
+        }
+
+        @JavascriptInterface
+        public void toggleRadioPath() {
+            runOnUiThread(ControlActivity.this::toggleRadioPath);
         }
 
         @JavascriptInterface

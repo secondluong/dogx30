@@ -872,11 +872,13 @@ html.shell-app .hud-gp,
 html.shell-app .hud-sticks,
 html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
-html.shell-app #btn-radio { display: inline-block; }
+html.shell-app #btn-radio { display: none; }
 html.shell-app #btn-control { display: none !important; }
 html.shell-app #radio-slot { display: none; }
 html.shell-app:not(.radio-24) #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }
+/* 顶栏窄，芯片换行会被裁掉，版本戳就凭空消失了。 */
+html.shell-app .chips { flex-wrap: nowrap; min-width: 0; }
 html.shell-app #chip-link.radio-stat {
   max-width: 46vw;
   overflow: hidden;

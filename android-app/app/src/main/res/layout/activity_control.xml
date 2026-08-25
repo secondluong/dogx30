@@ -9,36 +9,36 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- 贴在画面左上，压在顶栏下方。放进顶栏会盖住「模式」，单独占一行又会把页面挤变形。 -->
     <TextView
         android:id="@+id/btn_radio_path"
         android:layout_width="wrap_content"
-        android:layout_height="40dp"
-        android:layout_gravity="top|end"
-        android:layout_marginTop="8dp"
-        android:layout_marginEnd="108dp"
+        android:layout_height="38dp"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="62dp"
         android:background="@drawable/btn_radio"
         android:clickable="true"
         android:focusable="true"
         android:gravity="center"
-        android:minWidth="72dp"
-        android:paddingLeft="14dp"
-        android:paddingRight="14dp"
+        android:minWidth="84dp"
+        android:paddingLeft="16dp"
+        android:paddingRight="16dp"
         android:text="@string/radio_mesh"
         android:textColor="#E6EDF3"
-        android:textSize="14sp" />
+        android:textSize="15sp" />
 
     <TextView
         android:id="@+id/txt_radio_stat"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|start"
-        android:layout_marginTop="56dp"
         android:layout_marginStart="12dp"
+        android:layout_marginTop="106dp"
         android:background="#E61A1400"
         android:clickable="true"
         android:focusable="true"
-        android:gravity="end"
-        android:maxWidth="260dp"
+        android:maxWidth="320dp"
         android:paddingLeft="8dp"
         android:paddingTop="4dp"
         android:paddingRight="8dp"
