@@ -404,4 +404,10 @@ function initMedia(sendFn, showBanner) {
   });
 }
 
-window.X30Media = { initMedia, onMediaPlan, stopAll, onLayout, setTalk };
+// 能力上报只在启动时发过一次，那会儿 WebSocket 几乎肯定还没连上，消息被 send
+// 丢掉，网关便一直按「只支持 H.264」下发计划。链路每次连上都补发一次。
+function onLinkOpen() {
+  if (sendRef) reportCaps(sendRef);
+}
+
+window.X30Media = { initMedia, onMediaPlan, stopAll, onLayout, setTalk, onLinkOpen };

@@ -128,8 +128,8 @@ body {
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 .btn-ghost.held { background: var(--ok); border-color: var(--ok); color: #06210d; font-weight: 600; }
+/* 网页控制台只走 MESH，这个按钮只在安卓壳里露出来。 */
 #btn-radio { display: none; min-width: 4.6em; }
-.radio-slot { display: none; }
 #btn-radio.radio-on {
   background: var(--warn);
   border-color: var(--warn);
@@ -872,9 +872,8 @@ html.shell-app .hud-gp,
 html.shell-app .hud-sticks,
 html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
-html.shell-app #btn-radio { display: none; }
+html.shell-app #btn-radio { display: inline-block; }
 html.shell-app #btn-control { display: none !important; }
-html.shell-app #radio-slot { display: none; }
 html.shell-app:not(.radio-24) #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }
 /* 顶栏窄，芯片换行会被裁掉，版本戳就凭空消失了。 */

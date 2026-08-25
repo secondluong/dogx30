@@ -361,15 +361,31 @@ check('切 2.4G 不经网关下发',
       /applyRadioPose/.test(appJs) &&
       /function meshWsUrl/.test(appJs) &&
       /getRadioPath/.test(appJs));
+// 操控和画面是两条链路：指令走 2.4G 数传，视频/遥测/点云走网关 WebSocket。
+// 曾经切 2.4G 就整个不连网关，于是狗能动但一路画面都没有。切档只准改指令走哪边。
+check('切 2.4G 仍连网关，画面不跟着断',
+      // connect() 里不许再为 2.4G 提前 return
+      !/if \(radioDirect\(\)\) \{\s*applyRadioPath/.test(appJs) &&
+      // 掉线重连不看当前档位，否则 2.4G 下网关一断就再也回不来
+      !/if \(app\.radioPath === 'radio'\) return;\s*setTimeout\(connect/.test(appJs) &&
+      // 切档不许顺手把 ws 关掉
+      !/app\.ws = null;/.test(appJs) &&
+      /if \(changed\) connect\(\);/.test(appJs) &&
+      // 网关通没通要单独报，不然「能动但没画面」查不到是哪一头
+      /'网关通' : '网关断'/.test(appJs));
 check('原生切 2.4G 能找到 window.app',
       /window\.app = app/.test(appJs) &&
       /function syncNativeRadioPath/.test(appJs) &&
       /function fireRadioFromEl/.test(appJs) &&
       /radioDirect\(\) && hasNativeRadio/.test(appJs) &&
       /X30Native\.toggleRadioPath/.test(appJs));
-check('App 壳不把网页 2.4G 按钮叠在模式上',
-      /html\.shell-app #btn-radio \{[^}]*display:\s*none/.test(styleText) &&
-      /html\.shell-app #radio-slot \{[^}]*display:\s*none/.test(styleText));
+// 切档按钮就是顶栏里那一个普通网页按钮。曾经改成原生浮层压在画面左上角，
+// 是因为当时 app.js 整份没跑、网页按钮点了没用；根因修掉后就该放回顶栏，
+// 那里不会遮挡画面，也不用再给它在顶栏占位。
+check('App 壳的 2.4G 按钮就在顶栏里',
+      /html\.shell-app #btn-radio \{[^}]*display:\s*inline-block/.test(styleText) &&
+      !/radio-slot/.test(html) &&
+      !/radio-slot/.test(styleText));
 var radioJava = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
             'com', 'dogx30', 'control', 'RadioLink.java'), 'utf8');
@@ -414,24 +430,19 @@ check('网页启动不受挂按钮那段成败影响',
       /function bootstrap\(\)/.test(appJs) &&
       /setTimeout\(bootstrap, 0\)/.test(appJs) &&
       /if \(booted\) return;/.test(appJs));
-check('原生把网页 JS 死活和报错显示出来',
-      /setWebChromeClient/.test(radioBridge) &&
-      /onConsoleMessage/.test(radioBridge) &&
-      /网页JS未运行/.test(radioBridge) &&
-      // 半死一定要和没跑区分开：两者表现一样，原因完全不同。
-      /网页JS初始化中断/.test(radioBridge) &&
-      /jsErrs/.test(radioBridge) &&
-      /void probeJs\(\)/.test(radioBridge));
-// 版本戳必须由原生给出。让网页自己印，资源没更新时它也不显示，等于没有指示。
-check('原生读安装包里的网页版本戳',
-      /String versionLine\(\)/.test(radioBridge) &&
-      /packagedWebBuild/.test(radioBridge) &&
-      /WEB_BUILD/.test(radioBridge) &&
-      /getAssets\(\)\.open\("web\/app\.js"\)/.test(radioBridge) &&
-      !/txtRadioStat\.setVisibility\(View\.GONE\)/.test(radioBridge));
 var radioLayout = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'res',
             'layout', 'activity_control.xml'), 'utf8');
+// 那层左上角的版本 / JS 报错 / 2.4G 状态浮层是查「屏幕按键全哑」时的临时手段，
+// 根因（顶层重名让 app.js 整份没跑）修掉后就撤了 —— 它遮画面且一直在抢注意力。
+// 版本仍然看得到，在顶栏 chip-ver 那一处。诊断要再上，请另开一个入口，别压回画面上。
+check('App 壳不再有原生诊断浮层',
+      !/setWebChromeClient/.test(radioBridge) &&
+      !/probeJs/.test(radioBridge) &&
+      !/jsErrs/.test(radioBridge) &&
+      !/packagedWebBuild/.test(radioBridge) &&
+      !/btn_radio_path/.test(radioLayout) &&
+      !/txt_radio_stat/.test(radioLayout));
 check('链路只跟顶栏 MESH/2.4G 按钮',
       /function setRadioPath/.test(appJs) &&
       /function adoptRadioPath/.test(appJs) &&
@@ -439,10 +450,6 @@ check('链路只跟顶栏 MESH/2.4G 按钮',
       /X30Native\.setRadioPath/.test(appJs) &&
       !/nativeCall/.test(appJs) &&
       !/onclick=/.test(html.match(/id="btn-radio"[\s\S]*?>/)[0]) &&
-      /btn_radio_path/.test(radioLayout) &&
-      /radio-slot/.test(html) &&
-      /txt_radio_stat/.test(radioLayout) &&
-      /statusLine/.test(radioJava) &&
       /void toggleRadioPath\(/.test(radioBridge) &&
       /void pushRadioPathToWeb\(/.test(radioBridge) &&
       /saveRadioPath/.test(radioBridge) &&
@@ -452,6 +459,11 @@ check('链路只跟顶栏 MESH/2.4G 按钮',
 check('网页不出现链路切换按钮',
       /#btn-radio \{[^}]*display:\s*none/.test(styleText));
 var mediaJs = read('media.js');
+// 能力上报发在启动那一刻，那时 WebSocket 还没连上，send 会把它丢掉，
+// 网关便一直按「只支持 H.264」下发计划。
+check('链路连上后补发编码能力',
+      /function onLinkOpen/.test(mediaJs) &&
+      /X30Media\.onLinkOpen/.test(appJs));
 check('桌面网页大屏也走布控球子码流',
       /function webH265Ok/.test(mediaJs) &&
       /media\.caps\.h265 = false/.test(mediaJs) &&

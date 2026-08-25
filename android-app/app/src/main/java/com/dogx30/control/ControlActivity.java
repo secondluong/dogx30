@@ -4,16 +4,12 @@ import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
-import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -23,7 +19,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
 /**
@@ -36,17 +31,10 @@ import androidx.appcompat.app.AppCompatActivity;
 public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
-    private TextView btnRadioPath;
-    private TextView txtRadioStat;
-    private final Handler uiHandler = new Handler(Looper.getMainLooper());
-    private final Runnable radioStatTick = this::tickRadioStat;
     private LinearLayout overlay;
     private TextView overlayMsg;
     private EditText overlayHost;
     private EditText overlayPort;
-    @Nullable private String versionLine;
-    private final java.util.List<String> jsErrs = new java.util.ArrayList<>();
-    private String jsState = "";
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
 
@@ -90,27 +78,6 @@ public class ControlActivity extends AppCompatActivity {
 
         // 工业平板上的手柄常常只走系统 KeyEvent，不进浏览器 Gamepad API。
         web.addJavascriptInterface(nativeBridge, "X30Native");
-
-        btnRadioPath = findViewById(R.id.btn_radio_path);
-        btnRadioPath.setOnClickListener(v -> toggleRadioPath());
-        txtRadioStat = findViewById(R.id.txt_radio_stat);
-        txtRadioStat.setOnClickListener(v -> showRadioStatDialog());
-        paintNativeRadioBtn();
-
-        // 网页脚本挂了的时候界面看起来只是「没反应」，没有 adb 根本查不出来。
-        // 把第一条 JS 报错捞上来显示，省得靠猜。
-        web.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public boolean onConsoleMessage(ConsoleMessage cm) {
-                if (cm == null || cm.messageLevel() != ConsoleMessage.MessageLevel.ERROR) {
-                    return true;
-                }
-                // 只留第一条会漏掉后面那条真正致命的：一个文件报错并不影响别的文件继续跑。
-                String one = cm.message() + " @" + shortSrc(cm.sourceId()) + ":" + cm.lineNumber();
-                if (jsErrs.size() < 3 && !jsErrs.contains(one)) jsErrs.add(one);
-                return true;
-            }
-        });
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -177,7 +144,6 @@ public class ControlActivity extends AppCompatActivity {
         String next = "radio".equals(GatewayStore.radioPath(this)) ? "mesh" : "radio";
         GatewayStore.saveRadioPath(this, next);
         G20Rc.get().setBackupRadio("radio".equals(next));
-        paintNativeRadioBtn();
         pushRadioPathToWeb();
     }
 
@@ -194,112 +160,6 @@ public class ControlActivity extends AppCompatActivity {
                         + "if(++n<25)setTimeout(go,80);}"
                         + "go();})()",
                 null);
-    }
-
-    private void paintNativeRadioBtn() {
-        if (btnRadioPath == null) return;
-        btnRadioPath.setVisibility(View.VISIBLE);
-        boolean radio = "radio".equals(GatewayStore.radioPath(this));
-        btnRadioPath.setText(radio ? R.string.radio_24g : R.string.radio_mesh);
-        btnRadioPath.setBackgroundResource(radio ? R.drawable.btn_radio_on : R.drawable.btn_radio);
-        btnRadioPath.setTextColor(radio ? 0xFF1A1400 : 0xFFE6EDF3);
-        btnRadioPath.setTypeface(btnRadioPath.getTypeface(), radio
-                ? android.graphics.Typeface.BOLD
-                : android.graphics.Typeface.NORMAL);
-        paintRadioStat();
-    }
-
-    private void tickRadioStat() {
-        probeJs();
-        paintRadioStat();
-        uiHandler.postDelayed(radioStatTick, 1000);
-    }
-
-    /**
-     * 网页脚本活着才有屏幕按键。挂了就在状态行说出来，而不是让人对着按钮反复点。
-     *
-     * 分三档而不是通/不通：app.js 的顶层有上百行挂按钮的语句，中途抛错会留下一个
-     * 半成品 window.app —— 那种情况和「整个文件没解析」的表现一样，但原因完全不同。
-     */
-    private void probeJs() {
-        if (web == null) return;
-        web.evaluateJavascript(
-                "(function(){try{"
-                        + "if(!window.app)return 'none';"
-                        + "if(!window.app.adoptRadioPath)return 'partial';"
-                        + "return 'ok';"
-                        + "}catch(e){return 'throw';}})()",
-                v -> jsState = v == null ? "" : v.replace("\"", ""));
-    }
-
-    private String jsStateText() {
-        if ("ok".equals(jsState)) return " 网页JS通";
-        if ("partial".equals(jsState)) return " 网页JS初始化中断";
-        return " 网页JS未运行";
-    }
-
-    private void paintRadioStat() {
-        if (txtRadioStat == null) return;
-        boolean radio = "radio".equals(GatewayStore.radioPath(this));
-        // 版本行一直显示。让网页自己印版本是没用的：网页没更新时它恰好也不显示，
-        // 反而分不清「资源旧」和「功能没生效」。这行由原生读安装包里的文件得出。
-        txtRadioStat.setVisibility(View.VISIBLE);
-        StringBuilder sb = new StringBuilder(versionLine());
-        sb.append(jsStateText());
-        // 报错即使在 JS 通的情况下也要显示：某个模块挂掉会让对应功能整块失效。
-        for (String e : jsErrs) sb.append("\n").append(e);
-        sb.append("\n").append(radio ? RadioLink.get().statusLine() : "MESH");
-        txtRadioStat.setText(sb.toString());
-    }
-
-    /** 控制台里 sourceId 是完整 file:// 路径，屏幕上只留文件名才看得清。 */
-    private static String shortSrc(String src) {
-        if (src == null || src.isEmpty()) return "?";
-        int i = src.lastIndexOf('/');
-        return i >= 0 ? src.substring(i + 1) : src;
-    }
-
-    private String versionLine() {
-        if (versionLine == null) {
-            versionLine = "包" + appVersionName() + " 网页" + packagedWebBuild();
-        }
-        return versionLine;
-    }
-
-    private String appVersionName() {
-        try {
-            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-        } catch (Exception e) {
-            return "?";
-        }
-    }
-
-    /** 读安装包里的 assets/web/app.js 取 WEB_BUILD。漏拷 web/ 时这里会停在旧值。 */
-    private String packagedWebBuild() {
-        try (java.io.InputStream in = getAssets().open("web/app.js")) {
-            byte[] head = new byte[8192];
-            int n = 0;
-            while (n < head.length) {
-                int r = in.read(head, n, head.length - n);
-                if (r < 0) break;
-                n += r;
-            }
-            if (n <= 0) return "?";
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("WEB_BUILD\\s*=\\s*'([^']+)'")
-                    .matcher(new String(head, 0, n, "UTF-8"));
-            return m.find() ? m.group(1) : "无戳";
-        } catch (Exception e) {
-            return "?";
-        }
-    }
-
-    private void showRadioStatDialog() {
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.radio_stat_title)
-                .setMessage(RadioLink.get().statusJson())
-                .setPositiveButton(android.R.string.ok, null)
-                .show();
     }
 
     private void showOverlay(String text) {
@@ -374,7 +234,6 @@ public class ControlActivity extends AppCompatActivity {
         public void setRadioPath(String path) {
             GatewayStore.saveRadioPath(ControlActivity.this, path);
             G20Rc.get().setBackupRadio(path != null && path.equals("radio"));
-            runOnUiThread(ControlActivity.this::paintNativeRadioBtn);
         }
 
         @JavascriptInterface
@@ -530,7 +389,6 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
-        uiHandler.removeCallbacks(radioStatTick);
         G20Rc.get().removeListener(rcToJs);
         super.onPause();
         // 切后台时页面里的 visibilitychange 会发 release 停车，
@@ -543,8 +401,6 @@ public class ControlActivity extends AppCompatActivity {
         super.onResume();
         G20Rc.get().addListener(rcToJs);
         web.onResume();
-        uiHandler.removeCallbacks(radioStatTick);
-        uiHandler.post(radioStatTick);
     }
 
     @Override

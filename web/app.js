@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825g';
+const WEB_BUILD = '0825h';
 
 function nativeAppVersion() {
   try {
@@ -162,15 +162,11 @@ function meshWsUrl() {
   return proto + '//' + location.host + '/ws';
 }
 
+// 2.4G 只接管运动指令（见 send 里的过滤），网关连接照旧要建：机身相机和布控球的
+// 拉流地址由网关下发（media_plan），遥测、电量、点云也都走它。曾经在 2.4G 下直接
+// 不连网关，结果控制正常但整块画面是空的 —— 视频和操控本来就是两条独立的链路。
 function connect() {
-  // 顶栏选了 2.4G 就只走数传，不再连网关。
   syncNativeRadioPath();
-  if (radioDirect()) {
-    applyRadioPath(false);
-    setLink(false);
-    renderControl();
-    return;
-  }
   if (app.ws && (app.ws.readyState === WebSocket.OPEN
       || app.ws.readyState === WebSocket.CONNECTING)) {
     return;
@@ -193,6 +189,9 @@ function connect() {
     if (window.X30Cloud && window.X30Cloud.resubscribe) {
       window.X30Cloud.resubscribe();
     }
+    if (window.X30Media && window.X30Media.onLinkOpen) {
+      window.X30Media.onLinkOpen();
+    }
   };
 
   ws.onclose = () => {
@@ -210,7 +209,6 @@ function connect() {
           : 'MESH 已断。要控狗请切 2.4G，或等网关重连')
         : 'WiFi 已断，网关已放手。请用原厂 2.4G 手柄直达（无画面）', 8000);
     }
-    if (app.radioPath === 'radio') return;
     setTimeout(connect, RECONNECT_MS);
   };
 
@@ -553,17 +551,11 @@ function adoptRadioPath(path, announce) {
   app.radioPath = next;
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
   if (changed) notifyNativeRadio();
-  if (app.radioPath === 'radio') {
-    const ws = app.ws;
-    app.ws = null;
-    if (ws) {
-      try { ws.close(); } catch (e) { /* 关掉即可 */ }
-    }
-  } else if (changed) {
-    connect();
-  }
   applyRadioPath(!!announce);
   renderControl();
+  // 切到 2.4G 也要保住网关连接，否则画面会跟着操控一起没。切档只改指令走哪条路，
+  // 控制权已在 applyRadioPath 里交还，网关不会跟 2.4G 抢着下发运动。
+  if (changed) connect();
 }
 function setRadioPath(path) {
   adoptRadioPath(path, true);
@@ -594,6 +586,9 @@ function requestControl() {
 function radioStatusLine() {
   const st = nativeRadioStatus() || {};
   const bits = [st.ready ? '2.4G通' : '2.4G断'];
+  // 画面和操控是两条链路：指令走 2.4G，视频走网关。分开报才看得出「狗能动
+  // 但没画面」该去查哪一头。放在前面，芯片被顶栏挤窄截断也还看得见。
+  bits.push(linkOpen() ? '网关通' : '网关断');
   if (st.status) bits.push(st.status);
   if (st.local) bits.push(st.local);
   else if (st.nets) bits.push(st.nets);
@@ -1451,6 +1446,7 @@ function bootstrap() {
   paintVerChip();
   syncNativeRadioPath();
   applyRadioPath(false);
+  renderControl();
 
   connect();
 

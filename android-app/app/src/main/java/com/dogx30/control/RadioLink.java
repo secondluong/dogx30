@@ -187,21 +187,6 @@ final class RadioLink {
     }
 
     /** 钉在顶栏，不用翻黄条。 */
-    synchronized String statusLine() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(isLinkReady() ? "2.4G 已通 " : "2.4G 未通 ");
-        sb.append(status);
-        String local = boundLocal != null ? boundLocal.getHostAddress() : airLocalIp();
-        if (!local.isEmpty()) sb.append(" 本机").append(local);
-        String ifaces = osIfaces();
-        if (!ifaces.isEmpty()) sb.append(" ").append(ifaces);
-        if (!lastErr.isEmpty() && sentOk == 0) sb.append(" ").append(lastErr);
-        sb.append(" ok").append(sentOk).append("/fail").append(sentFail);
-        sb.append(" rx").append(rxOk);
-        if (!lastCmd.isEmpty()) sb.append(" ").append(lastCmd);
-        return sb.toString();
-    }
-
     synchronized void setScreenAxes(float fwd, float lat, float turn) {
     }
 
