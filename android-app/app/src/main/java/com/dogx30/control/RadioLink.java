@@ -288,7 +288,14 @@ final class RadioLink {
      * 打开、什么都不知道。不发任何指令，只对上记忆 —— 否则从 MESH 切到 2.4G 后
      * 按钮显示「起立」，而且 axesApply 认为狗趴着，推杆没反应。
      */
-    synchronized void adoptPosture(boolean up) {
+    void adoptPosture(boolean up) {
+        // 必须排在开/关这一档的后面执行：setEnabled 是投到这个线程上的，
+        // 而切档就在同一瞬间发生。直接在调用线程上写，快速来回切档时那次
+        // stop() 会后到，把刚交接过来的姿态清掉 —— 又变成「切档姿态丢了」。
+        onRadio(() -> adoptOnRadio(up));
+    }
+
+    private synchronized void adoptOnRadio(boolean up) {
         standing = up;
         poseKnown = true;
         // 姿态是别人告知的，不是我们刚发的起立，所以不必再等身子稳住。

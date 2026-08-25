@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825o';
+const WEB_BUILD = '0825p';
 
 function nativeAppVersion() {
   try {
@@ -87,7 +87,8 @@ const app = {
   gaitPending: false,
   lioAligning: false,
   walkMode: null,         // 由遥测推断：'torque' | 'step'
-  poseHandoff: null,      // 待交接给网关的姿态（切档时记下，claim 时带走）
+  poseHandoff: null,      // 待交接给网关的姿态（切档时记下，网关认了才算完）
+  poseHintWarned: false,  // 旧网关的提示只说一次，别在遥控时反复弹
   modePick: null,         // G20 三挡或点按：manual | assist | auto
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
@@ -322,10 +323,19 @@ function send(obj) {
     if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'ptz') return;
     if (t === 'cmd' && obj.name !== 'estop') return;
   }
+  // 走网关发过起立/趴下之后，网关那份记忆就是它自己刚写的，比我们从 2.4G 带过来
+  // 的旧认知新。不在这里放手，操作员在 MESH 下按趴下之后界面还会显示站立。
+  if (obj.t === 'cmd' && POSE_CMDS[obj.name]) app.poseHandoff = null;
   if (app.ws && app.ws.readyState === WebSocket.OPEN) {
     app.ws.send(JSON.stringify(obj));
   }
 }
+
+// 会改变姿态的那几条。与 RadioLink.POSE_CMDS 同一份清单。
+const POSE_CMDS = {
+  stand: true, stand_up: true, sit: true, sit_down: true,
+  unload: true, estop: true,
+};
 
 function linkOpen() {
   return !!(app.ws && app.ws.readyState === WebSocket.OPEN);
@@ -573,10 +583,12 @@ function paintPickers() {
     const el = $(p.val);
     if (!el) continue;
     const on = document.querySelector(p.sel + '.active');
-    let text = on ? on.textContent : '';
+    // 还不知道选的是哪一档（没遥测、这一档里也没点过）时退回菜单名，
+    // 不然按钮上是一片空白，操作员不知道那颗是干什么的。
+    let text = on ? on.textContent : (el.dataset.label || '');
     // 步态切换要跨运动主机与感知主机按序设置，楼梯还要等狗停稳，可达数秒。
     // 这期间显示旧值加省略号，比直接跳到新值老实。
-    if (p.val === 'acc-val-gait' && app.gaitPending) text = (text || '') + '…';
+    if (p.val === 'acc-val-gait' && app.gaitPending) text += '…';
     if (el.textContent !== text) el.textContent = text;
   }
 }
@@ -669,7 +681,11 @@ function adoptRadioPath(path, announce) {
   if (changed && upright !== null) {
     // 交给 2.4G 立刻生效；交给网关要等拿到控制权，所以先存着，claim 时带过去。
     if (next === 'radio') pushPoseToRadio(upright);
-    else app.poseHandoff = upright;
+    else {
+      app.poseHandoff = upright;
+      poseHintAt = 0;
+      app.poseHintWarned = false;
+    }
   }
   applyRadioPath(!!announce);
   renderControl();
@@ -718,35 +734,42 @@ function requestControl() {
   }
   send(claimMsg());
 }
+// 手柄那一层也从这里要权：它自己拼 claim 的话，切档带的姿态就丢了。
+app.claimMsg = claimMsg;
 
 // 刚从 2.4G 切过来时把姿态一并告知：那段起立/趴下没经过网关，它记的是旧的。
-// 交接只做一次，之后网关自己那份记忆就是准的了。
+// 这里**不清掉** app.poseHandoff：这条 claim 可能没被授权（权在别人手上），
+// 也可能网关是旧版根本不认这个键。清早了就等于交接丢了，而丢了的表现正是
+// 「切回 MESH 左下角又变成起立」。等网关的读数真对上了再算交接完（renderState）。
 function claimMsg() {
   const claim = { t: 'claim' };
   if (app.poseHandoff !== null) {
     claim.standing = app.poseHandoff;
-    app.poseHandoff = null;
-    poseHintVal = claim.standing;
-    poseHintAt = Date.now();
+    if (poseHintAt === 0) poseHintAt = Date.now();
   }
   return claim;
 }
 
-// 旧网关不认 claim 里的 standing，会静默忽略 —— 现场表现和这个 bug 没修一模一样
-// （按钮显示起立、推杆不动）。只更新了 App 没更新板子是很容易发生的，
-// 所以过一会儿对一下网关有没有改口，没改就说清楚该更新哪一头。
-let poseHintVal = null;
+// 旧网关不认 claim 里的 standing，会静默忽略。只更新 App 没更新板子很容易发生，
+// 而那时候界面自己知道姿态、网关不知道：按钮按我们知道的显示（见 renderState），
+// 但轴仍会被网关吞掉，所以必须说清楚该更新哪一头。
 let poseHintAt = 0;
 
 function checkPoseHint(s) {
-  if (poseHintVal === null) return;
-  if (Date.now() - poseHintAt < 1500) return;
-  // 没拿到控制权时网关本来就不会采纳，这不能算旧版。
-  if (app.hasControl && !!s.rl_standing !== poseHintVal) {
-    showBanner('板子上的网关还是旧版，切档时的姿态没同步过去。' +
-               '请更新网关，否则起立按钮和推杆会与实际不符', 8000);
+  if (app.poseHandoff === null) return;
+  if (!!s.rl_standing === app.poseHandoff) {
+    // 网关改口了（新网关采纳，或操作员自己按了一次起立/趴下），交接到此结束。
+    app.poseHandoff = null;
+    poseHintAt = 0;
+    return;
   }
-  poseHintVal = null;
+  // 没拿到控制权时网关本来就不会采纳，这不算旧版，也别急着报。
+  if (!app.hasControl) return;
+  if (poseHintAt === 0) poseHintAt = Date.now();
+  if (Date.now() - poseHintAt < 1500 || app.poseHintWarned) return;
+  app.poseHintWarned = true;
+  showBanner('板子上的网关还是旧版，切档时的姿态没同步过去。' +
+             '请更新网关，否则推杆会被网关吞掉（按钮显示的是实际姿态）', 8000);
 }
 
 // ---------------------------------------------------------------------------
@@ -826,7 +849,10 @@ function renderState(s) {
   if (!radioDirect()) {
     checkPoseHint(s);
     app.basicState = s.basic_state;
-    app.rlStanding = !!s.rl_standing;
+    // 交接还没被网关认下来时宁可信自己：这份认知来自 2.4G 那段我们亲手发出去的
+    // 起立/趴下，而网关只是「没见过任何指令」。信网关的表现就是切回 MESH 后
+    // 左下角又变成「起立」，再按一次狗会先趴下去。
+    app.rlStanding = app.poseHandoff !== null ? app.poseHandoff : !!s.rl_standing;
     app.emergencyLocked = s.basic_state === STATE_EMERGENCY || !!s.emergency_source;
   } else if (s.alive && s.basic_state === STATE_EMERGENCY) {
     app.emergencyLocked = true;

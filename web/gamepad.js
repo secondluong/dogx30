@@ -503,7 +503,9 @@
           else showBanner('网关未连，请用 G20 摇杆走已对频的 2.4G，不必点控制权');
           return;
         }
-        if (!app.hasControl) send({ t: 'claim' });
+        // 走 app.claimMsg：刚从 2.4G 切过来时这条 claim 要把姿态一并带给网关，
+        // 自己拼一个空 claim 会把交接吞掉（表现是切回 MESH 又显示「起立」）。
+        if (!app.hasControl) send(app.claimMsg ? app.claimMsg() : { t: 'claim' });
         return;
       }
       if (key === 'yield') {

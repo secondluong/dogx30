@@ -1074,16 +1074,12 @@ html.shell-app .hud-info {
   color: var(--muted);
 }
 
-/* 菜单收起时也要能看出选了哪一档，否则每次都得展开一次才知道。
+/* 收起时按钮上就是当前那一档（「常规 ›」），不再重复写菜单名 —— 遥控时要看的
+   是现在选的什么，而不是这个菜单叫什么。箭头表示点开还能换。
    步态切换要跨两台主机、可达数秒，所以中途显示「…」而不是直接跳到新值。 */
-.acc-val {
-  margin-left: 6px;
-  padding-left: 6px;
-  border-left: 1px solid var(--line);
-  color: var(--accent-soft);
-  font-weight: 600;
-}
-.acc-val:empty { display: none; }
+.acc-btn { display: inline-flex; align-items: center; gap: 6px; }
+.acc-cur { font-weight: 600; }
+.acc-arrow { color: var(--muted); font-size: 16px; line-height: 1; }
 /* 选中项右侧打个勾。只靠底色区分，戴手套在阳光下看不清哪个是当前档。 */
 .acc-pop .btn.sm.active::after {
   content: '✓';

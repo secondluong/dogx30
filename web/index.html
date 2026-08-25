@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260825o">
+<link rel="stylesheet" href="style.css?v=20260825p">
 </head>
 <body>
 
@@ -310,8 +310,12 @@
       <button type="button" class="btn sm" data-cmd="step">起步</button>
     </div>
     <div class="acc">
-      <!-- 收起来的时候也要看得见现在选的是哪一档：展开一次才知道，遥控时是负担。 -->
-      <button type="button" class="btn acc-btn" data-acc="gait">步态<span class="acc-val" id="acc-val-gait"></span></button>
+      <!-- 收起来的时候直接显示当前选的那一档，箭头表示点开还能换。还不知道选的是
+           什么（没遥测、也没点过）就先显示 data-label 里的名字。 -->
+      <button type="button" class="btn acc-btn" data-acc="gait" aria-label="步态">
+        <span class="acc-cur" id="acc-val-gait" data-label="步态">步态</span>
+        <span class="acc-arrow" aria-hidden="true">›</span>
+      </button>
       <div class="acc-pop hidden" id="acc-gait">
         <div class="row wrap" id="gait-row">
           <button type="button" class="btn sm" data-gait="walk">常规</button>
@@ -324,7 +328,10 @@
       </div>
     </div>
     <div class="acc">
-      <button type="button" class="btn acc-btn" data-acc="stair">上下楼踏面<span class="acc-val" id="acc-val-stair"></span></button>
+      <button type="button" class="btn acc-btn" data-acc="stair" aria-label="上下楼踏面">
+        <span class="acc-cur" id="acc-val-stair" data-label="上下楼踏面">上下楼踏面</span>
+        <span class="acc-arrow" aria-hidden="true">›</span>
+      </button>
       <div class="acc-pop hidden" id="acc-stair">
         <div class="acc-label">
           <span>踏面</span>
@@ -348,7 +355,10 @@
       </div>
     </div>
     <div class="acc">
-      <button type="button" class="btn acc-btn" data-acc="height">身高<span class="acc-val" id="acc-val-height"></span></button>
+      <button type="button" class="btn acc-btn" data-acc="height" aria-label="身高">
+        <span class="acc-cur" id="acc-val-height" data-label="身高">身高</span>
+        <span class="acc-arrow" aria-hidden="true">›</span>
+      </button>
       <div class="acc-pop hidden" id="acc-height">
         <div class="row wrap">
           <button type="button" class="btn sm" data-height="normal">正常</button>
@@ -373,7 +383,7 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260825o"></script>
-<script src="app.js?v=20260825o"></script>
+<script src="dogcam24.js?v=20260825p"></script>
+<script src="app.js?v=20260825p"></script>
 </body>
 </html>

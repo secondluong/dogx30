@@ -494,10 +494,18 @@ check('切档时把姿态交接给接手的一侧',
       /app\.poseHandoff = upright/.test(appJs) &&
       /claim\.standing = app\.poseHandoff/.test(appJs) &&
       /function checkPoseHint/.test(appJs) &&
+      /app\.claimMsg/.test(read('gamepad.js')) &&
       /radioAdoptPose/.test(radioBridge) &&
       /void adoptPosture\(boolean up\)/.test(radioJava) &&
+      /onRadio\(\(\) -> adoptOnRadio\(up\)\)/.test(radioJava) &&
       /void AdoptPosture\(bool standing\)/.test(motionHpp) &&
       /msg\.Has\("standing"\)/.test(serviceCpp));
+// 交接不能发一次就算完：那条 claim 可能没被授权，网关也可能是旧版不认这个键。
+// 认下来之前界面按自己知道的显示，否则切回 MESH 左下角又变成「起立」。
+check('网关认下来之前按自己知道的显示',
+      /app\.rlStanding = app\.poseHandoff !== null \? app\.poseHandoff/.test(appJs) &&
+      /if \(obj\.t === 'cmd' && POSE_CMDS\[obj\.name\]\) app\.poseHandoff = null/.test(appJs) &&
+      !/app\.poseHandoff = null;\s*\n\s*poseHintVal/.test(appJs));
 // 猜错的代价是按「趴下」时狗反而站起来，比多按一次起立严重得多，所以
 // 只在发过起立/趴下或收到遥测时才交接。
 check('姿态没把握就不交接',
@@ -507,15 +515,23 @@ check('姿态没把握就不交接',
       /linkOpen\(\) && app\.alive \? isStandingUi\(\) : null/.test(appJs) &&
       /if \(granted && msg\.Has\("standing"\)\)/.test(serviceCpp));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
-check('菜单收起时也显示当前档位',
+check('菜单收起时就显示当前档位加箭头',
       !!htmlIds['acc-val-gait'] &&
       !!htmlIds['acc-val-stair'] &&
       !!htmlIds['acc-val-height'] &&
       /function paintPickers/.test(appJs) &&
       /paintPickers\(\);/.test(appJs) &&
       /app\.gaitPending/.test(appJs) &&
-      /\.acc-pop \.btn\.sm\.active::after/.test(styleText) &&
-      /\.acc-val:empty/.test(styleText));
+      /el\.dataset\.label/.test(appJs) &&
+      /class="acc-arrow"[^>]*>›</.test(html) &&
+      /\.acc-arrow \{/.test(styleText) &&
+      /\.acc-pop \.btn\.sm\.active::after/.test(styleText));
+// 三颗按钮上原来写的是菜单名（步态/上下楼踏面/身高），现在换成当前那一档。
+// 名字只在还不知道选了什么时兜底，所以留在 data-label 里，不再硬写在按钮文字上。
+check('按钮上不再重复菜单名',
+      /data-label="步态"/.test(html) &&
+      !/data-acc="gait">步态</.test(html) &&
+      /aria-label="步态"/.test(html));
 // 刚开机或刚切过来时我们什么都没点过，档位只能问狗。身高是单独一条报文，
 // 不解它就只能显示「我点过的」，那在切档之后必然是错的。
 check('2.4G 的档位也听狗自己报',
