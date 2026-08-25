@@ -71,6 +71,7 @@ const app = {
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
 };
 app.radioFallback = app.radioPath === 'radio';
+window.app = app;
 
 // 踏步态才走速度通道，力控站立走姿态通道。其余状态下摇杆无意义，直接禁用，
 // 免得用户对着没反应的摇杆反复推。
@@ -140,7 +141,8 @@ function meshWsUrl() {
 
 function connect() {
   // 顶栏选了 2.4G 就只走数传，不再连网关。
-  if (isAppShell && app.radioPath === 'radio') {
+  syncNativeRadioPath();
+  if (radioDirect()) {
     applyRadioPath(false);
     setLink(false);
     renderControl();
@@ -282,13 +284,15 @@ function hasNativeRadio() {
 }
 
 function radioDirect() {
-  return isAppShell && app.radioPath === 'radio';
+  if (!isAppShell) return false;
+  if (app.radioPath === 'radio') return true;
+  return nativeRadioPath() === 'radio';
 }
 
 function send(obj) {
   if (!obj) return;
   // 只有安装包真能直达时，2.4G 才停掉网关运动。否则切 2.4G 等于把 MESH 也掐死。
-  if (isAppShell && app.radioPath === 'radio' && hasNativeRadio()) {
+  if (radioDirect() && hasNativeRadio()) {
     const t = obj.t;
     if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'ptz') return;
     if (t === 'cmd' && obj.name !== 'estop') return;
@@ -304,13 +308,13 @@ function linkOpen() {
 app.linkOpen = linkOpen;
 
 function radioOnly() {
-  if (isAppShell && app.radioPath === 'radio') return true;
+  if (radioDirect()) return true;
   return !linkOpen() || (app.radioFallback && !app.hasControl);
 }
 app.radioOnly = radioOnly;
 
 function radioHint(kind) {
-  if (isAppShell && app.radioPath === 'radio') {
+  if (radioDirect()) {
     showBanner(kind === 'g20'
       ? '当前 2.4G：起立/趴下/行走直达运动主机'
       : '2.4G 姿态没发出去。请先切回 MESH 看画面，或重装 App');
@@ -473,10 +477,17 @@ function notifyNativeRadio() {
   } catch (e) { /* 网页没有原生桥 */ }
 }
 
+function syncNativeRadioPath() {
+  const native = nativeRadioPath();
+  if (!native || native === app.radioPath) return;
+  adoptRadioPath(native, false);
+}
+app.syncNativeRadioPath = syncNativeRadioPath;
+
 function applyRadioPath(announce) {
   app.radioFallback = app.radioPath === 'radio';
   document.documentElement.classList.toggle('radio-24', radioDirect());
-  notifyNativeRadio();
+  // 初次绘制不要把原生已选的 2.4G 写回 MESH。只在用户或原生真切了档时通知。
   if (app.radioPath === 'radio') {
     if (hasNativeRadio()) {
       if (app.hasControl) {
@@ -541,7 +552,7 @@ app.adoptRadioPath = adoptRadioPath;
 // 网页控制台仍是观察者，避免笔记本开着就把手柄的权抢走。
 function requestControl() {
   if (app.hasControl) return;
-  if (isAppShell && app.radioPath === 'radio') return;
+  if (radioDirect()) return;
   if (!linkOpen()) {
     radioHint();
     return;
@@ -758,8 +769,9 @@ function showBanner(text, holdMs, kind) {
 function paintStandButton() {
   const btn = $('btn-stand');
   if (!btn) return;
-  const standBusy = app.basicState === STATE_SIT_TO_STAND ||
-                    app.basicState === STATE_STAND_TO_SIT;
+  const standBusy = !radioDirect() &&
+                    (app.basicState === STATE_SIT_TO_STAND ||
+                     app.basicState === STATE_STAND_TO_SIT);
   btn.disabled = standBusy;
   if (app.emergencyLocked) {
     btn.textContent = '卸力';
@@ -942,6 +954,7 @@ let ptzNeedControlAt = 0;
 let ptzClaimedAt = 0;
 
 setInterval(() => {
+  syncNativeRadioPath();
   paintStickChip();
   if (radioDirect() && hasNativeRadio()) paintRadioChip();
   const c = activeChannels();
@@ -1028,7 +1041,8 @@ if ($('btn-radio')) {
 
 // 急停不检查控制权，任何客户端任何时候都能按。
 $('btn-estop').addEventListener('click', () => {
-  if (isAppShell && app.radioPath === 'radio') {
+  syncNativeRadioPath();
+  if (radioDirect() && hasNativeRadio()) {
     nativeRadioCmd('estop');
     applyRadioPose('estop');
   }
@@ -1060,19 +1074,23 @@ function radioCmdFromEl(el) {
   return '';
 }
 
+function fireRadioFromEl(el) {
+  const name = radioCmdFromEl(el);
+  if (!name || !nativeRadioCmd(name)) return '';
+  const st = nativeRadioStatus() || {};
+  if (!st.ready) {
+    showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
+  }
+  applyRadioPose(name);
+  markPending(el);
+  return name;
+}
+
 function guarded(fn) {
   return (ev) => {
-    if (isAppShell && app.radioPath === 'radio') {
-      const name = radioCmdFromEl(ev && ev.currentTarget);
-      if (name && nativeRadioCmd(name)) {
-        const st = nativeRadioStatus() || {};
-        if (!st.ready) {
-          showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
-        }
-        applyRadioPose(name);
-        markPending(ev.currentTarget);
-        return;
-      }
+    syncNativeRadioPath();
+    if (radioDirect() && hasNativeRadio()) {
+      if (fireRadioFromEl(ev && ev.currentTarget)) return;
       radioHint();
       return;
     }
@@ -1395,6 +1413,7 @@ if ($('gas-panel')) {
   if ($('btn-gas')) $('btn-gas').classList.remove('active');
 }
 if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
+syncNativeRadioPath();
 applyRadioPath(false);
 
 connect();

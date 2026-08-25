@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>手柄诊断 · X30</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { padding: 12px; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; line-height: 1.7; }
+
+  .verdict { border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; font-size: 14px; line-height: 1.8; }
+  .verdict.wait { background: rgba(210,153,34,.12); border: 1px solid rgba(210,153,34,.4); }
+  .verdict.ok   { background: rgba(63,185,80,.12);  border: 1px solid rgba(63,185,80,.4); }
+  .verdict.bad  { background: rgba(248,81,73,.12);  border: 1px solid rgba(248,81,73,.4); }
+  .verdict b { color: var(--text); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 12px; color: var(--muted); letter-spacing: .5px; margin: 0 0 10px; font-weight: 600; }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+
+  .ax { display: grid; grid-template-columns: 44px 1fr 132px; gap: 8px; align-items: center; margin-bottom: 7px; font-size: 12px; }
+  .ax .name { color: var(--muted); font-family: ui-monospace, monospace; }
+  .track { position: relative; height: 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .track .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line); }
+  .track .fill { position: absolute; top: 0; bottom: 0; background: var(--accent); }
+  .track .peak { position: absolute; top: 0; bottom: 0; background: rgba(47,129,247,.22); }
+  .ax .num { font-family: ui-monospace, monospace; color: var(--muted); text-align: right; font-size: 11px; }
+  .ax.moved .name { color: var(--accent); }
+
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .bchip { min-width: 40px; text-align: center; padding: 6px 8px; border-radius: 7px;
+           background: var(--panel-2); border: 1px solid var(--line);
+           font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+  .bchip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .bchip.seen { border-color: rgba(47,129,247,.5); color: var(--text); }
+
+  .maprow { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
+            padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .maprow:last-child { border-bottom: none; }
+  .maprow .got { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); min-width: 84px; text-align: right; }
+  .maprow .got.set { color: var(--ok); }
+  .maprow.arm { background: rgba(47,129,247,.10); }
+  .maprow.arm .label::before { content: "▶ "; color: var(--accent); }
+
+  textarea { width: 100%; box-sizing: border-box; height: 168px; background: var(--panel-2);
+             color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+             padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.6; }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.8; margin-top: 8px; }
+  .live-now {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 16px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    user-select: text;
+  }
+  .live-log { margin: 10px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+  .reftable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .reftable th, .reftable td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+  .reftable th { color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>手柄诊断</h1>
+<p class="sub">
+  用来确认手柄的物理摇杆与按键能否被 Android 浏览器读到，并生成按键映射。<br>
+  在手柄上打开本页，<b>先随便按一个键</b>——多数浏览器要先有输入事件才会暴露手柄。
+</p>
+
+<div id="verdict" class="verdict wait">
+  等待手柄输入……请拨动摇杆或按任意键。
+</div>
+
+<div class="card" id="live-card" hidden>
+  <h2>刚才按下（对照这个记键值）</h2>
+  <div id="live-now" class="live-now">按任意键……</div>
+  <ol id="live-log" class="live-log"></ol>
+</div>
+
+<div class="card" id="ref-card">
+  <h2>标准布局键值（mapping = standard 时）</h2>
+  <table class="reftable">
+    <tr><th>键</th><th>常见名字</th><th>本控制台默认功能</th></tr>
+    <tr><td>b0</td><td>A / 南 / 叉</td><td>坐 / 站</td></tr>
+    <tr><td>b1</td><td>B / 东 / 圆</td><td>起步 / 停步</td></tr>
+    <tr><td>b2</td><td>X / 西 / 方</td><td>力控站立</td></tr>
+    <tr><td>b3</td><td>Y / 北 / 三角</td><td>（未默认）</td></tr>
+    <tr><td>b4</td><td>LB / L1</td><td>步态下一个</td></tr>
+    <tr><td>b5</td><td>RB / R1</td><td>步态上一个</td></tr>
+    <tr><td>b6</td><td>LT / L2</td><td>（未默认，适合死人开关）</td></tr>
+    <tr><td>b7</td><td>RT / R2</td><td>（未默认）</td></tr>
+    <tr><td>b8</td><td>Back / Select</td><td>（未默认）</td></tr>
+    <tr><td>b9</td><td>Start / Options</td><td>（未默认，急停请自己指定）</td></tr>
+    <tr><td>b10 / b11</td><td>L3 / R3 按下摇杆</td><td>（未默认）</td></tr>
+    <tr><td>b12–b15</td><td>方向键 ↑ ↓ ← →</td><td>（未默认）</td></tr>
+    <tr><td>a0 / a1</td><td>左摇杆 X / Y</td><td>平移 / 前进</td></tr>
+    <tr><td>a2 / a3</td><td>右摇杆 X / Y</td><td>转向 / 俯仰</td></tr>
+  </table>
+  <p class="note">急停故意不给默认键，避免在不认识的手柄上按错。非标准布局只看下面亮起来的 b 编号。</p>
+</div>
+
+<div class="card" id="info-card" hidden>
+  <h2>设备信息</h2>
+  <dl class="kv">
+    <dt>id</dt><dd id="i-id">—</dd>
+    <dt>index</dt><dd id="i-index">—</dd>
+    <dt>mapping</dt><dd id="i-mapping">—</dd>
+    <dt>轴 / 键</dt><dd id="i-count">—</dd>
+  </dl>
+</div>
+
+<div class="card" id="axes-card" hidden>
+  <h2>摇杆轴（浅色为历史行程范围）</h2>
+  <div id="axes"></div>
+  <div class="row" style="margin-top:10px">
+    <button class="btn sm" id="btn-drift">测量静止漂移（松手后点，2 秒）</button>
+    <button class="btn sm" id="btn-reset">清除历史</button>
+  </div>
+  <div class="note" id="drift-out"></div>
+</div>
+
+<div class="card" id="btns-card" hidden>
+  <h2>按键（按过的会亮边框）</h2>
+  <div class="btns" id="btns"></div>
+</div>
+
+<div class="card" id="map-card" hidden>
+  <h2>映射向导：点一行，然后拨动对应控件</h2>
+  <div id="maprows"></div>
+  <div class="row" style="margin-top:10px">
+    <button class="btn sm" id="btn-clearmap">清除映射</button>
+  </div>
+</div>
+
+<div class="card" id="out-card" hidden>
+  <h2>结果（复制这段发回）</h2>
+  <textarea id="out" readonly></textarea>
+  <div class="row" style="margin-top:8px">
+    <button class="btn sm" id="btn-apply">应用到控制台</button>
+    <button class="btn sm" id="btn-copy">复制</button>
+  </div>
+  <div class="note" id="apply-out">
+    本页和控制台同源，「应用到控制台」直接把映射写进本机存储，
+    回控制台刷新即可生效，不用复制粘贴。<br>
+    换一台设备操作时才需要「复制」，再到控制台上用「粘贴映射」。
+  </div>
+</div>
+
+<script src="gamepad.js"></script>
+<script>
+"use strict";
+
+// 需要映射的功能。顺序即向导里的顺序。
+// 急停单列在最后并特别标注：它必须是独立物理键，且在实现里不参与控制权判断。
+const TARGETS = [
+  { key: "vx",      label: "前进 / 后退（左摇杆上下）",  kind: "axis" },
+  { key: "vy",      label: "左右平移（左摇杆左右）",     kind: "axis" },
+  { key: "wz",      label: "转向（右摇杆左右）",         kind: "axis" },
+  { key: "pitch",   label: "俯仰（右摇杆上下，姿态用）", kind: "axis" },
+  { key: "stand",   label: "坐 / 站",                    kind: "button" },
+  { key: "torque",  label: "力控站立",                   kind: "button" },
+  { key: "step",    label: "起步 / 停步",                kind: "button" },
+  { key: "gait_up", label: "步态切换（上一个）",         kind: "button" },
+  { key: "gait_dn", label: "步态切换（下一个）",         kind: "button" },
+  { key: "estop",   label: "急停（独立物理键）",         kind: "button" },
+  { key: "deadman", label: "死人开关（可选，按住才能推动）", kind: "button" },
+];
+
+const $ = (id) => document.getElementById(id);
+
+let pad = null;          // 当前手柄快照
+let padIndex = null;
+let axCount = 0, btnCount = 0;
+
+const peak = [];         // 每个轴的历史 [min,max]
+const rest = [];         // 松手漂移测量结果
+const btnSeen = [];      // 按过的键
+const btnPrev = [];
+const liveLog = [];
+const STD_BTN = [
+  "A / 南", "B / 东", "X / 西", "Y / 北",
+  "LB", "RB", "LT", "RT",
+  "Back", "Start", "L3", "R3",
+  "↑", "↓", "←", "→", "Home",
+];
+let armed = null;        // 向导当前等待的目标 key
+const mapping = {};      // key -> {type:'axis'|'button', index, invert?}
+let armBaseline = null;  // 进入等待时的轴基线，用来判断哪个轴动了
+let drift = { active: false, until: 0, max: [] };
+
+// --- 渲染骨架 --------------------------------------------------------------
+
+function buildSkeleton(gp) {
+  axCount = gp.axes.length;
+  btnCount = gp.buttons.length;
+
+  const axBox = $("axes");
+  axBox.innerHTML = "";
+  for (let i = 0; i < axCount; i++) {
+    peak[i] = [0, 0];
+    rest[i] = 0;
+    const row = document.createElement("div");
+    row.className = "ax";
+    row.id = "ax" + i;
+    row.innerHTML =
+      '<span class="name">a' + i + '</span>' +
+      '<span class="track"><span class="peak"></span><span class="mid"></span><span class="fill"></span></span>' +
+      '<span class="num">0.000</span>';
+    axBox.appendChild(row);
+  }
+
+  const bBox = $("btns");
+  bBox.innerHTML = "";
+  for (let i = 0; i < btnCount; i++) {
+    btnSeen[i] = false;
+    const el = document.createElement("span");
+    el.className = "bchip";
+    el.id = "b" + i;
+    el.textContent = STD_BTN[i] ? ("b" + i + " " + STD_BTN[i]) : ("b" + i);
+    bBox.appendChild(el);
+  }
+
+  const mBox = $("maprows");
+  mBox.innerHTML = "";
+  TARGETS.forEach((t) => {
+    const row = document.createElement("div");
+    row.className = "maprow";
+    row.id = "m-" + t.key;
+    row.innerHTML =
+      '<span class="label">' + t.label + '</span>' +
+      '<span class="got" id="g-' + t.key + '">未设置</span>' +
+      '<button class="btn sm" data-arm="' + t.key + '">设定</button>';
+    mBox.appendChild(row);
+  });
+  mBox.querySelectorAll("[data-arm]").forEach((b) => {
+    b.addEventListener("click", () => arm(b.dataset.arm));
+  });
+
+  ["live-card", "info-card", "axes-card", "btns-card", "map-card", "out-card"].forEach((id) => {
+    $(id).hidden = false;
+  });
+
+  $("i-id").textContent = gp.id;
+  $("i-index").textContent = gp.index;
+  $("i-mapping").textContent = gp.mapping || "(空，非标准布局)";
+  $("i-count").textContent = axCount + " 轴 / " + btnCount + " 键";
+}
+
+// --- 向导 ------------------------------------------------------------------
+
+function arm(key) {
+  armed = key;
+  armBaseline = pad ? Array.from(pad.axes) : null;
+  document.querySelectorAll(".maprow").forEach((r) => r.classList.remove("arm"));
+  const row = $("m-" + key);
+  if (row) row.classList.add("arm");
+}
+
+function capture(key, type, index, invert) {
+  mapping[key] = { type, index, invert: !!invert };
+  const g = $("g-" + key);
+  g.textContent = (type === "axis" ? "a" : "b") + index + (invert ? " (反向)" : "");
+  g.classList.add("set");
+  $("m-" + key).classList.remove("arm");
+  armed = null;
+  armBaseline = null;
+  renderOut();
+}
+
+function detectArmed(gp) {
+  if (!armed) return;
+  const target = TARGETS.find((t) => t.key === armed);
+  if (!target) return;
+
+  if (target.kind === "button") {
+    for (let i = 0; i < gp.buttons.length; i++) {
+      if (gp.buttons[i].pressed) { capture(armed, "button", i, false); return; }
+    }
+    return;
+  }
+
+  // 轴：找相对基线位移最大且超过阈值的那个，顺便记录方向。
+  if (!armBaseline) { armBaseline = Array.from(gp.axes); return; }
+  let best = -1, bestDelta = 0.45;
+  for (let i = 0; i < gp.axes.length; i++) {
+    const d = gp.axes[i] - (armBaseline[i] || 0);
+    if (Math.abs(d) > Math.abs(bestDelta)) { best = i; bestDelta = d; }
+  }
+  // 约定正方向为「前进 / 左移 / 左转」，推杆得到负值时标记反向。
+  if (best >= 0) capture(armed, "axis", best, bestDelta < 0);
+}
+
+// --- 主循环 ----------------------------------------------------------------
+
+function poll() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  for (let i = 0; i < pads.length; i++) {
+    if (pads[i] && pads[i].connected) { gp = pads[i]; break; }
+  }
+
+  if (gp && padIndex !== gp.index) {
+    padIndex = gp.index;
+    buildSkeleton(gp);
+    setVerdict("ok",
+      "<b>手柄可读。</b>浏览器识别到 " + gp.axes.length + " 个轴、" +
+      gp.buttons.length + " 个键。请逐个拨动摇杆、按遍所有按键和拨轮，" +
+      "确认物理控件都出现在下面；没反应的控件说明没接到 Android 层。");
+  }
+  pad = gp;
+
+  if (gp) {
+    updateAxes(gp);
+    updateButtons(gp);
+    detectArmed(gp);
+  }
+  requestAnimationFrame(poll);
+}
+
+function updateAxes(gp) {
+  const now = performance.now();
+  if (drift.active && now > drift.until) finishDrift();
+
+  for (let i = 0; i < gp.axes.length && i < axCount; i++) {
+    const v = gp.axes[i];
+    if (v < peak[i][0]) peak[i][0] = v;
+    if (v > peak[i][1]) peak[i][1] = v;
+    if (drift.active) drift.max[i] = Math.max(drift.max[i] || 0, Math.abs(v));
+
+    const row = $("ax" + i);
+    if (!row) continue;
+    const fill = row.querySelector(".fill");
+    const pk = row.querySelector(".peak");
+    // 轴范围按 -1..1 画，中点在 50%。
+    const pct = (x) => Math.max(0, Math.min(100, (x + 1) * 50));
+    const c = pct(0), p = pct(v);
+    fill.style.left = Math.min(c, p) + "%";
+    fill.style.width = Math.abs(p - c) + "%";
+    pk.style.left = pct(peak[i][0]) + "%";
+    pk.style.width = (pct(peak[i][1]) - pct(peak[i][0])) + "%";
+    row.querySelector(".num").textContent =
+      v.toFixed(3) + "  [" + peak[i][0].toFixed(2) + "," + peak[i][1].toFixed(2) + "]";
+    row.classList.toggle("moved", Math.abs(v) > 0.15);
+  }
+}
+
+function btnLabel(i) {
+  return STD_BTN[i] ? ("b" + i + " " + STD_BTN[i]) : ("b" + i);
+}
+
+function updateButtons(gp) {
+  const now = [];
+  for (let i = 0; i < gp.buttons.length && i < btnCount; i++) {
+    const b = gp.buttons[i];
+    const el = $("b" + i);
+    if (!el) continue;
+    if (b.pressed) btnSeen[i] = true;
+    el.classList.toggle("on", b.pressed);
+    el.classList.toggle("seen", btnSeen[i]);
+    const analog = b.value > 0 && b.value < 1;
+    el.textContent = analog ? btnLabel(i) + " " + b.value.toFixed(2) : btnLabel(i);
+    if (b.pressed && !btnPrev[i]) {
+      const line = btnLabel(i) + (analog ? "  value=" + b.value.toFixed(2) : "");
+      now.push(line);
+      if (liveLog[0] !== line) liveLog.unshift(line);
+      if (liveLog.length > 16) liveLog.length = 16;
+    }
+    btnPrev[i] = b.pressed;
+  }
+  const live = $("live-now");
+  const log = $("live-log");
+  if (live) {
+    live.textContent = now.length
+      ? "刚才按下：" + now.join("  |  ")
+      : (liveLog[0] ? "刚才按下：" + liveLog[0] : "按任意键……");
+  }
+  if (log) {
+    log.innerHTML = liveLog.map((t) => "<li>" + t + "</li>").join("");
+  }
+}
+
+// --- 静止漂移 --------------------------------------------------------------
+
+function startDrift() {
+  if (!pad) return;
+  drift = { active: true, until: performance.now() + 2000, max: [] };
+  $("drift-out").textContent = "测量中，请完全松开摇杆……";
+}
+
+function finishDrift() {
+  drift.active = false;
+  let worst = 0;
+  const parts = [];
+  for (let i = 0; i < axCount; i++) {
+    const d = drift.max[i] || 0;
+    rest[i] = d;
+    worst = Math.max(worst, d);
+    parts.push("a" + i + "=" + d.toFixed(3));
+  }
+  const suggest = Math.max(0.05, Math.ceil(worst * 1.5 * 100) / 100);
+  $("drift-out").innerHTML =
+    "静止漂移：" + parts.join("，") + "<br>" +
+    "最大 " + worst.toFixed(3) + "，建议死区取 <b>" + suggest.toFixed(2) + "</b>。" +
+    (worst > 0.2 ? " 漂移偏大，摇杆可能需要校准。" : "");
+  renderOut();
+}
+
+// --- 输出 ------------------------------------------------------------------
+
+function renderOut() {
+  if (!pad) return;
+  const worst = rest.reduce((a, b) => Math.max(a, b || 0), 0);
+  const out = {
+    device: pad.id,
+    mapping_std: pad.mapping || null,
+    axes: axCount,
+    buttons: btnCount,
+    axis_range: peak.map((p, i) => ({ axis: i, min: +p[0].toFixed(3), max: +p[1].toFixed(3) })),
+    buttons_seen: btnSeen.map((v, i) => (v ? i : -1)).filter((i) => i >= 0),
+    rest_drift: rest.map((v) => +(v || 0).toFixed(3)),
+    suggested_deadzone: worst > 0 ? +Math.max(0.05, Math.ceil(worst * 1.5 * 100) / 100).toFixed(2) : null,
+    map: mapping,
+  };
+  $("out").value = JSON.stringify(out, null, 2);
+}
+
+function setVerdict(cls, html) {
+  const el = $("verdict");
+  el.className = "verdict " + cls;
+  el.innerHTML = html;
+}
+
+// 若干秒仍无输入，多半是摇杆根本没接到 Android 层。
+setTimeout(() => {
+  if (pad) return;
+  setVerdict("bad",
+    "<b>没有检测到任何手柄。</b>如果你已经拨过摇杆、按过按键，那么这些物理控件" +
+    "很可能没有接到 Android 的输入层——不少手持地面站的摇杆是直接走 S.BUS 到" +
+    "电台的，Android 侧只拿到图传和遥测。<br>" +
+    "G20 请用 App 遥控台，不要用这个浏览器 Gamepad 页。" +
+    "原厂 2.4G 无线电手柄仍直连运动主机。触摸屏虚拟摇杆仍然可用。");
+}, 12000);
+
+$("btn-drift").addEventListener("click", startDrift);
+$("btn-reset").addEventListener("click", () => {
+  for (let i = 0; i < axCount; i++) peak[i] = [0, 0];
+  for (let i = 0; i < btnCount; i++) btnSeen[i] = false;
+  renderOut();
+});
+$("btn-clearmap").addEventListener("click", () => {
+  Object.keys(mapping).forEach((k) => delete mapping[k]);
+  TARGETS.forEach((t) => {
+    const g = $("g-" + t.key);
+    if (g) { g.textContent = "未设置"; g.classList.remove("set"); }
+  });
+  renderOut();
+});
+$("btn-copy").addEventListener("click", async () => {
+  const ta = $("out");
+  try {
+    await navigator.clipboard.writeText(ta.value);
+    $("btn-copy").textContent = "已复制";
+    setTimeout(() => ($("btn-copy").textContent = "复制"), 1500);
+  } catch (e) {
+    ta.removeAttribute("readonly");
+    ta.select();
+    document.execCommand("copy");
+    ta.setAttribute("readonly", "");
+  }
+});
+
+$("btn-apply").addEventListener("click", () => {
+  const out = $("apply-out");
+  let obj;
+  try {
+    obj = JSON.parse($("out").value);
+  } catch (e) {
+    out.innerHTML = "<b>还没有可用的结果。</b>先拨动摇杆让本页识别到手柄。";
+    return;
+  }
+  // 用控制台那边同一套校验，避免这里说"成功"而控制台拒绝加载。
+  const v = window.X30Gamepad
+    ? window.X30Gamepad.validateConfig(obj)
+    : { ok: true };
+  if (!v.ok) {
+    out.innerHTML = "<b>还不能用：" + v.error + "</b><br>" +
+      "至少要把四个摇杆轴设定好，急停建议也设一个独立物理键。";
+    return;
+  }
+  localStorage.setItem(window.X30Gamepad.STORE_KEY, JSON.stringify(obj));
+  const missing = TARGETS.filter((t) => !mapping[t.key]).map((t) => t.label);
+  out.innerHTML = "<b>已写入本机存储</b>，回控制台刷新即可生效。" +
+    (missing.length
+      ? "<br>还没设定：" + missing.join("、") + "（这些功能仍可用屏幕按钮）"
+      : "<br>全部功能都已映射。");
+});
+
+window.addEventListener("gamepadconnected", () => {});
+poll();
+</script>
+</body>
+</html>

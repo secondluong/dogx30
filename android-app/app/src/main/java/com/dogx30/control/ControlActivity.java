@@ -86,6 +86,7 @@ public class ControlActivity extends AppCompatActivity {
         web.addJavascriptInterface(nativeBridge, "X30Native");
 
         btnRadioPath = findViewById(R.id.btn_radio_path);
+        btnRadioPath.setVisibility(View.GONE);
         btnRadioPath.setOnClickListener(v -> toggleRadioPath());
         txtRadioStat = findViewById(R.id.txt_radio_stat);
         txtRadioStat.setOnClickListener(v -> showRadioStatDialog());
@@ -171,6 +172,8 @@ public class ControlActivity extends AppCompatActivity {
 
     private void paintNativeRadioBtn() {
         if (btnRadioPath == null) return;
+        // 顶栏改由网页 #btn-radio 切换，避免原生按钮盖住「模式」。
+        btnRadioPath.setVisibility(View.GONE);
         boolean radio = "radio".equals(GatewayStore.radioPath(this));
         btnRadioPath.setText(radio ? R.string.radio_24g : R.string.radio_mesh);
         btnRadioPath.setBackgroundResource(radio ? R.drawable.btn_radio_on : R.drawable.btn_radio);

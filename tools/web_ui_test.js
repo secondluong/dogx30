@@ -275,6 +275,14 @@ check('切 2.4G 不经网关下发',
       /applyRadioPose/.test(appJs) &&
       /function meshWsUrl/.test(appJs) &&
       /getRadioPath/.test(appJs));
+check('原生切 2.4G 能找到 window.app',
+      /window\.app = app/.test(appJs) &&
+      /function syncNativeRadioPath/.test(appJs) &&
+      /function fireRadioFromEl/.test(appJs) &&
+      /radioDirect\(\) && hasNativeRadio/.test(appJs));
+check('App 壳顶栏用网页 2.4G 按钮',
+      /html\.shell-app #btn-radio \{[^}]*display:\s*inline-block/.test(styleText) &&
+      /html\.shell-app #radio-slot \{[^}]*display:\s*none/.test(styleText));
 var radioJava = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
             'com', 'dogx30', 'control', 'RadioLink.java'), 'utf8');
@@ -322,6 +330,7 @@ check('链路只跟顶栏 MESH/2.4G 按钮',
       /txt_radio_stat/.test(radioLayout) &&
       /statusLine/.test(radioJava) &&
       /void toggleRadioPath\(/.test(radioBridge) &&
+      /btnRadioPath\.setVisibility\(View\.GONE\)/.test(radioBridge) &&
       /saveRadioPath/.test(radioBridge) &&
       /android_asset\/web\/index\.html/.test(radioBridge) &&
       !/gatewayReachable/.test(radioBridge) &&
