@@ -579,6 +579,9 @@ check('上下楼三档必选其一',
       /markStairPick\(b\.dataset\.gait\)/.test(appJs) &&
       /markStairPick\(key\)/.test(appJs) &&
       /#stair-row \[data-gait\]\.pick/.test(appJs) &&
+      /data-short="多帧"/.test(html) &&
+      /on\.dataset\.short \|\| on\.textContent/.test(appJs) &&
+      /\.hud-menus \.hud-walk \{ flex-wrap: nowrap; \}/.test(styleText) &&
       /\.acc-pop \.btn\.sm\.pick \{/.test(styleText) &&
       /\.acc-pop \.btn\.sm\.pick::after/.test(styleText));
 

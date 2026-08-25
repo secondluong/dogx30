@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825q';
+const WEB_BUILD = '0825r';
 
 function nativeAppVersion() {
   try {
@@ -625,7 +625,8 @@ function paintPickers() {
     const on = document.querySelector(p.sel);
     // 还不知道选的是哪一档（没遥测、这一档里也没点过）时退回菜单名，
     // 不然按钮上是一片空白，操作员不知道那颗是干什么的。
-    let text = on ? on.textContent : (el.dataset.label || '');
+    // 有 data-short 的用短名：底栏就那么宽，长名字会把整排挤成两行。
+    let text = on ? (on.dataset.short || on.textContent) : (el.dataset.label || '');
     // 步态切换要跨运动主机与感知主机按序设置，楼梯还要等狗停稳，可达数秒。
     // 这期间显示旧值加省略号，比直接跳到新值老实。
     if (p.val === 'acc-val-gait' && app.gaitPending) text += '…';

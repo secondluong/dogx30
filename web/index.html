@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260825q">
+<link rel="stylesheet" href="style.css?v=20260825r">
 </head>
 <body>
 
@@ -349,10 +349,12 @@
         </div>
         <!-- 这三档是必选一项：上楼时总得有一种，默认楼梯。pick 表示「上楼用这个」，
              active 表示「狗现在真在这个步态」，两者可能不一致（切换要地形图配合）。 -->
+        <!-- data-short 是收起来之后按钮上显示的字。底栏两个摇杆之间就那么宽，
+             「楼梯(多帧)」这种长名字会把整排挤成两行。 -->
         <div class="row wrap" id="stair-row">
-          <button type="button" class="btn sm pick" data-gait="stair">楼梯</button>
-          <button type="button" class="btn sm" data-gait="stairmulti">楼梯(多帧)</button>
-          <button type="button" class="btn sm" data-gait="stair45">45°楼梯</button>
+          <button type="button" class="btn sm pick" data-gait="stair" data-short="楼梯">楼梯</button>
+          <button type="button" class="btn sm" data-gait="stairmulti" data-short="多帧">楼梯(多帧)</button>
+          <button type="button" class="btn sm" data-gait="stair45" data-short="45°">45°楼梯</button>
         </div>
       </div>
     </div>
@@ -385,7 +387,7 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260825q"></script>
-<script src="app.js?v=20260825q"></script>
+<script src="dogcam24.js?v=20260825r"></script>
+<script src="app.js?v=20260825r"></script>
 </body>
 </html>

@@ -1045,6 +1045,10 @@ html.shell-app .hud-info {
   display: flex;
   gap: 8px;
 }
+/* 这一排必须始终是一行。以前力控/起步那两颗在 .row.wrap 里，屏幕一窄就折到
+   第二行，五颗按钮排成两行，遥控时既难看也容易点错。 */
+.hud-menus .hud-walk { flex-wrap: nowrap; }
+.hud-menus .hud-walk .btn { flex: 0 0 auto; min-width: 0; }
 .acc { position: relative; }
 .acc-btn {
   background: rgba(28, 34, 48, .78);
@@ -1126,7 +1130,9 @@ html:not(.radio-24) .dog-prone .hud-menus { display: none !important; }
 @media (max-width: 820px) {
   .hud-sticks .stick { width: 120px; height: 120px; }
   .hud-sticks .knob { width: 44px; height: 44px; }
-  .hud-menus { left: 50%; right: auto; transform: translateX(-50%); bottom: 16px; flex-wrap: nowrap; max-width: none; }
+  .hud-menus { left: 50%; right: auto; transform: translateX(-50%); bottom: 16px; flex-wrap: nowrap; max-width: none; gap: 6px; }
+  /* 窄屏上两个摇杆之间只剩几百像素，这一排要收着放才排得下一行 */
+  .hud-menus .btn.sm, .hud-menus .acc-btn { padding: 7px 9px; }
   .acc-pop { left: 50%; right: auto; transform: translateX(-50%); }
   .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .hud-info { width: min(520px, calc(100% - 20px)); }
