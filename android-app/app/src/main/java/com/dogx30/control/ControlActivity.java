@@ -45,8 +45,8 @@ public class ControlActivity extends AppCompatActivity {
     private EditText overlayHost;
     private EditText overlayPort;
     @Nullable private String versionLine;
-    @Nullable private String jsErr;
-    private boolean jsAlive;
+    private final java.util.List<String> jsErrs = new java.util.ArrayList<>();
+    private String jsState = "";
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
 
@@ -102,10 +102,12 @@ public class ControlActivity extends AppCompatActivity {
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage cm) {
-                if (cm != null && cm.messageLevel() == ConsoleMessage.MessageLevel.ERROR
-                        && jsErr == null) {
-                    jsErr = cm.message() + " @" + cm.lineNumber();
+                if (cm == null || cm.messageLevel() != ConsoleMessage.MessageLevel.ERROR) {
+                    return true;
                 }
+                // 只留第一条会漏掉后面那条真正致命的：一个文件报错并不影响别的文件继续跑。
+                String one = cm.message() + " @" + shortSrc(cm.sourceId()) + ":" + cm.lineNumber();
+                if (jsErrs.size() < 3 && !jsErrs.contains(one)) jsErrs.add(one);
                 return true;
             }
         });
@@ -213,11 +215,27 @@ public class ControlActivity extends AppCompatActivity {
         uiHandler.postDelayed(radioStatTick, 1000);
     }
 
-    /** 网页脚本活着才有屏幕按键。挂了就在状态行说出来，而不是让人对着按钮反复点。 */
+    /**
+     * 网页脚本活着才有屏幕按键。挂了就在状态行说出来，而不是让人对着按钮反复点。
+     *
+     * 分三档而不是通/不通：app.js 的顶层有上百行挂按钮的语句，中途抛错会留下一个
+     * 半成品 window.app —— 那种情况和「整个文件没解析」的表现一样，但原因完全不同。
+     */
     private void probeJs() {
         if (web == null) return;
-        web.evaluateJavascript("!!(window.app&&window.app.adoptRadioPath)",
-                v -> jsAlive = "true".equals(v));
+        web.evaluateJavascript(
+                "(function(){try{"
+                        + "if(!window.app)return 'none';"
+                        + "if(!window.app.adoptRadioPath)return 'partial';"
+                        + "return 'ok';"
+                        + "}catch(e){return 'throw';}})()",
+                v -> jsState = v == null ? "" : v.replace("\"", ""));
+    }
+
+    private String jsStateText() {
+        if ("ok".equals(jsState)) return " 网页JS通";
+        if ("partial".equals(jsState)) return " 网页JS初始化中断";
+        return " 网页JS未运行";
     }
 
     private void paintRadioStat() {
@@ -227,10 +245,18 @@ public class ControlActivity extends AppCompatActivity {
         // 反而分不清「资源旧」和「功能没生效」。这行由原生读安装包里的文件得出。
         txtRadioStat.setVisibility(View.VISIBLE);
         StringBuilder sb = new StringBuilder(versionLine());
-        sb.append(jsAlive ? " 网页JS通" : " 网页JS未运行");
-        if (!jsAlive && jsErr != null) sb.append("\n").append(jsErr);
+        sb.append(jsStateText());
+        // 报错即使在 JS 通的情况下也要显示：某个模块挂掉会让对应功能整块失效。
+        for (String e : jsErrs) sb.append("\n").append(e);
         sb.append("\n").append(radio ? RadioLink.get().statusLine() : "MESH");
         txtRadioStat.setText(sb.toString());
+    }
+
+    /** 控制台里 sourceId 是完整 file:// 路径，屏幕上只留文件名才看得清。 */
+    private static String shortSrc(String src) {
+        if (src == null || src.isEmpty()) return "?";
+        int i = src.lastIndexOf('/');
+        return i >= 0 ? src.substring(i + 1) : src;
     }
 
     private String versionLine() {

@@ -257,6 +257,15 @@ function renderMediaPanel(plan, showBanner) {
   syncTiles(plan, showBanner);
 }
 
+// 网关推来的媒体计划。plan 消息本身就是计划，见 docs/app-protocol.md。
+// media.plan 是对讲、切布局、切后台回来重拉都要读的那份状态，必须在这里存下。
+function onMediaPlan(plan, showBanner) {
+  if (!plan || !Array.isArray(plan.sources)) return;
+  media.plan = plan;
+  media.main = plan.main || null;
+  renderMediaPanel(plan, showBanner);
+}
+
 // App 只有一张底图，没露出来的路不要占带宽。网页一主三小 / 2×2 仍同时拉。
 function wantedTiles(plan) {
   if (!isAppShell()) return VIDEO_TILES;

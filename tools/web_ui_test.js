@@ -143,6 +143,26 @@ webJsFiles.forEach(function (f) {
 });
 
 // ---------------------------------------------------------------------------
+console.log('\n== 模块导出的名字必须真的存在 ==');
+// ---------------------------------------------------------------------------
+// media.js 曾经导出一个从没定义过的 onMediaPlan。那一行是文件最后一句，于是
+// window.X30Media 整个赋值失败，视频、对讲、切布局全部静默失效，控制台只留一句
+// ReferenceError。Node 里 require 不到这些文件，只能按文本核对。
+webJsFiles.forEach(function (f) {
+  var text = read(f);
+  var m = /window\.(X30\w+)\s*=\s*\{([^}]*)\}/.exec(text);
+  if (!m) return;
+  var missing = m[2].split(',').map(function (s) {
+    return s.split(':')[0].trim();
+  }).filter(Boolean).filter(function (name) {
+    var def = new RegExp('(?:function|const|let|var)\\s+' + name + '\\b');
+    return !def.test(text);
+  });
+  check(f + ' 导出的 ' + m[1] + ' 成员都有定义', missing.length === 0,
+        missing.join('，'));
+});
+
+// ---------------------------------------------------------------------------
 console.log('\n== .hidden 必须真的能隐藏 ==');
 // ---------------------------------------------------------------------------
 
@@ -359,6 +379,9 @@ check('原生把网页 JS 死活和报错显示出来',
       /setWebChromeClient/.test(radioBridge) &&
       /onConsoleMessage/.test(radioBridge) &&
       /网页JS未运行/.test(radioBridge) &&
+      // 半死一定要和没跑区分开：两者表现一样，原因完全不同。
+      /网页JS初始化中断/.test(radioBridge) &&
+      /jsErrs/.test(radioBridge) &&
       /void probeJs\(\)/.test(radioBridge));
 // 版本戳必须由原生给出。让网页自己印，资源没更新时它也不显示，等于没有指示。
 check('原生读安装包里的网页版本戳',
