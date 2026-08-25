@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260825a">
+<link rel="stylesheet" href="style.css?v=20260825o">
 </head>
 <body>
 
@@ -310,7 +310,8 @@
       <button type="button" class="btn sm" data-cmd="step">起步</button>
     </div>
     <div class="acc">
-      <button type="button" class="btn acc-btn" data-acc="gait">步态</button>
+      <!-- 收起来的时候也要看得见现在选的是哪一档：展开一次才知道，遥控时是负担。 -->
+      <button type="button" class="btn acc-btn" data-acc="gait">步态<span class="acc-val" id="acc-val-gait"></span></button>
       <div class="acc-pop hidden" id="acc-gait">
         <div class="row wrap" id="gait-row">
           <button type="button" class="btn sm" data-gait="walk">常规</button>
@@ -323,7 +324,7 @@
       </div>
     </div>
     <div class="acc">
-      <button type="button" class="btn acc-btn" data-acc="stair">上下楼踏面</button>
+      <button type="button" class="btn acc-btn" data-acc="stair">上下楼踏面<span class="acc-val" id="acc-val-stair"></span></button>
       <div class="acc-pop hidden" id="acc-stair">
         <div class="acc-label">
           <span>踏面</span>
@@ -347,7 +348,7 @@
       </div>
     </div>
     <div class="acc">
-      <button type="button" class="btn acc-btn" data-acc="height">身高</button>
+      <button type="button" class="btn acc-btn" data-acc="height">身高<span class="acc-val" id="acc-val-height"></span></button>
       <div class="acc-pop hidden" id="acc-height">
         <div class="row wrap">
           <button type="button" class="btn sm" data-height="normal">正常</button>
@@ -372,7 +373,7 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260825n"></script>
-<script src="app.js?v=20260825n"></script>
+<script src="dogcam24.js?v=20260825o"></script>
+<script src="app.js?v=20260825o"></script>
 </body>
 </html>

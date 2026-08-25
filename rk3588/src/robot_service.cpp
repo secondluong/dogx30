@@ -493,6 +493,12 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
 
   if (t == "claim") {
     const bool granted = TryClaim(id);
+    // 遥控端可以在申请时把它知道的姿态一并告知：2.4G 直连下起立/趴下不经过本机，
+    // 而运动主机 RL 起立后仍报坐下，本机无从得知。只在真带了这个键时采纳，
+    // 而且必须拿到控制权 —— 旁观者不该改本机的记忆。
+    if (granted && msg.Has("standing")) {
+      client_.AdoptPosture(msg["standing"].AsBool(false));
+    }
     JsonWriter w;
     w.BeginObject().Key("t", "control").Key("granted", granted);
     {

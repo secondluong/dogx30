@@ -114,6 +114,15 @@ class MotionClient {
   void StandOrSit();        // 坐 <-> 站。发原厂手柄那对 RL 指令，不是文档里的旧切换
   void StandUp();           // 只起立，不看记忆
   void SitDown();           // 只趴下，不看记忆
+
+  // 采纳遥控端告知的姿态，不向狗发任何指令。
+  //
+  // 为什么本机会不知道：2.4G 直连时起立/趴下由遥控器直接打给运动主机，不经过这里；
+  // 而运动主机在 RL 起立后仍报 basic_state=0（见 protocol.hpp），遥测也认不出来。
+  // 于是遥控端从 2.4G 切回 MESH 时，本机记的是「坐着」，按钮显示「起立」，
+  // 而且轴会被 AxisCommandsApply 吞掉 —— 狗明明站着却推不动。
+  // 这条就是让那份记忆对上。只有拿到控制权的客户端能调。
+  void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
   void EnterTorqueStand();  // 初始站立 -> 力控站立
   void ToggleStepping();    // 力控站立 <-> 踏步 切换
@@ -179,6 +188,10 @@ class MotionClient {
   int32_t axis_right_x_ = 0;
   int32_t axis_right_y_ = 0;
   std::chrono::steady_clock::time_point axis_deadline_{};
+  // 发过起立/趴下之后到这个时刻之前一律不发轴。遥测有几十毫秒滞后，那段时间里
+  // basic_state 还报坐下，AxisCommandsApply 按「RL 已起立」放行，50 Hz 的身高=0
+  // 正好打在起身轨迹的头上，把原厂柔和的起身掐成猛起。
+  std::chrono::steady_clock::time_point axis_hold_until_{};
 
   mutable std::mutex state_mutex_;
   RobotState state_;

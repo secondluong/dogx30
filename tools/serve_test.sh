@@ -109,6 +109,9 @@ run_scenario "媒体编排" media media --media "$ROOT/deploy/media.json"
 # 没有视频时控制必须完全不受影响 —— 视频是附加能力，不该拖垮本体。
 run_scenario "未配置媒体源" no-media nomedia
 
+# 2.4G 切回 MESH 的姿态交接。狗站着但遥测报坐下时，网关必须听遥控端的。
+run_scenario "姿态交接" pose-handoff pose
+
 # 点云：需要额外拉一个假 ROS master，所以不套 run_scenario。
 # 验的是 XML-RPC 发现、TCPROS 握手、解析、降采样、量化下行这一整条链，
 # 这些在现场没法调试 —— 感知主机是机器狗的一部分，出问题只能干等。

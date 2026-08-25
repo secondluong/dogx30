@@ -6,6 +6,8 @@
   --text: #e6edf3;
   --muted: #8b98a9;
   --accent: #2f81f7;
+  /* 深底上直接用 --accent 偏暗，阳光下看不清。菜单上的当前档用这一档。 */
+  --accent-soft: #7fb2ff;
   --ok: #3fb950;
   --warn: #d29922;
   --danger: #f85149;
@@ -1070,6 +1072,23 @@ html.shell-app .hud-info {
   gap: 10px;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* 菜单收起时也要能看出选了哪一档，否则每次都得展开一次才知道。
+   步态切换要跨两台主机、可达数秒，所以中途显示「…」而不是直接跳到新值。 */
+.acc-val {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+  color: var(--accent-soft);
+  font-weight: 600;
+}
+.acc-val:empty { display: none; }
+/* 选中项右侧打个勾。只靠底色区分，戴手套在阳光下看不清哪个是当前档。 */
+.acc-pop .btn.sm.active::after {
+  content: '✓';
+  margin-left: 6px;
+  font-weight: 700;
 }
 
 .gas-panel { z-index: 15; }

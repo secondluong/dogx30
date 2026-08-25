@@ -10,6 +10,10 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+// 起立/趴下之后停发轴多久。够盖住遥测把过渡态报上来的滞后（实测几十毫秒），
+// 又远短于起身本身的两秒，所以不影响「站起来就能推杆走」。
+constexpr int kAxisHoldMs = 300;
+
 // 从原始报文里安全地取出一个结构体。长度不足就返回 false，避免越界读。
 template <typename T>
 bool Extract(const uint8_t* data, int len, T* out) {
@@ -113,6 +117,12 @@ void MotionClient::TxLoop() {
 
     bool send_axes = true;
     {
+      // 起立/趴下刚发出去，遥测还没报出过渡态的这几十毫秒里也不发轴 ——
+      // 光靠遥测判断会漏掉这一段，实测能漏出四五帧身高=0。
+      std::lock_guard<std::mutex> lock(axis_mutex_);
+      if (Clock::now() < axis_hold_until_) send_axes = false;
+    }
+    if (send_axes) {
       std::lock_guard<std::mutex> lock(state_mutex_);
       // 遥测还没来或已经断时，不知道当前基础状态，沿用旧行为继续发轴——
       // 否则 network.toml 没登记、一条遥测都没有时，力控姿态也发不出去。
@@ -447,6 +457,19 @@ void MotionClient::SitDown() {
   SendSimple(cmd::kRlSitDown);
 }
 
+void MotionClient::AdoptPosture(bool standing) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  const auto next = standing ? LastStandSit::kStood : LastStandSit::kSat;
+  if (last_stand_sit_ == next) return;
+  last_stand_sit_ = next;
+  state_.rl_standing = standing;
+  // 站立不在这里解锁轴：rl_standing 一为真，AxisCommandsApply 本身就放行。
+  // 反过来趴下必须锁回去，否则上一次力控留下的解锁会让趴着的狗也收轴。
+  if (!standing) axes_unlocked_ = false;
+  std::printf("[运动] 采纳遥控端告知的姿态：%s（遥测=%s）\n",
+              standing ? "站立" : "坐下", ToString(state_.basic_state));
+}
+
 void MotionClient::UnloadForce() {
   // 软急停后关节自锁。原厂 App「卸力」、手柄 ⑤/㉑ 打的是 0x21010202，
   // 不是 RL 起/趴。现场急停后再发 0x21010223/22，主机不应，狗起不来。
@@ -536,6 +559,7 @@ void MotionClient::ReleaseAxes() {
   std::lock_guard<std::mutex> lock(axis_mutex_);
   axis_left_y_ = axis_left_x_ = axis_right_x_ = axis_right_y_ = 0;
   axis_deadline_ = Clock::time_point{};
+  axis_hold_until_ = Clock::now() + std::chrono::milliseconds(kAxisHoldMs);
 }
 
 void MotionClient::SetCommanding(bool on) {

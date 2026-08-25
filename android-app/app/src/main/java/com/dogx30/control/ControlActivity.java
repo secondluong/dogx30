@@ -279,6 +279,12 @@ public class ControlActivity extends AppCompatActivity {
             RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz);
         }
 
+        /** 切到 2.4G 时把 MESH 那侧知道的姿态交接过来，见 RadioLink.adoptPosture。 */
+        @JavascriptInterface
+        public void radioAdoptPose(boolean standing) {
+            RadioLink.get().adoptPosture(standing);
+        }
+
         /** 2.4G 下的机身相机。地址由网页给：现场换相机不该为此重新编包。 */
         @JavascriptInterface
         public void videoStart(String url) {

@@ -10,8 +10,8 @@ android {
         applicationId "com.dogx30.control"
         minSdk 24
         targetSdk 34
-        versionCode 28
-        versionName "0.4.3"
+        versionCode 29
+        versionName "0.4.4"
     }
 
     buildTypes {

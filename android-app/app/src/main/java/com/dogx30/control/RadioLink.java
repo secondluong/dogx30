@@ -65,6 +65,8 @@ final class RadioLink {
     // 这是狗**自己报的**姿态，比本地猜靠得住：以前这里只数包不看内容，
     // 一切档本地那份猜测就和实际脱节，界面便一直显示站立。
     private static final int TELEM_MOTION = 0x1009;
+    /** 身高档位是单独一条简单报文，档位就放在头里的 paramters_size，按有符号读。 */
+    private static final int TELEM_HEIGHT = 0x11050F08;
     private static final int HEAD_LEN = 12;
     /** 遥测 200 Hz，半秒没有就当它不可信，退回本地记的那份。 */
     private static final long TELEM_FRESH_MS = 500;
@@ -77,6 +79,11 @@ final class RadioLink {
     private static final int ST_STEPPING = 4;
     private static final int ST_STAND_TO_SIT = 5;
     private static final int ST_EMERGENCY = 6;
+
+    /** 会改变姿态的那几条。发过它们，本机记的「站没站」才有依据。 */
+    private static final java.util.Set<String> POSE_CMDS = new java.util.HashSet<>(
+            java.util.Arrays.asList("stand", "stand_up", "sit", "sit_down",
+                                    "unload", "estop"));
 
     /** 没有遥测时，起立后等这么久才发轴，免得把柔和的起身掐硬。 */
     private static final long AXIS_AFTER_STAND_MS = 1500;
@@ -112,12 +119,17 @@ final class RadioLink {
     private boolean standing;
     private int telemState = -1;
     private int telemGait = -1;
+    /** 身高档位：-1 匍匐、0 正常。狗只在变化时报，所以不设新鲜期，收到过就一直算。 */
+    private int telemHeight;
+    private boolean telemHeightSeen;
     private long telemAt;
     private long lastStandAt;
     private float scrFwd;
     private float scrLat;
     private float scrTurn;
     private long scrAt;
+    /** 这一档里确实发出去过起立/趴下，或者 MESH 那侧交接过来 —— 否则姿态就是瞎猜。 */
+    private boolean poseKnown;
     private boolean torqued;
     private boolean stepping;
     private boolean emergency;
@@ -261,12 +273,33 @@ final class RadioLink {
             // 网关的读数（两条链路共用 app.basicState）。
             o.put("basic", telemFresh() ? telemState : -1);
             o.put("gait", telemFresh() ? telemGait : -1);
+            if (telemHeightSeen) o.put("height", telemHeight);
             o.put("emergency", emergency);
             o.put("axes", axesApply());
+            o.put("poseKnown", poseIsKnown());
             return o.toString();
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    /**
+     * 采纳网页告知的姿态。切档时由 MESH 那侧交接过来：网关知道狗站着，而本机刚被
+     * 打开、什么都不知道。不发任何指令，只对上记忆 —— 否则从 MESH 切到 2.4G 后
+     * 按钮显示「起立」，而且 axesApply 认为狗趴着，推杆没反应。
+     */
+    synchronized void adoptPosture(boolean up) {
+        standing = up;
+        poseKnown = true;
+        // 姿态是别人告知的，不是我们刚发的起立，所以不必再等身子稳住。
+        lastStandAt = 0;
+        // 力控/踏步没人告知，先按最保守的算；有遥测时下一帧就纠回来。
+        clearWalk();
+    }
+
+    /** 姿态到底是知道的还是猜的。猜的就别去改网关那份记忆。 */
+    private boolean poseIsKnown() {
+        return telemFresh() || poseKnown;
     }
 
     /**
@@ -347,6 +380,9 @@ final class RadioLink {
 
     private synchronized void commandOnRadio(String name) {
         lastCmd = name;
+        // 发过起立/趴下这一类，本机记的姿态才算有依据；否则切回 MESH 时不该拿它去
+        // 改网关的记忆（那边可能记着别人刚把狗扶起来）。
+        if (POSE_CMDS.contains(name)) poseKnown = true;
         if (!enabled) {
             enabled = true;
             start();
@@ -821,6 +857,10 @@ final class RadioLink {
         if (handler != null) handler.removeCallbacks(loop);
         cancelPendingStand();
         standing = false;
+        // 关掉这一档之后，本机记的姿态就只是历史了：狗可能被 MESH 那侧或原厂手柄
+        // 动过。下次进 2.4G 由切档那一刻交接过来（adoptPosture），或者等遥测。
+        poseKnown = false;
+        telemHeightSeen = false;
         clearWalk();
         confirmed = false;
         buttonsPrimed = false;
@@ -996,10 +1036,17 @@ final class RadioLink {
      * 记的和实际就是两回事。
      */
     private void readTelem(byte[] b, int len) {
-        if (len < HEAD_LEN + 2) return;
+        if (len < HEAD_LEN) return;
         int code = (b[0] & 0xff) | ((b[1] & 0xff) << 8)
                 | ((b[2] & 0xff) << 16) | ((b[3] & 0xff) << 24);
-        if (code != TELEM_MOTION) return;
+        // 身高档位这条是简单报文，只有 12 字节的头，档位就在头里，不带 data。
+        if (code == TELEM_HEIGHT) {
+            telemHeight = (b[4] & 0xff) | ((b[5] & 0xff) << 8)
+                    | ((b[6] & 0xff) << 16) | ((b[7] & 0xff) << 24);
+            telemHeightSeen = true;
+            return;
+        }
+        if (code != TELEM_MOTION || len < HEAD_LEN + 2) return;
         telemState = b[HEAD_LEN] & 0xff;
         telemGait = b[HEAD_LEN + 1] & 0xff;
         telemAt = System.currentTimeMillis();

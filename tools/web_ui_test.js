@@ -406,6 +406,11 @@ var radioJava = fs.readFileSync(
 var radioBridge = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
             'com', 'dogx30', 'control', 'ControlActivity.java'), 'utf8');
+// 姿态交接是网页、原生、网关三处一起改才成立的，少一处就是「切档姿态又变了」。
+var motionHpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'motion_client.hpp'), 'utf8');
+var serviceCpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'src', 'robot_service.cpp'), 'utf8');
 check('2.4G RadioLink 含起立趴下行走指令',
       /0x21010223/.test(radioJava) &&
       /0x21010222/.test(radioJava) &&
@@ -480,6 +485,74 @@ check('设置里查得到姿态遥测通不通',
       /network\.toml/.test(read('settings.js')) &&
       /43897/.test(read('settings.js')) &&
       /basic < 0 && app\.basicState !== 0/.test(appJs));
+// 「站没站」两条链路各记一份：2.4G 的起立不经过网关，网关的起立 RadioLink 也不知道，
+// 而狗 RL 起立后遥测仍报坐下，谁都认不出来。所以切档那一刻必须交接，否则切一次
+// 姿态就变回趴着，而且轴被接手那侧吞掉，狗站着却推不动。
+check('切档时把姿态交接给接手的一侧',
+      /function handoffPose/.test(appJs) &&
+      /pushPoseToRadio/.test(appJs) &&
+      /app\.poseHandoff = upright/.test(appJs) &&
+      /claim\.standing = app\.poseHandoff/.test(appJs) &&
+      /function checkPoseHint/.test(appJs) &&
+      /radioAdoptPose/.test(radioBridge) &&
+      /void adoptPosture\(boolean up\)/.test(radioJava) &&
+      /void AdoptPosture\(bool standing\)/.test(motionHpp) &&
+      /msg\.Has\("standing"\)/.test(serviceCpp));
+// 猜错的代价是按「趴下」时狗反而站起来，比多按一次起立严重得多，所以
+// 只在发过起立/趴下或收到遥测时才交接。
+check('姿态没把握就不交接',
+      /poseIsKnown\(\)/.test(radioJava) &&
+      /o\.put\("poseKnown"/.test(radioJava) &&
+      /st\.poseKnown \? isStandingUi\(\) : null/.test(appJs) &&
+      /linkOpen\(\) && app\.alive \? isStandingUi\(\) : null/.test(appJs) &&
+      /if \(granted && msg\.Has\("standing"\)\)/.test(serviceCpp));
+// 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
+check('菜单收起时也显示当前档位',
+      !!htmlIds['acc-val-gait'] &&
+      !!htmlIds['acc-val-stair'] &&
+      !!htmlIds['acc-val-height'] &&
+      /function paintPickers/.test(appJs) &&
+      /paintPickers\(\);/.test(appJs) &&
+      /app\.gaitPending/.test(appJs) &&
+      /\.acc-pop \.btn\.sm\.active::after/.test(styleText) &&
+      /\.acc-val:empty/.test(styleText));
+// 刚开机或刚切过来时我们什么都没点过，档位只能问狗。身高是单独一条报文，
+// 不解它就只能显示「我点过的」，那在切档之后必然是错的。
+check('2.4G 的档位也听狗自己报',
+      /TELEM_HEIGHT = 0x11050F08/.test(radioJava) &&
+      /telemHeightSeen/.test(radioJava) &&
+      /o\.put\("height", telemHeight\)/.test(radioJava) &&
+      /RADIO_GAIT_KEYS/.test(appJs) &&
+      /function syncRadioPickers/.test(appJs) &&
+      /syncRadioPickers\(radioSt\)/.test(appJs));
+
+// 步态编码到按钮键的映射现在有两份：网关的 GaitKey() 和 2.4G 直连用的
+// RADIO_GAIT_KEYS。走歪了的表现是同一只狗在两条链路上高亮不同的步态。
+var protoHpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'protocol.hpp'), 'utf8');
+var gaitEnum = {};
+((protoHpp.match(/enum class Gait[^{]*\{([\s\S]*?)\}/) || [])[1] || '')
+  .split(',').forEach(function (line) {
+    var m = line.match(/(k\w+)\s*=\s*(\d+)/);
+    if (m) gaitEnum[m[1]] = m[2];
+  });
+var cppGaits = {};
+serviceCpp.replace(/case Gait::(k\w+): return "(\w+)";/g, function (_, sym, key) {
+  if (gaitEnum[sym] !== undefined) cppGaits[gaitEnum[sym]] = key;
+  return '';
+});
+var jsGaits = {};
+((appJs.match(/const RADIO_GAIT_KEYS = \{([\s\S]*?)\};/) || [])[1] || '')
+  .replace(/(\d+):\s*'(\w+)'/g, function (_, num, key) {
+    jsGaits[num] = key;
+    return '';
+  });
+var gaitNums = Object.keys(cppGaits);
+var mismatch = gaitNums.filter(function (n) { return cppGaits[n] !== jsGaits[n]; })
+  .concat(Object.keys(jsGaits).filter(function (n) { return !cppGaits[n]; }));
+check('两条链路对步态编码的理解一致',
+      gaitNums.length >= 9 && mismatch.length === 0,
+      gaitNums.length + ' 个，不一致: ' + mismatch.join(', '));
 check('屏幕摇杆在 2.4G 下也能推',
       /void setScreenAxes\(float fwd, float lat, float turn\)/.test(radioJava) &&
       /scrAt = System\.currentTimeMillis\(\)/.test(radioJava) &&

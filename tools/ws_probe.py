@@ -224,6 +224,48 @@ def no_terrain_scenario(host, port):
     a.close()
 
 
+def pose_handoff_scenario(host, port):
+    """遥控端从 2.4G 切回 MESH 时，能把「狗已经站着」交接给网关。
+
+    2.4G 直连时起立不经过网关，而运动主机 RL 起立后遥测仍报 basic_state=0，
+    网关从遥测里也认不出来。不交接的现场表现是：切回 MESH 后左下角还是「起立」，
+    再推摇杆狗也不动 —— 轴被 AxisCommandsApply 当成「趴着」吞掉了。
+    """
+    print("\n== 姿态交接 ==")
+    a = WsClient(host, port)
+    a.wait_for("hello")
+    st = a.wait_for("state")
+    check("交接前网关记的是坐着", st.get("rl_standing") is False, st.get("rl_standing"))
+
+    a.send({"t": "claim", "standing": True})
+    a.wait_for("control", predicate=lambda m: m.get("granted") is True)
+    st = a.wait_for("state", timeout=5,
+                    predicate=lambda m: m.get("rl_standing") is True)
+    # rl_standing 为真同时也是「轴会被转发」的判据（见 motion_client 的
+    # AxisCommandsApply 调用），所以这一条也就是「交接完不必再点力控/起步」。
+    check("claim 带 standing 后网关认为狗站着", st.get("rl_standing") is True)
+    check("遥测仍报坐下也不改口", st.get("basic_state") == 0, st.get("basic_state"))
+
+    # 反向：告知坐下后网关要改回来，否则趴着的狗也会收轴。
+    a.send({"t": "yield"})
+    a.send({"t": "claim", "standing": False})
+    a.wait_for("control", predicate=lambda m: m.get("granted") is True)
+    st = a.wait_for("state", timeout=5,
+                   predicate=lambda m: m.get("rl_standing") is False)
+    check("告知坐下后网关改回坐着", st.get("rl_standing") is False)
+
+    # 没带这个键的 claim 不该动网关的记忆：网页控制台不知道姿态，别让它清掉。
+    a.send({"t": "claim", "standing": True})
+    a.wait_for("state", timeout=5, predicate=lambda m: m.get("rl_standing") is True)
+    a.send({"t": "yield"})
+    a.send({"t": "claim"})
+    a.wait_for("control", predicate=lambda m: m.get("granted") is True)
+    st = a.wait_for("state", timeout=5)
+    check("不带 standing 的 claim 不动记忆", st.get("rl_standing") is True,
+          st.get("rl_standing"))
+    a.close()
+
+
 def media_scenario(host, port):
     """媒体编排：能力协商、码流降级、全码率槽位仲裁。
 
@@ -595,9 +637,11 @@ def main():
     parser.add_argument(
         "--scenario",
         default="full",
-        choices=["full", "no-terrain", "media", "no-media", "cloud-down", "config"],
+        choices=["full", "no-terrain", "media", "no-media", "cloud-down",
+                 "pose-handoff", "config"],
         help="no-terrain 验证感知主机地形图不可达；media/no-media 验证媒体编排；"
-             "cloud-down 验证感知主机 ROS 不可达；config 验证在线改配置",
+             "cloud-down 验证感知主机 ROS 不可达；pose-handoff 验证 2.4G 切回 MESH "
+             "时的姿态交接；config 验证在线改配置",
     )
     args = parser.parse_args()
     host, port = args.host, args.port
@@ -619,6 +663,7 @@ def main():
         "media": media_scenario,
         "no-media": no_media_scenario,
         "cloud-down": cloud_down_scenario,
+        "pose-handoff": pose_handoff_scenario,
     }
     if args.scenario in standalone:
         standalone[args.scenario](host, port)
