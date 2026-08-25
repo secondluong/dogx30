@@ -420,6 +420,8 @@ body {
   padding: 16px;
 }
 .ph-icon { font-size: 32px; opacity: .5; }
+/* 视频占位图可点，点了报出画面卡在哪一步。 */
+.media-idle { cursor: pointer; }
 .placeholder p { margin: 0; color: var(--text); }
 .placeholder small { font-size: 12px; line-height: 1.7; }
 .placeholder code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
