@@ -87,6 +87,10 @@ final class RadioLink {
 
     /** 没有遥测时，起立后等这么久才发轴，免得把柔和的起身掐硬。 */
     private static final long AXIS_AFTER_STAND_MS = 1500;
+    /** 推杆推到多少算「我要走」。高过 axis() 的死区 0.12，手抖和通道噪声不算。 */
+    private static final float ARM_PUSH = 0.2f;
+    /** 自动踩台阶时两级之间留多久。状态机迁移要工夫，紧跟着发第二条会被忽略。 */
+    private static final long ARM_GAP_MS = 500;
     /** 屏幕摇杆多久没更新就当松手。掉帧或页面卡住时不能让狗一直走。 */
     private static final long SCREEN_AXIS_HOLD_MS = 400;
 
@@ -132,6 +136,11 @@ final class RadioLink {
     private boolean poseKnown;
     private boolean torqued;
     private boolean stepping;
+    /** 操作员自己点了力控：那时摇杆是调身高/俯仰，不能替他起步。 */
+    private boolean torqueByUser;
+    private long armNextAt;
+    /** effAxes 的返回缓冲。每 tick 都要算一次，没必要每次新建。 */
+    private final float[] axBuf = new float[3];
     private boolean emergency;
     private boolean prevStand;
     private boolean prevSit;
@@ -323,7 +332,20 @@ final class RadioLink {
     private void clearWalk() {
         torqued = false;
         stepping = false;
+        torqueByUser = false;
+        armNextAt = 0;
+        if (handler != null) handler.removeCallbacks(stepTask);
     }
+
+    /** 点了起步之后隔一拍才补的那条踏步，见 commandOnRadio 的 "step"。 */
+    private final Runnable stepTask = new Runnable() {
+        @Override
+        public void run() {
+            if (!standing || emergency || stepping) return;
+            sendSimple(STEP);
+            stepping = true;
+        }
+    };
 
     /**
      * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
@@ -430,17 +452,30 @@ final class RadioLink {
                     sendSimple(TORQUE);
                 }
                 torqued = true;
+                // 人点的力控：接下来推杆是调姿态，armForWalk 别去替他起步。
+                torqueByUser = true;
                 break;
             case "step":
                 if (!standing) break;
+                torqueByUser = false;
+                if (stepping) {
+                    // 再点一次是停步。停下来之后再推杆会重新自动踩上来。
+                    sendSimple(STEP);
+                    stepping = false;
+                    armNextAt = System.currentTimeMillis() + ARM_GAP_MS;
+                    break;
+                }
                 if (!torqued) {
                     sendSimple(TORQUE);
                     torqued = true;
+                    // 力控和踏步之间要隔开：主机还在过渡里，同一帧跟上的那条会被
+                    // 忽略，表现就是点了起步却只在原地力控站着。
+                    onRadioDelayed(stepTask, ARM_GAP_MS);
+                    armNextAt = System.currentTimeMillis() + ARM_GAP_MS * 2;
+                    break;
                 }
-                if (!stepping) {
-                    sendSimple(STEP);
-                    stepping = true;
-                }
+                sendSimple(STEP);
+                stepping = true;
                 break;
             case "estop":
                 cancelPendingStand();
@@ -901,7 +936,9 @@ final class RadioLink {
         if (snap.ch != null && snap.ch.length > 0) {
             handleButtons(snap.ch);
         }
-        if (axesApply()) sendAxes(snap.ch);
+        float[] ax = effAxes(snap.ch);
+        if (axesPushed(ax)) armForWalk();
+        if (axesApply()) sendAxes(ax);
     }
 
     private void handleButtons(int[] ch) {
@@ -948,7 +985,11 @@ final class RadioLink {
      * 屏幕那份超过 SCREEN_AXIS_HOLD_MS 没更新就按松手算（发 0）。页面卡住或切后台
      * 时不能让狗照着最后一帧一直走。
      */
-    private void sendAxes(@Nullable int[] ch) {
+    /**
+     * 摇杆现在指哪，把实体手柄和屏幕两个来源合成一份，方向已经是协议轴的方向。
+     * 实体优先：手上那根杆比屏幕上的可信，也更快。
+     */
+    private float[] effAxes(@Nullable int[] ch) {
         float ly = 0f;
         float lx = 0f;
         float rx = 0f;
@@ -965,9 +1006,62 @@ final class RadioLink {
             lx = -scrLat;
             rx = -scrTurn;
         }
-        sendSimple(AXIS_LY, bits(ly));
-        sendSimple(AXIS_LX, bits(lx));
-        sendSimple(AXIS_RX, bits(rx));
+        axBuf[0] = ly;
+        axBuf[1] = lx;
+        axBuf[2] = rx;
+        return axBuf;
+    }
+
+    /** 推到这个程度就当「我要走」。要高过 axis() 自己的死区，免得手抖也算。 */
+    private static boolean axesPushed(float[] a) {
+        return Math.abs(a[0]) > ARM_PUSH || Math.abs(a[1]) > ARM_PUSH
+                || Math.abs(a[2]) > ARM_PUSH;
+    }
+
+    /**
+     * 推杆就走：起立之后自动把「力控站立 → 踏步」这两级台阶踩掉。
+     *
+     * 这两下不是运动学上的必要动作，只是状态机的台阶。原厂 App 起立后推杆直接走，
+     * 而我们的操作员要先点力控再点起步 —— 戴手套在阳光下多点两次很容易点错，
+     * 顺序也没人记得。操作员自己点过力控就不插手：那时他要的是用摇杆调身高/俯仰。
+     */
+    private void armForWalk() {
+        if (!standing || emergency || torqueByUser) return;
+        long now = System.currentTimeMillis();
+        if (now < armNextAt) return;
+        // 起立本身是一段柔和轨迹，等它站稳再踩，免得把起身掐硬。
+        if (now - lastStandAt < AXIS_AFTER_STAND_MS) return;
+        boolean step;
+        if (telemFresh()) {
+            if (telemState == ST_STEPPING) return;               // 已经能走了
+            if (telemState == ST_TORQUE_STANDING) {
+                step = true;
+            } else if (telemState == ST_INITIAL_STANDING || telemState == ST_SITTING) {
+                // RL 起立后遥测仍报坐下（见 protocol.hpp），与初始站立同样对待。
+                step = false;
+            } else {
+                return;                                          // 过渡/急停，不插手
+            }
+        } else {
+            // 没遥测时只能按顺序踩。踏步是切换指令，重发会停步，所以每级只发一次。
+            if (stepping) return;
+            step = torqued;
+        }
+        if (step) {
+            sendSimple(STEP);
+            stepping = true;
+        } else {
+            sendSimple(TORQUE);
+            torqued = true;
+        }
+        // 两级之间要留时间：力控刚发就跟一条踏步，主机还在过渡里会忽略后一条。
+        armNextAt = now + ARM_GAP_MS;
+    }
+
+    private void sendAxes(float[] a) {
+        sendSimple(AXIS_LY, bits(a[0]));
+        sendSimple(AXIS_LX, bits(a[1]));
+        sendSimple(AXIS_RX, bits(a[2]));
     }
 
     private static float axis(int[] ch, int index, boolean invert) {

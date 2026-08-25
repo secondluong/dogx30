@@ -266,6 +266,54 @@ def pose_handoff_scenario(host, port):
     a.close()
 
 
+def auto_arm_scenario(host, port):
+    """起立之后只推杆，网关要自己把「力控站立 → 踏步」这两级台阶踩掉。
+
+    原厂 App 起立后推杆就走，而 X30 的状态机在收速度之前要先进力控站立、再起步。
+    以前这两级要操作员在屏幕上各点一次 —— 戴手套在阳光下很容易点错，现场也没人
+    记得顺序。这里全程不发 torque/step，只发 vel，最后基础状态必须是踏步。
+    """
+    print("\n== 推杆自动起步 ==")
+    a = WsClient(host, port)
+    a.wait_for("hello")
+    a.send({"t": "claim"})
+    a.wait_for("control", predicate=lambda m: m.get("granted") is True)
+
+    a.send({"t": "cmd", "name": "stand"})
+    # 仿真器的起立轨迹要两秒，之后基础状态是初始站立（1）。
+    st = a.wait_for("state", timeout=8,
+                    predicate=lambda m: m.get("basic_state") == 1)
+    check("起立后停在初始站立", st.get("basic_state") == 1, st.get("basic_state"))
+
+    deadline = time.time() + 8
+    stepping = False
+    while time.time() < deadline and not stepping:
+        # 真实遥控端 20 Hz 一直在发。这里每 0.2 秒一发就够踩完两级台阶
+        # （两级之间网关要留 500 ms 给状态机迁移）。
+        a.send({"t": "vel", "vx": 0.5, "vy": 0.0, "wz": 0.0})
+        try:
+            a.wait_for("state", timeout=0.2,
+                       predicate=lambda m: m.get("basic_state") == 4)
+            stepping = True
+        except TimeoutError:
+            pass
+    check("只推杆就走到踏步态，不用点力控和起步", stepping)
+
+    # 走起来之后速度要真的到狗身上，否则「进了踏步」只是空转。这里得继续推 ——
+    # 一停发，网关的看门狗几百毫秒内就会把轴清零（本来就该如此）。
+    deadline = time.time() + 5
+    vx = 0.0
+    while time.time() < deadline and vx <= 0.2:
+        a.send({"t": "vel", "vx": 0.5, "vy": 0.0, "wz": 0.0})
+        try:
+            st = a.wait_for("state", timeout=0.2)
+            vx = st.get("vel", {}).get("x", 0.0)
+        except TimeoutError:
+            pass
+    check("踏步后速度闭环回传", vx > 0.2, f"vx={vx} m/s")
+    a.close()
+
+
 def media_scenario(host, port):
     """媒体编排：能力协商、码流降级、全码率槽位仲裁。
 
@@ -638,10 +686,10 @@ def main():
         "--scenario",
         default="full",
         choices=["full", "no-terrain", "media", "no-media", "cloud-down",
-                 "pose-handoff", "config"],
+                 "pose-handoff", "auto-arm", "config"],
         help="no-terrain 验证感知主机地形图不可达；media/no-media 验证媒体编排；"
              "cloud-down 验证感知主机 ROS 不可达；pose-handoff 验证 2.4G 切回 MESH "
-             "时的姿态交接；config 验证在线改配置",
+             "时的姿态交接；auto-arm 验证起立后只推杆就能走；config 验证在线改配置",
     )
     args = parser.parse_args()
     host, port = args.host, args.port
@@ -664,6 +712,7 @@ def main():
         "no-media": no_media_scenario,
         "cloud-down": cloud_down_scenario,
         "pose-handoff": pose_handoff_scenario,
+        "auto-arm": auto_arm_scenario,
     }
     if args.scenario in standalone:
         standalone[args.scenario](host, port)

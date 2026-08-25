@@ -112,6 +112,9 @@ run_scenario "未配置媒体源" no-media nomedia
 # 2.4G 切回 MESH 的姿态交接。狗站着但遥测报坐下时，网关必须听遥控端的。
 run_scenario "姿态交接" pose-handoff pose
 
+# 起立后只推杆就要能走：力控站立、踏步这两级台阶由网关自己踩。
+run_scenario "推杆自动起步" auto-arm autoarm
+
 # 点云：需要额外拉一个假 ROS master，所以不套 run_scenario。
 # 验的是 XML-RPC 发现、TCPROS 握手、解析、降采样、量化下行这一整条链，
 # 这些在现场没法调试 —— 感知主机是机器狗的一部分，出问题只能干等。

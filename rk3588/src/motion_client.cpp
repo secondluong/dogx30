@@ -14,6 +14,13 @@ using Clock = std::chrono::steady_clock;
 // 又远短于起身本身的两秒，所以不影响「站起来就能推杆走」。
 constexpr int kAxisHoldMs = 300;
 
+// 推杆推到多少算「我要走」。要高过轴指令自己的死区，免得手抖或通道噪声就把狗
+// 踩进踏步；又要低到正常推杆一定过得去。
+constexpr float kWalkIntent = 0.2f;
+// 自动踩台阶时两级之间留多久。状态机迁移要工夫，力控刚发就跟一条踏步，主机还在
+// 过渡里，后一条会被直接忽略 —— 现场表现是推了半天狗只在原地力控站着。
+constexpr int kArmGapMs = 500;
+
 // 从原始报文里安全地取出一个结构体。长度不足就返回 false，避免越界读。
 template <typename T>
 bool Extract(const uint8_t* data, int len, T* out) {
@@ -486,11 +493,15 @@ void MotionClient::EnterTorqueStand() {
   SendSimple(cmd::kTorqueStand);
   std::lock_guard<std::mutex> lock(state_mutex_);
   axes_unlocked_ = true;
+  armed_ = Armed::kTorqued;
 }
 void MotionClient::ToggleStepping() {
   SendSimple(cmd::kSteppingToggle);
   std::lock_guard<std::mutex> lock(state_mutex_);
   axes_unlocked_ = true;
+  // 这是**切换**指令，所以记的是切过去之后停在哪一级。没遥测时 ArmForWalk 全靠
+  // 它，操作员手动点了停步之后也得能重新自动踩上来。
+  armed_ = armed_ == Armed::kStepped ? Armed::kTorqued : Armed::kStepped;
 }
 
 void MotionClient::SetGait(Gait gait) {
@@ -536,6 +547,13 @@ int32_t MotionClient::Normalize(float v) {
 }
 
 void MotionClient::SetVelocity(float vx, float vy, float wz) {
+  // 推了杆就是要走。原厂 App 起立后推杆直接走，而这台机器的状态机要先「力控站立」
+  // 再「踏步」才收速度 —— 那两下不是运动学上的必要动作，只是台阶，所以这里替
+  // 操作员踩。姿态调节走 SetPose，不经过这里，不会被误当成要走。
+  if (std::abs(vx) > kWalkIntent || std::abs(vy) > kWalkIntent ||
+      std::abs(wz) > kWalkIntent) {
+    ArmForWalk();
+  }
   std::lock_guard<std::mutex> lock(axis_mutex_);
   // 协议里 Y 向线速度与偏航角速度的映射带一个负号：轴为正表示向右平移 /
   // 向右转，而机体系 Y 轴左为正、偏航逆时针为正，故此处取反。
@@ -544,6 +562,43 @@ void MotionClient::SetVelocity(float vx, float vy, float wz) {
   axis_right_x_ = Normalize(-wz);
   axis_right_y_ = 0;  // 踏步态下右摇杆 Y 无定义
   axis_deadline_ = Clock::now() + std::chrono::milliseconds(cfg_.command_timeout_ms);
+}
+
+void MotionClient::ArmForWalk() {
+  bool step = false;  // false = 力控站立，true = 踏步
+  BasicState st;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (Clock::now() < arm_next_) return;
+    st = state_.basic_state;
+    // 没起立就别自作聪明：万一姿态记错了，替它踩台阶就等于替它站起来，
+    // 而起立必须是人按的。
+    if (last_stand_sit_ != LastStandSit::kStood) return;
+    if (state_.telemetry_alive) {
+      if (st == BasicState::kStepping) return;  // 已经能走了
+      if (st == BasicState::kTorqueStanding) {
+        step = true;
+      } else if (st == BasicState::kInitialStanding ||
+                 st == BasicState::kSitting) {
+        // RL 起立之后遥测仍报坐下（见 protocol.hpp），与初始站立同样对待。
+        step = false;
+      } else {
+        return;  // 起立中 / 坐下中 / 急停，不插手
+      }
+    } else {
+      // 没遥测（狗的 network.toml 没登记本机）时只能按顺序踩。踏步是切换指令，
+      // 重发会停步，所以每级只发一次；起立/趴下时 ReleaseAxes 清掉重来。
+      if (armed_ == Armed::kStepped) return;
+      step = armed_ == Armed::kTorqued;
+    }
+    // 两级之间要留时间：力控刚发就跟一条踏步，主机还在过渡里，后一条会被忽略。
+    arm_next_ = Clock::now() + std::chrono::milliseconds(kArmGapMs);
+  }
+  // 这两个自己要拿 state_mutex_，只能在锁外调；它们也顺手更新 armed_。
+  if (step) ToggleStepping();
+  else EnterTorqueStand();
+  std::printf("[运动] 推杆自动补一步：%s（遥测=%s）\n", step ? "踏步" : "力控站立",
+              ToString(st));
 }
 
 void MotionClient::SetPose(float height, float roll, float pitch, float yaw) {
@@ -556,6 +611,13 @@ void MotionClient::SetPose(float height, float roll, float pitch, float yaw) {
 }
 
 void MotionClient::ReleaseAxes() {
+  {
+    // 起立/趴下会把状态机打回去，自动踩台阶的进度跟着作废：下一次推杆要从力控
+    // 那一级重新踩，否则没遥测时只会发一条踏步，狗站着不动。
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    armed_ = Armed::kNone;
+    arm_next_ = Clock::time_point{};
+  }
   std::lock_guard<std::mutex> lock(axis_mutex_);
   axis_left_y_ = axis_left_x_ = axis_right_x_ = axis_right_y_ = 0;
   axis_deadline_ = Clock::time_point{};

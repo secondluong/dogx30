@@ -1081,10 +1081,18 @@ html.shell-app .hud-info {
 .acc-cur { font-weight: 600; }
 .acc-arrow { color: var(--muted); font-size: 16px; line-height: 1; }
 /* 选中项右侧打个勾。只靠底色区分，戴手套在阳光下看不清哪个是当前档。 */
-.acc-pop .btn.sm.active::after {
+.acc-pop .btn.sm.active::after,
+.acc-pop .btn.sm.pick::after {
   content: '✓';
   margin-left: 6px;
   font-weight: 700;
+}
+/* 上下楼那三档是必选一项：狗还没进楼梯步态时也得亮着一个，否则操作员不知道
+   上楼会用哪种。真进了那个步态之后由 .active 接手，样式一致，看着不会跳。 */
+.acc-pop .btn.sm.pick {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .gas-panel { z-index: 15; }

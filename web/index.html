@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260825p">
+<link rel="stylesheet" href="style.css?v=20260825q">
 </head>
 <body>
 
@@ -347,8 +347,10 @@
           <button type="button" class="btn sm" data-stair="grating">格栅</button>
           <button type="button" class="btn sm" data-stair="noriser">无踢面</button>
         </div>
+        <!-- 这三档是必选一项：上楼时总得有一种，默认楼梯。pick 表示「上楼用这个」，
+             active 表示「狗现在真在这个步态」，两者可能不一致（切换要地形图配合）。 -->
         <div class="row wrap" id="stair-row">
-          <button type="button" class="btn sm" data-gait="stair">楼梯</button>
+          <button type="button" class="btn sm pick" data-gait="stair">楼梯</button>
           <button type="button" class="btn sm" data-gait="stairmulti">楼梯(多帧)</button>
           <button type="button" class="btn sm" data-gait="stair45">45°楼梯</button>
         </div>
@@ -383,7 +385,7 @@
 <script src="cloud.js?v=20260820e"></script>
 <script src="gamepad.js?v=20260820e"></script>
 <script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260825p"></script>
-<script src="app.js?v=20260825p"></script>
+<script src="dogcam24.js?v=20260825q"></script>
+<script src="app.js?v=20260825q"></script>
 </body>
 </html>

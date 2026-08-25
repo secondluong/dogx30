@@ -411,6 +411,8 @@ var motionHpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'motion_client.hpp'), 'utf8');
 var serviceCpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'src', 'robot_service.cpp'), 'utf8');
+var motionCpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'src', 'motion_client.cpp'), 'utf8');
 check('2.4G RadioLink 含起立趴下行走指令',
       /0x21010223/.test(radioJava) &&
       /0x21010222/.test(radioJava) &&
@@ -541,6 +543,44 @@ check('2.4G 的档位也听狗自己报',
       /RADIO_GAIT_KEYS/.test(appJs) &&
       /function syncRadioPickers/.test(appJs) &&
       /syncRadioPickers\(radioSt\)/.test(appJs));
+// 力控站立、踏步不是运动学上的必要动作，只是状态机的两级台阶。原厂 App 起立后
+// 推杆直接走，我们却要操作员先点力控再点起步 —— 戴手套在阳光下容易点错，顺序也
+// 没人记得。现在推杆时两条链路各自替他踩。
+check('推杆就走，力控和起步不用人点',
+      /void ArmForWalk\(\)/.test(motionHpp) &&
+      /void MotionClient::ArmForWalk\(\)/.test(motionCpp) &&
+      /ArmForWalk\(\);/.test(motionCpp) &&
+      /kWalkIntent/.test(motionCpp) &&
+      /private void armForWalk\(\)/.test(radioJava) &&
+      /if \(axesPushed\(ax\)\) armForWalk\(\)/.test(radioJava));
+// 台阶要一级一级踩：力控刚发就跟一条踏步，运动主机还在过渡里会丢掉后一条，
+// 现场表现是推了半天狗只在原地力控站着。
+check('两级台阶之间留出状态机迁移时间',
+      /kArmGapMs/.test(motionCpp) &&
+      /arm_next_/.test(motionCpp) &&
+      /ARM_GAP_MS/.test(radioJava) &&
+      /now < armNextAt/.test(radioJava) &&
+      /onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava));
+// 力控站立唯一的用处是用摇杆调身高/俯仰。人点过力控就不能替他起步，否则这个
+// 功能没了；没点过时推杆一律当「要走」，哪怕遥测报的是力控站立。
+check('人点了力控就不替他起步',
+      /function noteWalkIntent/.test(appJs) &&
+      /app\.torqueByUser = true/.test(appJs) &&
+      /if \(app\.torqueByUser &&/.test(appJs) &&
+      /if \(app\.basicState === STATE_TORQUE_STANDING\) return 'vel'/.test(appJs) &&
+      /!standing \|\| emergency \|\| torqueByUser/.test(radioJava) &&
+      /torqueByUser = true/.test(radioJava));
+// 上下楼那三档是必选一项：狗还没进楼梯步态时也得亮着一个，否则操作员不知道上楼
+// 会用哪种。「上楼用这个」（pick）与「狗真在这个步态」（active）分开记 ——
+// 后者跟着遥测灭，前者不能灭。
+check('上下楼三档必选其一',
+      /class="btn sm pick" data-gait="stair"/.test(html) &&
+      /function markStairPick/.test(appJs) &&
+      /markStairPick\(b\.dataset\.gait\)/.test(appJs) &&
+      /markStairPick\(key\)/.test(appJs) &&
+      /#stair-row \[data-gait\]\.pick/.test(appJs) &&
+      /\.acc-pop \.btn\.sm\.pick \{/.test(styleText) &&
+      /\.acc-pop \.btn\.sm\.pick::after/.test(styleText));
 
 // 步态编码到按钮键的映射现在有两份：网关的 GaitKey() 和 2.4G 直连用的
 // RADIO_GAIT_KEYS。走歪了的表现是同一只狗在两条链路上高亮不同的步态。

@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825p';
+const WEB_BUILD = '0825q';
 
 function nativeAppVersion() {
   try {
@@ -87,6 +87,8 @@ const app = {
   gaitPending: false,
   lioAligning: false,
   walkMode: null,         // 由遥测推断：'torque' | 'step'
+  torqueByUser: false,    // 人点的力控（要用摇杆调姿态），不是自动踩台阶踩上来的
+  stairPick: 'stair',     // 上下楼用哪种楼梯步态。必选一项，所以有默认值
   poseHandoff: null,      // 待交接给网关的姿态（切档时记下，网关认了才算完）
   poseHintWarned: false,  // 旧网关的提示只说一次，别在遥控时反复弹
   modePick: null,         // G20 三挡或点按：manual | assist | auto
@@ -119,8 +121,16 @@ function isStandingUi() {
 app.isStandingUi = isStandingUi;
 
 function controlChannel() {
+  // 操作员自己点了「力控」，摇杆就是调姿态（身高/横滚/俯仰/偏航）—— 这是力控站立
+  // 唯一的用处，得留着。没点过就一律走速度通道：推杆就是要走，力控/踏步那两级
+  // 台阶由网关（ArmForWalk）和 2.4G 那侧（RadioLink.armForWalk）自己踩掉。
+  // 以前这里一进力控站立就改发姿态，操作员推杆只在原地起伏，只能再点一次起步。
+  if (app.torqueByUser &&
+      (app.basicState === STATE_TORQUE_STANDING || app.walkMode === 'torque')) {
+    return 'pose';
+  }
   if (app.basicState === STATE_STEPPING) return 'vel';
-  if (app.basicState === STATE_TORQUE_STANDING) return 'pose';
+  if (app.basicState === STATE_TORQUE_STANDING) return 'vel';
   // RL 起立后遥测仍报 0，力控/起步常被主机忽略。原厂此时走速度通道。
   if (app.rlStanding &&
       app.basicState !== STATE_SIT_TO_STAND &&
@@ -128,7 +138,6 @@ function controlChannel() {
     return 'vel';
   }
   if (app.walkMode === 'step') return 'vel';
-  if (app.walkMode === 'torque') return 'pose';
   return null;
 }
 
@@ -317,6 +326,7 @@ function radioDirect() {
 
 function send(obj) {
   if (!obj) return;
+  if (obj.t === 'cmd') noteWalkIntent(obj.name);
   // 只有安装包真能直达时，2.4G 才停掉网关运动。否则切 2.4G 等于把 MESH 也掐死。
   if (radioDirect() && hasNativeRadio()) {
     const t = obj.t;
@@ -336,6 +346,18 @@ const POSE_CMDS = {
   stand: true, stand_up: true, sit: true, sit_down: true,
   unload: true, estop: true,
 };
+
+// 点了这些之后，摇杆重新回到「推杆就是要走」。与 RadioLink 里清掉 torqueByUser 的
+// 时机一致：起步是明确要走，起立/趴下/卸力/急停把状态机打回去，力控意图不该留着。
+const WALK_INTENT_CMDS = ['step', 'stand', 'stand_up', 'sit', 'sit_down',
+                          'unload', 'estop'];
+
+// 推杆是要走还是要调姿态，只由这一处记。两条链路的指令都会流过 send 或
+// applyRadioPose，所以放那两处调，不必在每个按钮上各记一遍。
+function noteWalkIntent(name) {
+  if (name === 'torque') app.torqueByUser = true;
+  else if (WALK_INTENT_CMDS.indexOf(name) >= 0) app.torqueByUser = false;
+}
 
 function linkOpen() {
   return !!(app.ws && app.ws.readyState === WebSocket.OPEN);
@@ -466,11 +488,7 @@ function syncRadioPickers(st) {
   if (key === radioGaitSeen && height === radioHeightSeen) return;
   radioGaitSeen = key;
   radioHeightSeen = height;
-  if (key) {
-    document.querySelectorAll('[data-gait]').forEach((b) => {
-      b.classList.toggle('active', b.dataset.gait === key);
-    });
-  }
+  if (key) markGait(key);
   if (height !== null) {
     const crawl = height < 0;
     document.querySelectorAll('[data-height]').forEach((b) => {
@@ -483,6 +501,7 @@ function syncRadioPickers(st) {
 
 // 2.4G 没有网关遥测时，本地先把起立后的步态/身高菜单亮出来。
 function applyRadioPose(name) {
+  noteWalkIntent(name);
   // 点过之后先按点的显示，但下一帧要让遥测重新说一次：狗可能没接受这次切换
   // （楼梯步态要地形图配合），那时候亮着新档位就是在骗人。
   radioGaitSeen = '';
@@ -562,27 +581,48 @@ function applyRadioPose(name) {
                  'stair', 'stairmulti', 'stair45'];
   if (gaits.indexOf(name) >= 0) {
     app.gait = name;
-    document.querySelectorAll('[data-gait]').forEach((b) => {
-      b.classList.toggle('active', b.dataset.gait === name);
-    });
+    markGait(name);
     paintPickers();
   }
+}
+
+// 楼梯那三档长在「上下楼踏面」菜单里，是**必选一项**的设置：上楼时到底用哪种，
+// 任何时候都得有个答案，所以有默认值、也不会被遥测灭成一个都不亮。
+// active 表示「狗现在真在这个步态」，pick 表示「上楼就用这个」，两者分开记。
+const STAIR_GAITS = ['stair', 'stairmulti', 'stair45'];
+
+function markStairPick(key) {
+  if (STAIR_GAITS.indexOf(key) < 0) return;
+  app.stairPick = key;
+  document.querySelectorAll('#stair-row [data-gait]').forEach((b) => {
+    b.classList.toggle('pick', b.dataset.gait === key);
+  });
+  paintPickers();
+}
+
+// 标「狗现在在哪个步态」。遥测报的是楼梯步态时，必选项也跟着挪过去，
+// 免得菜单里一个亮 active、另一个亮 pick，看着像选了两个。
+function markGait(key) {
+  document.querySelectorAll('[data-gait]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.gait === key);
+  });
+  markStairPick(key);
 }
 
 // 把当前选的那一档写到收起的菜单标题上（步态 · 常规）。
 // 只读 DOM 里已经标好的 active，不另存一份状态：两条链路各有一处在标 active
 // （MESH 看遥测、2.4G 看发过什么），再存一份就一定会有一处忘了同步。
 const PICKERS = [
-  { val: 'acc-val-gait', sel: '[data-gait]' },
-  { val: 'acc-val-stair', sel: '[data-stair]' },
-  { val: 'acc-val-height', sel: '[data-height]' },
+  { val: 'acc-val-gait', sel: '[data-gait].active' },
+  { val: 'acc-val-stair', sel: '#stair-row [data-gait].pick' },
+  { val: 'acc-val-height', sel: '[data-height].active' },
 ];
 
 function paintPickers() {
   for (const p of PICKERS) {
     const el = $(p.val);
     if (!el) continue;
-    const on = document.querySelector(p.sel + '.active');
+    const on = document.querySelector(p.sel);
     // 还不知道选的是哪一档（没遥测、这一档里也没点过）时退回菜单名，
     // 不然按钮上是一片空白，操作员不知道那颗是干什么的。
     let text = on ? on.textContent : (el.dataset.label || '');
@@ -929,9 +969,7 @@ function renderState(s) {
     $('banner').classList.add('hidden');
   }
 
-  document.querySelectorAll('[data-gait]').forEach((b) => {
-    b.classList.toggle('active', s.gait_key === b.dataset.gait);
-  });
+  markGait(s.gait_key);
   document.querySelectorAll('[data-height]').forEach((b) => {
     b.classList.toggle('active',
       (s.height_gear === 0 && b.dataset.height === 'normal') ||
@@ -945,6 +983,8 @@ function renderState(s) {
   wrap.classList.toggle('dog-up', standing);
   wrap.classList.toggle('dog-prone', !standing);
   paintStandButton();
+  // 趴下了力控意图就作废（可能是别人按的趴下），下次起立后推杆照旧自动起步。
+  if (!standing) app.torqueByUser = false;
   if (!radioDirect()) {
     if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
     else if (s.basic_state === STATE_TORQUE_STANDING) app.walkMode = 'torque';
@@ -1358,6 +1398,9 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
 document.querySelectorAll('[data-gait]').forEach((b) => {
   b.addEventListener('click', guarded(() => {
     if (app.gaitPending) return;
+    // 点了楼梯里的哪一种，必选项就是它 —— 这条是「上楼用哪种」的设置，点了就算，
+    // 与狗当前是不是真进了那个步态（楼梯要地形图配合，可能不成）分开记。
+    markStairPick(b.dataset.gait);
     setGaitPending(true);
     send({
       t: 'cmd',
