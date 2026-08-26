@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826a';
+const WEB_BUILD = '0826b';
 
 function nativeAppVersion() {
   try {
@@ -450,12 +450,14 @@ function syncRadioStanding(st0) {
     app.basicState = 0;
     changed = true;
   }
-  if (basic >= 0) {
-    const locked = basic === STATE_EMERGENCY;
-    if (locked !== app.emergencyLocked) {
-      app.emergencyLocked = locked;
-      changed = true;
-    }
+  // 急停常常是原生那侧收到实体红键按下的（RadioLink.handleButtons 直接发 estop，
+  // 网页并不经手）。没有遥测时 basic 一直是 -1，只有 RadioLink 自己记着这件事，
+  // 不读它的话左下角一直显示「起立」，操作员就找不到卸力 —— 而急停后不卸力
+  // 起立是发不动的。有遥测时以遥测为准：别人卸过力我们也得跟着改口。
+  const locked = basic >= 0 ? basic === STATE_EMERGENCY : !!st.emergency;
+  if (locked !== app.emergencyLocked) {
+    app.emergencyLocked = locked;
+    changed = true;
   }
   // statusJson 里已经带了姿态，别再多走一次桥：每次桥调用都是一趟同步 Binder，
   // 而这个回路按发轴频率在跑。
@@ -465,6 +467,7 @@ function syncRadioStanding(st0) {
     if (!up) app.walkMode = null;
     changed = true;
   }
+  if (st.poseKnown) notePose(isStandingUi());
   if (!changed) return;
   const wrap = $('stage-wrap');
   if (wrap) {
@@ -744,14 +747,27 @@ function adoptRadioPath(path, announce) {
 }
 // 当前这一侧对姿态有把握吗？没把握就返回 null，宁可不交接 ——
 // 猜错的代价是按「趴下」时狗反而站起来，比多按一次起立严重得多。
+// 任一侧确定过姿态就记在这里。两侧各自只知道自己发过什么，而狗 RL 起立后遥测仍报
+// 坐下，所以谁都可能「此刻不知道」。App 是唯一一直在场的一方，切档交接的应该是这份
+// 记忆，而不是「当前这侧现在知不知道」—— 以前只交接当前侧的认知，切档那一刻正好
+// 没遥测（平板地址没登记、或网关够不着狗）就交接不出去，表现就是切档姿态有时对
+// 有时不对。App 重启后记忆为空，那才真的交不出去。
+let poseMem = null;
+
+function notePose(up) {
+  if (typeof up === 'boolean') poseMem = up;
+}
+
 function handoffPose() {
   if (radioDirect()) {
     // 2.4G 侧：原生发过起立/趴下，或者收到了狗的遥测，才算有依据。
     const st = nativeRadioStatus() || {};
-    return st.poseKnown ? isStandingUi() : null;
+    if (st.poseKnown) return isStandingUi();
+  } else if (linkOpen() && app.alive) {
+    // MESH 侧：网关连着且它够得着狗，那份记忆就是有依据的。
+    return isStandingUi();
   }
-  // MESH 侧：网关连着且它够得着狗，那份记忆就是有依据的。
-  return linkOpen() && app.alive ? isStandingUi() : null;
+  return poseMem;
 }
 
 function pushPoseToRadio(upright) {
@@ -986,6 +1002,7 @@ function renderState(s) {
 
   // 起立/坐下走的是运动主机自己的轨迹，过渡中再点一次会打断甚至反转。
   const standing = isStandingUi();
+  if (!radioDirect() && linkOpen() && app.alive) notePose(standing);
   const wrap = $('stage-wrap');
   wrap.classList.toggle('dog-up', standing);
   wrap.classList.toggle('dog-prone', !standing);

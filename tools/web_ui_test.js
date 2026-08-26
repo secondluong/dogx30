@@ -521,14 +521,25 @@ check('网关认下来之前按自己知道的显示',
       /app\.rlStanding = app\.poseHandoff !== null \? app\.poseHandoff/.test(appJs) &&
       /if \(obj\.t === 'cmd' && POSE_CMDS\[obj\.name\]\) app\.poseHandoff = null/.test(appJs) &&
       !/app\.poseHandoff = null;\s*\n\s*poseHintVal/.test(appJs));
-// 猜错的代价是按「趴下」时狗反而站起来，比多按一次起立严重得多，所以
-// 只在发过起立/趴下或收到遥测时才交接。
-check('姿态没把握就不交接',
+// 交接的是 App 记住的那份姿态，不是「当前这侧此刻知不知道」：切档那一刻正好没遥测
+// （平板地址没登记、网关够不着狗）就交接不出去，表现是切档姿态有时对有时不对。
+// 两侧任一确定过就记进 poseMem；都没确定过（刚开 App）才真的不交接。
+check('切档交接 App 记住的姿态',
       /poseIsKnown\(\)/.test(radioJava) &&
       /o\.put\("poseKnown"/.test(radioJava) &&
-      /st\.poseKnown \? isStandingUi\(\) : null/.test(appJs) &&
-      /linkOpen\(\) && app\.alive \? isStandingUi\(\) : null/.test(appJs) &&
+      /let poseMem = null/.test(appJs) &&
+      /function notePose/.test(appJs) &&
+      /if \(st\.poseKnown\) notePose\(isStandingUi\(\)\)/.test(appJs) &&
+      /if \(!radioDirect\(\) && linkOpen\(\) && app\.alive\) notePose\(standing\)/.test(appJs) &&
+      /if \(st\.poseKnown\) return isStandingUi\(\);/.test(appJs) &&
+      /\n  return poseMem;\n\}/.test(appJs) &&
       /if \(granted && msg\.Has\("standing"\)\)/.test(serviceCpp));
+// 急停后必须能找到卸力：不卸力起立是发不动的。实体红键是原生那侧收的（网页并不
+// 经手），没有遥测时只有 RadioLink 记着这件事，所以那个标志一定要读。
+check('急停后左下角变卸力，实体红键也算',
+      /o\.put\("emergency", emergency\)/.test(radioJava) &&
+      /basic >= 0 \? basic === STATE_EMERGENCY : !!st\.emergency/.test(appJs) &&
+      /btn\.textContent = '卸力'/.test(appJs));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
 check('菜单收起时就显示当前档位加箭头',
       !!htmlIds['acc-val-gait'] &&
