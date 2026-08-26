@@ -130,7 +130,8 @@ void MotionClient::TxLoop() {
         send_axes = AxisCommandsApply(
             state_.basic_state,
             last_stand_sit_ == LastStandSit::kStood || axes_unlocked_ ||
-                torqued_ || stepping_);
+                torqued_ || stepping_,
+            state_.emergency_source);
       }
     }
 
@@ -387,6 +388,13 @@ void MotionClient::StandOrSit() {
     std::printf("[运动] 忽略坐/站：当前正在%s\n", ToString(s.basic_state));
     return;
   }
+  if (s.telemetry_alive && JointsLocked(s.basic_state, s.emergency_source)) {
+    std::printf("[运动] 急停锁定中，坐/站改为卸力 0x21010202（遥测=%s 源=%u）\n",
+                ToString(s.basic_state),
+                static_cast<unsigned>(s.emergency_source));
+    UnloadForce();
+    return;
+  }
   ReleaseAxes();
 
   // 遥测在 RL 站着时仍报 basic_state=0。现场 10:45 起了一次之后连点四次「坐」，
@@ -432,6 +440,17 @@ void MotionClient::StandOrSit() {
 
 void MotionClient::StandUp() {
   {
+    const RobotState s = Snapshot();
+    if (s.telemetry_alive &&
+        JointsLocked(s.basic_state, s.emergency_source)) {
+      std::printf("[运动] 急停锁定中，起立改为卸力 0x21010202（遥测=%s 源=%u）\n",
+                  ToString(s.basic_state),
+                  static_cast<unsigned>(s.emergency_source));
+      UnloadForce();
+      return;
+    }
+  }
+  {
     std::lock_guard<std::mutex> lock(axis_mutex_);
     if (Clock::now() < axis_hold_until_) {
       std::printf("[运动] 忽略起立：刚发过起/趴\n");
@@ -455,6 +474,17 @@ void MotionClient::StandUp() {
 
 void MotionClient::SitDown() {
   {
+    const RobotState s = Snapshot();
+    if (s.telemetry_alive &&
+        JointsLocked(s.basic_state, s.emergency_source)) {
+      std::printf("[运动] 急停锁定中，趴下改为卸力 0x21010202（遥测=%s 源=%u）\n",
+                  ToString(s.basic_state),
+                  static_cast<unsigned>(s.emergency_source));
+      UnloadForce();
+      return;
+    }
+  }
+  {
     std::lock_guard<std::mutex> lock(axis_mutex_);
     if (Clock::now() < axis_hold_until_) {
       std::printf("[运动] 忽略趴下：刚发过起/趴\n");
@@ -464,13 +494,14 @@ void MotionClient::SitDown() {
   ReleaseAxes();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    last_stand_sit_ = LastStandSit::kSat;
-    state_.rl_standing = false;
-    axes_unlocked_ = false;
-    torqued_ = false;
-    stepping_ = false;
-    step_at_ = {};
-  }
+  last_stand_sit_ = LastStandSit::kSat;
+  state_.rl_standing = false;
+  state_.emergency_source = 5;  // 客户端触发，等遥测改口前界面先认锁定
+  axes_unlocked_ = false;
+  torqued_ = false;
+  stepping_ = false;
+  step_at_ = {};
+}
   std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
               ToString(Snapshot().basic_state));
   SendSimple(cmd::kRlSitDown);
@@ -497,6 +528,7 @@ void MotionClient::UnloadForce() {
   std::lock_guard<std::mutex> lock(state_mutex_);
   last_stand_sit_ = LastStandSit::kSat;
   state_.rl_standing = false;
+  state_.emergency_source = 0;
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;
@@ -554,6 +586,7 @@ void MotionClient::SoftEmergencyStop() {
   std::lock_guard<std::mutex> lock(state_mutex_);
   last_stand_sit_ = LastStandSit::kSat;
   state_.rl_standing = false;
+  state_.emergency_source = 5;
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;

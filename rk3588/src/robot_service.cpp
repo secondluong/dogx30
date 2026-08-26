@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.2.7";
+constexpr const char* kVersion = "0.2.8";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。
@@ -1077,7 +1077,9 @@ std::string RobotService::BuildStateJson() const {
 
   // RL 起立后运动主机仍报「坐下」。芯片若跟着撒谎，人会以为没起来而连点起立。
   const char* state_text = ToString(s.basic_state);
-  if (s.rl_standing && s.basic_state == BasicState::kSitting) {
+  if (JointsLocked(s.basic_state, s.emergency_source)) {
+    state_text = "急停锁定";
+  } else if (s.rl_standing && s.basic_state == BasicState::kSitting) {
     state_text = aligning ? "RL 站立 · 对准中" : "RL 站立 · 可走";
   }
 
@@ -1206,7 +1208,7 @@ void RobotService::StateLoop() {
     // 原厂 LIO：UDP 敲门 + /lio_enable。文档要求站稳再开，坐下时不发。
     if (cloud_ && !lio_valid_ && tick % 40 == 20) {
       const RobotState st = client_.Snapshot();
-      if (StandingForLio(st.basic_state, st.rl_standing)) {
+      if (StandingForLio(st.basic_state, st.rl_standing, st.emergency_source)) {
         std::string err;
         if (!lio_cmd_ok_ && terrain_.StartLio(true, &err)) {
           lio_cmd_ok_ = true;

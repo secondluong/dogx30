@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826k';
+const WEB_BUILD = '0826l';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -121,6 +121,7 @@ const STATE_EMERGENCY = 6;
 
 // 趴下只露起立；站立（含 RL 起立后遥测仍报 0）才出步态/身高和力控起步。
 function isStandingUi() {
+  if (app.emergencyLocked) return false;
   if (app.rlStanding && app.basicState !== STATE_STAND_TO_SIT) return true;
   const s = app.basicState;
   return s === STATE_INITIAL_STAND || s === STATE_TORQUE_STANDING ||
@@ -477,7 +478,8 @@ function syncRadioStanding(st0) {
   // 网页并不经手）。没有遥测时 basic 一直是 -1，只有 RadioLink 自己记着这件事，
   // 不读它的话左下角一直显示「起立」，操作员就找不到卸力 —— 而急停后不卸力
   // 起立是发不动的。有遥测时以遥测为准：别人卸过力我们也得跟着改口。
-  const locked = basic >= 0 ? basic === STATE_EMERGENCY : !!st.emergency;
+  const src = typeof st.emergSrc === 'number' ? st.emergSrc : 0;
+  const locked = basic === STATE_EMERGENCY || !!st.emergency || src > 0;
   if (locked !== app.emergencyLocked) {
     app.emergencyLocked = locked;
     changed = true;
@@ -947,7 +949,8 @@ function renderState(s) {
     // 左下角又变成「起立」，再按一次狗会先趴下去。
     app.rlStanding = app.poseHandoff !== null ? app.poseHandoff : !!s.rl_standing;
     app.emergencyLocked = s.basic_state === STATE_EMERGENCY || !!s.emergency_source;
-  } else if (s.alive && s.basic_state === STATE_EMERGENCY) {
+    if (app.emergencyLocked) app.rlStanding = false;
+  } else if (s.alive && (s.basic_state === STATE_EMERGENCY || s.emergency_source)) {
     app.emergencyLocked = true;
     app.rlStanding = false;
   }
@@ -956,7 +959,10 @@ function renderState(s) {
   document.querySelector('.telemetry').classList.toggle('stale', !s.alive);
 
   const chipState = $('chip-state');
-  if (radioDirect()) {
+  if (app.emergencyLocked) {
+    chipState.textContent = radioDirect() ? '2.4G · 急停锁定' : (s.basic_state_text || '急停锁定');
+    chipState.classList.add('online');
+  } else if (radioDirect()) {
     chipState.textContent = '2.4G';
     chipState.classList.add('online');
   } else {

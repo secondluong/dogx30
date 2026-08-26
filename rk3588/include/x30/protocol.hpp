@@ -200,6 +200,13 @@ inline bool IsStandSitTransient(BasicState s) {
   return s == BasicState::kSitToStand || s == BasicState::kStandToSit;
 }
 
+// 关节自锁：basic_state=6，或 0x1008 的 emergency_source ≠ 0。
+// 急停之后主机常改回报坐下(0)，原厂看的是来源字节，不是 basic_state。
+// 这时候再发起立/速度会被静默丢掉，必须先卸力。
+inline bool JointsLocked(BasicState s, uint8_t emergency_source = 0) {
+  return s == BasicState::kEmergencyOrFall || emergency_source != 0;
+}
+
 // 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。其余状态里发轴，
 // 实测会把原厂柔和的起身/趴下掐成猛起猛趴——力控站立的左摇杆 Y 是身高，
 // 50 Hz 发 0 等于一直在喊「把身子按到最低」。
@@ -207,8 +214,9 @@ inline bool IsStandSitTransient(BasicState s) {
 // 起立后就能走：RL 起立后主机常停在 0/2，原厂此时推杆即走。
 // 力控/起步是可选的（力控改姿态），不再当走路门槛 —— 那两下是切换指令，
 // 切档后记忆一错就会发反。起立中 / 坐下中 / 急停仍然不发，免得掐硬。
-inline bool AxisCommandsApply(BasicState s, bool standing = false) {
-  if (s == BasicState::kEmergencyOrFall) return false;
+inline bool AxisCommandsApply(BasicState s, bool standing = false,
+                             uint8_t emergency_source = 0) {
+  if (JointsLocked(s, emergency_source)) return false;
   if (s == BasicState::kTorqueStanding || s == BasicState::kStepping) {
     return true;
   }
@@ -225,8 +233,9 @@ inline bool TelemUpright(BasicState s) {
 
 // 原厂 LIO 要求站稳再开。RL 起立后遥测仍报坐下，要看 rl_standing。
 // 起立中 / 坐下中身子在动，不开。
-inline bool StandingForLio(BasicState s, bool rl_standing = false) {
-  if (IsStandSitTransient(s) || s == BasicState::kEmergencyOrFall) {
+inline bool StandingForLio(BasicState s, bool rl_standing = false,
+                          uint8_t emergency_source = 0) {
+  if (IsStandSitTransient(s) || JointsLocked(s, emergency_source)) {
     return false;
   }
   if (TelemUpright(s)) return true;
@@ -236,8 +245,9 @@ inline bool StandingForLio(BasicState s, bool rl_standing = false) {
 // 步态指令主机文档写「仅踏步态」。RL 起立后遥测仍报坐下，编排器若只看
 // basic_state，顶栏已经是「RL 站立」时切步态还会报「当前为坐下」。
 // 力控站立 / 初始站立 / 我们记得 RL 已起立，都放行。真趴着才挡。
-inline bool GaitSwitchApply(BasicState s, bool rl_standing = false) {
-  if (IsStandSitTransient(s) || s == BasicState::kEmergencyOrFall) {
+inline bool GaitSwitchApply(BasicState s, bool rl_standing = false,
+                           uint8_t emergency_source = 0) {
+  if (IsStandSitTransient(s) || JointsLocked(s, emergency_source)) {
     return false;
   }
   if (TelemUpright(s)) return true;

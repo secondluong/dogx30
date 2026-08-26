@@ -80,7 +80,8 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
   if (snapshot.gait == target) {
     return {true, "", std::string("已处于") + ToString(target)};
   }
-  if (!GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing)) {
+  if (!GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing,
+                       snapshot.emergency_source)) {
     const char* now =
         snapshot.rl_standing && snapshot.basic_state == BasicState::kSitting
             ? "RL 站立（遥测仍报坐下）"

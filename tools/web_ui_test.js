@@ -483,7 +483,7 @@ check('起立后就能发轴',
       /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
 check('坐下遥测不清掉刚点的力控起步',
-      /更不能清力控\/起步/.test(radioJava) &&
+      /RL 起立后主机仍报坐下/.test(radioJava) &&
       /本端刚点的力控\/起步不要灭/.test(appJs) &&
       /刚点的起步不要被还没改口的「力控站立」灭掉/.test(appJs));
 // 起立中 / 坐下中 / 急停仍然不发轴：那几个状态下轴没有文档定义，
@@ -567,8 +567,11 @@ check('B1/B2 只由网页那层发，不和原生重复',
 // 急停后必须能找到卸力：不卸力起立是发不动的。实体红键是原生那侧收的（网页并不
 // 经手），没有遥测时只有 RadioLink 记着这件事，所以那个标志一定要读。
 check('急停后左下角变卸力，实体红键也算',
-      /o\.put\("emergency", emergency\)/.test(radioJava) &&
-      /basic >= 0 \? basic === STATE_EMERGENCY : !!st\.emergency/.test(appJs) &&
+      /o\.put\("emergency", telemLocked\(\)\)/.test(radioJava) &&
+      /o\.put\("emergSrc", telemEmergSrc\)/.test(radioJava) &&
+      /TELEM_RUNNING = 0x1008/.test(radioJava) &&
+      /basic === STATE_EMERGENCY \|\| !!st\.emergency \|\| src > 0/.test(appJs) &&
+      /if \(app\.emergencyLocked\) return false/.test(appJs) &&
       /btn\.textContent = '卸力'/.test(appJs));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
 // 收起来的样子是「步态|常规 ›」：菜单名要留着（只显示「常规」认不出这颗管什么），
@@ -715,6 +718,7 @@ check('两条链路对步态编码的理解一致',
       gaitNums.length + ' 个，不一致: ' + mismatch.join(', '));
 check('轴放行看记得起立，过渡和急停仍挡',
       /bool AxisCommandsApply\(BasicState s, bool standing/.test(protoHpp) &&
+      /inline bool JointsLocked/.test(protoHpp) &&
       /return standing;/.test(protoHpp) &&
       /if \(IsStandSitTransient\(s\)\) return false/.test(protoHpp));
 check('屏幕摇杆在 2.4G 下也能推',

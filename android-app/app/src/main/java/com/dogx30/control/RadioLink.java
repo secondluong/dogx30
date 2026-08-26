@@ -64,9 +64,13 @@ final class RadioLink {
     // （见 rk3588/include/x30/protocol.hpp 的 CommandHead + MotionStateData）。
     // 这是狗**自己报的**姿态，比本地猜靠得住：以前这里只数包不看内容，
     // 一切档本地那份猜测就和实际脱节，界面便一直显示站立。
+    private static final int TELEM_RUNNING = 0x1008;
     private static final int TELEM_MOTION = 0x1009;
     /** 身高档位是单独一条简单报文，档位就放在头里的 paramters_size，按有符号读。 */
     private static final int TELEM_HEIGHT = 0x11050F08;
+    /** RcsData.emergency_source：头 12 字节之后偏移 73，见 protocol.hpp。 */
+    private static final int RCS_EMERG_OFF = 73;
+    private static final int RCS_LEN = 88;
     private static final int HEAD_LEN = 12;
     /** 遥测 200 Hz，半秒没有就当它不可信，退回本地记的那份。 */
     private static final long TELEM_FRESH_MS = 500;
@@ -119,6 +123,8 @@ final class RadioLink {
     private boolean standing;
     private int telemState = -1;
     private int telemGait = -1;
+    private int telemEmergSrc;
+    private boolean telemRunSeen;
     /** 身高档位：-1 匍匐、0 正常。狗只在变化时报，所以不设新鲜期，收到过就一直算。 */
     private int telemHeight;
     private boolean telemHeightSeen;
@@ -225,7 +231,15 @@ final class RadioLink {
     }
 
     private boolean telemFresh() {
-        return telemState >= 0 && System.currentTimeMillis() - telemAt < TELEM_FRESH_MS;
+        return telemAt != 0 && System.currentTimeMillis() - telemAt < TELEM_FRESH_MS;
+    }
+
+    /** 关节自锁。急停后主机常回报坐下，原厂看 0x1008 的来源字节。 */
+    private boolean telemLocked() {
+        if (telemFresh() && (telemState == ST_EMERGENCY || telemEmergSrc != 0)) {
+            return true;
+        }
+        return emergency;
     }
 
     private boolean telemUpright() {
@@ -239,6 +253,7 @@ final class RadioLink {
      * 两条链路读同一份真相，切档时状态才不会走散。
      */
     synchronized boolean isStanding() {
+        if (telemLocked()) return false;
         if (telemFresh()) {
             if (telemUpright()) return true;
             // 起立中 / 坐下中按意图算，否则按钮会在过渡期来回跳。
@@ -282,10 +297,11 @@ final class RadioLink {
             o.put("standing", isStanding());
             // 狗自己报的姿态与步态。没有遥测时给 -1，网页那侧就不会拿它盖掉
             // 网关的读数（两条链路共用 app.basicState）。
-            o.put("basic", telemFresh() ? telemState : -1);
-            o.put("gait", telemFresh() ? telemGait : -1);
+            o.put("basic", telemFresh() && telemState >= 0 ? telemState : -1);
+            o.put("gait", telemFresh() && telemState >= 0 ? telemGait : -1);
             if (telemHeightSeen) o.put("height", telemHeight);
-            o.put("emergency", emergency);
+            o.put("emergency", telemLocked());
+            o.put("emergSrc", telemEmergSrc);
             o.put("axes", axesApply());
             o.put("poseKnown", poseIsKnown());
             return o.toString();
@@ -359,8 +375,7 @@ final class RadioLink {
      * 起立中 / 坐下中 / 急停一律不发，免得把柔和起身掐硬。
      */
     private boolean axesApply() {
-        if (emergency) return false;
-        if (telemFresh() && telemState == ST_EMERGENCY) return false;
+        if (telemLocked()) return false;
         if (lastStandAt != 0
                 && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS) {
             return false;
@@ -1191,11 +1206,18 @@ final class RadioLink {
             telemHeightSeen = true;
             return;
         }
+        if (code == TELEM_RUNNING && len >= HEAD_LEN + RCS_LEN) {
+            telemEmergSrc = b[HEAD_LEN + RCS_EMERG_OFF] & 0xff;
+            telemRunSeen = true;
+            telemAt = System.currentTimeMillis();
+            applyTelemLock();
+            return;
+        }
         if (code != TELEM_MOTION || len < HEAD_LEN + 2) return;
         telemState = b[HEAD_LEN] & 0xff;
         telemGait = b[HEAD_LEN + 1] & 0xff;
         telemAt = System.currentTimeMillis();
-        if (telemUpright()) {
+        if (telemUpright() && telemEmergSrc == 0) {
             standing = true;
             emergency = false;
             // 力控站立 / 踏步是主机说的，比本地这两个标志准。但初始站立不要
@@ -1206,17 +1228,22 @@ final class RadioLink {
             } else if (telemState == ST_TORQUE_STANDING && !stepping) {
                 torqued = true;
             }
-        } else if (telemState == ST_EMERGENCY) {
-            emergency = true;
-            standing = false;
-            clearWalk();
+        } else if (telemState == ST_EMERGENCY || telemEmergSrc != 0) {
+            applyTelemLock();
         } else if (telemState == ST_SITTING) {
-            // RL 起立后主机仍报坐下。分不清真趴着还是那种谎报，不动 standing，
-            // 更不能清力控/起步：清了按钮灭掉，人再按一次起步就等于停步。
-            emergency = false;
+            // RL 起立后主机仍报坐下。分不清真趴着还是那种谎报，不动 standing。
+            // 急停后也常报坐下，但关节锁着 —— 有 0x1008 才敢把急停旗标清掉。
+            if (telemRunSeen && telemEmergSrc == 0) emergency = false;
         } else if (telemState == ST_STAND_TO_SIT) {
             clearWalk();
         }
+    }
+
+    private void applyTelemLock() {
+        if (telemState != ST_EMERGENCY && telemEmergSrc == 0) return;
+        emergency = true;
+        standing = false;
+        clearWalk();
     }
 
     private boolean sendUdp(byte[] pkt, @Nullable InetAddress dest) {
