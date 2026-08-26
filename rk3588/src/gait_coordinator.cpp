@@ -115,10 +115,22 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
     }
     SleepMs(cfg_.settle_delay_ms);
   } else {
-    // 离开楼梯后回到手动，否则 is_nav_mode 一直为 1，摇杆速度被地形图链路吃掉。
-    // 楼梯没切成时 gait 仍是 walk：必须先恢复手动，不能「已处于」就直接返回。
-    motion_.SetControlMode(ControlMode::kManual);
-    terrain_.SetStepZMax(RecommendedStepZMax(target));
+    // 只在离开楼梯/非手动时拉回手动。爬坡、常规不要附带模式指令。
+    if (snapshot.control_mode == ControlMode::kNonManual ||
+        RequiresHeightMap(snapshot.gait)) {
+      motion_.SetControlMode(ControlMode::kManual);
+    }
+    // 站着点爬坡/常规不要改障碍阈值，也不要把步态码发给主机。
+    // 文档：步态仅踏步态可切。现在发 → 主机自己踏，gait_state 仍报 0，
+    // 再切别的档只改记录，20Hz 速度 0 还在喂，狗就踏个不停。
+    motion_.StopUnwantedMarch();
+    if (motion_.UserStepping() &&
+        snapshot.basic_state == BasicState::kStepping) {
+      if (!already) motion_.SetGait(target);
+      return {true, "", ""};
+    }
+    motion_.QueueGait(target);
+    return {true, "", ""};
   }
 
   if (already) {
@@ -128,15 +140,11 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
   motion_.SetGait(target);
 
   if (!WaitGaitConfirmed(target)) {
-    if (needs_map) {
-      return {false, "gait_not_applied",
-              std::string("切换到") + ToString(target) +
-                  "未生效。楼梯步态需要感知主机的地形图模块配合，"
-                  "请确认 192.168.1.105 可达、地形图模块已启动，"
-                  "且所选踏面类型与实际楼梯相符。"};
-    }
     return {false, "gait_not_applied",
-            std::string("切换到") + ToString(target) + "未生效。"};
+            std::string("切换到") + ToString(target) +
+                "未生效。楼梯步态需要感知主机的地形图模块配合，"
+                "请确认 192.168.1.105 可达、地形图模块已启动，"
+                "且所选踏面类型与实际楼梯相符。"};
   }
 
   return {true, "", std::string("已切换到") + ToString(target)};

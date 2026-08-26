@@ -126,6 +126,8 @@ final class RadioLink {
     private int telemGait = -1;
     private int telemEmergSrc;
     private int telemNavMode;
+    private String lastGaitSent = "";
+    private String pendingGait = "";
     private boolean telemRunSeen;
     /** 身高档位：-1 匍匐、0 正常。狗只在变化时报，所以不设新鲜期，收到过就一直算。 */
     private int telemHeight;
@@ -239,7 +241,7 @@ final class RadioLink {
     /** 关节自锁。急停后主机常回报坐下，原厂看 0x1008 的来源字节。 */
     private boolean telemLocked() {
         if (telemFresh() && (telemState == ST_EMERGENCY
-                || (telemEmergSrc >= 2 && telemEmergSrc <= 6))) {
+                || (telemEmergSrc >= 4 && telemEmergSrc <= 6))) {
             return true;
         }
         return emergency;
@@ -418,8 +420,6 @@ final class RadioLink {
     private synchronized void standNow() {
         if (!enabled) return;
         sendSimple(STAND);
-        sendSimple(MODE_MANUAL);
-        telemNavMode = 0;
         standing = true;
         lastStandAt = System.currentTimeMillis();
         clearWalk();
@@ -452,6 +452,8 @@ final class RadioLink {
             case "sit":
             case "sit_down":
                 cancelPendingStand();
+                pendingGait = "";
+                if (telemNavMode == 1) sendSimple(MODE_MANUAL);
                 sendSimple(SIT);
                 standing = false;
                 clearWalk();
@@ -517,26 +519,35 @@ final class RadioLink {
     private void sendGait(String gait) {
         int code = gaitCode(gait);
         if (code == 0) return;
-        if (isStairGait(gait)) {
-            sendSimple(MODE_AUTO);
-            telemNavMode = 1;
-        } else {
+        boolean leavingStair = isStairGait(lastGaitSent)
+                || telemGait == 6 || telemGait == 7 || telemGait == 8;
+        if (!isStairGait(gait) && leavingStair) {
             sendSimple(MODE_MANUAL);
             telemNavMode = 0;
         }
+        if (!isStairGait(gait)) stopUnwantedMarch();
+        // 没在人按的踏步里就只记下。推杆再发会让主机自己踏，再切档也停不掉。
+        if (!isStairGait(gait)
+                && !(stepping && telemFresh() && telemState == ST_STEPPING)) {
+            pendingGait = gait;
+            lastGaitSent = gait;
+            return;
+        }
         sendSimple(code, 0);
+        pendingGait = "";
+        lastGaitSent = gait;
+    }
+
+    private void stopUnwantedMarch() {
+        if (stepping) return;
+        sendSimple(TORQUE);
+        torqued = true;
+        stepping = false;
     }
 
     private static boolean isStairGait(String gait) {
         return "stair".equals(gait) || "stairmulti".equals(gait)
                 || "stair45".equals(gait);
-    }
-
-    private void restoreManualIfNeeded() {
-        if (telemNavMode != 1) return;
-        if (telemGait == 6 || telemGait == 7 || telemGait == 8) return;
-        sendSimple(MODE_MANUAL);
-        telemNavMode = 0;
     }
 
     private int gaitCode(String gait) {
@@ -1060,10 +1071,7 @@ final class RadioLink {
             handleButtons(snap.ch);
         }
         float[] ax = effAxes(snap.ch);
-        if (axesApply()) {
-            restoreManualIfNeeded();
-            sendAxes(ax);
-        }
+        if (axesApply()) sendAxes(ax);
     }
 
     /**
@@ -1258,12 +1266,12 @@ final class RadioLink {
             // 把刚点的力控/起步清掉：RL 起立后常停在 2，清了再按起步等于停步。
             if (telemState == ST_STEPPING) {
                 torqued = true;
-                stepping = true;
+                // 主机自己踏步不要当成「人按了起步」，否则停踏步会直接 return。
             } else if (telemState == ST_TORQUE_STANDING && !stepping) {
                 torqued = true;
             }
         } else if (telemState == ST_EMERGENCY
-                || (telemEmergSrc >= 2 && telemEmergSrc <= 6)) {
+                || (telemEmergSrc >= 4 && telemEmergSrc <= 6)) {
             applyTelemLock();
         } else if (telemState == ST_SITTING) {
             // RL 起立后主机仍报坐下。分不清真趴着还是那种谎报，不动 standing。
@@ -1276,7 +1284,7 @@ final class RadioLink {
 
     private void applyTelemLock() {
         if (telemState != ST_EMERGENCY
-                && !(telemEmergSrc >= 2 && telemEmergSrc <= 6)) {
+                && !(telemEmergSrc >= 4 && telemEmergSrc <= 6)) {
             return;
         }
         emergency = true;

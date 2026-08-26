@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.2.10";
+constexpr const char* kVersion = "0.2.13";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。
@@ -694,14 +694,6 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
       if (WalkHold()) {
         client_.SetVelocity(0, 0, 0);
         return;
-      }
-      {
-        const RobotState s = client_.Snapshot();
-        // 选过楼梯后主机停在非手动。楼梯没切成时 gait 仍是 walk，摇杆会被吃掉。
-        if (s.control_mode == ControlMode::kNonManual &&
-            !RequiresHeightMap(s.gait)) {
-          client_.SetControlMode(ControlMode::kManual);
-        }
       }
       client_.SetVelocity(Clamp01(msg.Number("vx")), Clamp01(msg.Number("vy")),
                           Clamp01(msg.Number("wz")));

@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826n';
+const WEB_BUILD = '0826q';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -122,7 +122,7 @@ const STATE_EMERGENCY = 6;
 function jointsLocked(basic, src) {
   if (basic === STATE_EMERGENCY) return true;
   const n = Number(src) || 0;
-  return n >= 2 && n <= 6;
+  return n >= 4 && n <= 6;
 }
 
 // 趴下只露起立；站立（含 RL 起立后遥测仍报 0）才出步态/身高和力控起步。
@@ -333,6 +333,7 @@ function onGaitResult(msg) {
   if (msg.ok) {
     // 网关回的是它真设上的那一档，以它为准（点的时候是先乐观标上的）。
     if (msg.gait_key) markGait(msg.gait_key);
+    // 站着点爬坡只是记下，msg 为空，不要再横幅刷「已处于」。
     if (msg.msg) showBanner(msg.msg);
     return;
   }
@@ -463,7 +464,7 @@ function syncRadioStanding(st0) {
   let changed = false;
   if (basic >= 0 && basic !== app.basicState) {
     app.basicState = basic;
-    if (basic === STATE_STEPPING) app.walkMode = 'step';
+    if (basic === STATE_STEPPING && app.walkMode !== 'torque') app.walkMode = 'step';
     else if (basic === STATE_TORQUE_STANDING && app.walkMode !== 'step') {
       // 刚点的起步不要被还没改口的「力控站立」灭掉。
       app.walkMode = 'torque';
@@ -1054,8 +1055,9 @@ function renderState(s) {
     // B1/B2 和屏幕按钮都像没选上。
     if (s.basic_state !== meshWalkSeen) {
       meshWalkSeen = s.basic_state;
-      if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
-      else if (s.basic_state === STATE_TORQUE_STANDING && app.walkMode !== 'step') {
+      if (s.basic_state === STATE_STEPPING && app.walkMode !== 'torque') {
+        app.walkMode = 'step';
+      } else if (s.basic_state === STATE_TORQUE_STANDING && app.walkMode !== 'step') {
         // 刚点的起步不要被还没改口的「力控站立」灭掉。
         app.walkMode = 'torque';
       } else if (!standing) app.walkMode = null;
@@ -1492,6 +1494,12 @@ document.querySelectorAll('[data-gait]').forEach((b) => {
     gaitBefore = app.gait;
     markGait(b.dataset.gait);
     setGaitPending(true);
+    // 非楼梯步态：网关会发力控停踏步。这里改走姿态通道，别再 20Hz 喂速度 0
+    // （速度 0 在踏步态里就是原地踏，力控刚发出去又被摇杆回路踩回去）。
+    if (b.dataset.gait !== 'stair' && b.dataset.gait !== 'stairmulti' &&
+        b.dataset.gait !== 'stair45') {
+      noteWalkCmd('torque');
+    }
     send({
       t: 'cmd',
       name: 'gait',

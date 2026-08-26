@@ -129,6 +129,13 @@ class MotionClient {
   void EnterStepping();     // 不再发踏步切换码。切档后那条码会停步或再踏一步。
 
   void SetGait(Gait gait);
+  // 站着点步态不要发给主机：文档写仅踏步态可切，RL 站着发会自己踏步。
+  // 只记下；不要在推杆里冲出去 —— 杆一动就发爬坡，狗踏起来就停不掉。
+  void QueueGait(Gait gait);
+  void FlushQueuedGait();
+  // 不是人按的起步：发力控把踏步停掉。遥测常把踏步报成坐下，不能只看 basic_state。
+  void StopUnwantedMarch();
+  bool UserStepping() const;
   void SetBodyHeight(HeightGear gear);
   void SetControlMode(ControlMode mode);
   void SoftEmergencyStop();
@@ -217,6 +224,8 @@ class MotionClient {
   // 没遥测时记力控/踏步踩到哪了。踏步是切换指令，重发会停步。
   bool torqued_{false};
   bool stepping_{false};
+  bool queued_gait_set_{false};
+  Gait queued_gait_{Gait::kWalk};
   // 力控刚发就跟一条踏步，主机还在过渡里会丢掉。TxLoop 到点再发。
   std::chrono::steady_clock::time_point step_at_{};
 };

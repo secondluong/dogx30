@@ -572,7 +572,7 @@ check('急停后左下角变卸力，实体红键也算',
       /o\.put\("emergSrc", telemEmergSrc\)/.test(radioJava) &&
       /TELEM_RUNNING = 0x1008/.test(radioJava) &&
       /function jointsLocked/.test(appJs) &&
-      /n >= 2 && n <= 6/.test(appJs) &&
+      /n >= 4 && n <= 6/.test(appJs) &&
       /if \(app\.emergencyLocked\) return false/.test(appJs) &&
       /btn\.textContent = '卸力'/.test(appJs));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
@@ -651,16 +651,28 @@ check('B1/B2 一次按键、屏幕跟着亮',
 // 上下楼那一排里必须有「平地」：少了它，选过楼梯就再没法从这个菜单回到平地走。
 // 平地就是常规步态，两个菜单里各有一颗 walk，指的是同一个步态。
 check('离开楼梯后回到手动模式',
-      /离开楼梯后回到手动/.test(gaitCpp) &&
+      /只在离开楼梯/.test(gaitCpp) &&
+      /RequiresHeightMap\(snapshot\.gait\)/.test(gaitCpp) &&
       /SetControlMode\(ControlMode::kManual\)/.test(gaitCpp) &&
-      gaitCpp.indexOf('SetControlMode(ControlMode::kManual)') <
-        gaitCpp.indexOf('std::string("已处于")') &&
-      /SetControlMode\(ControlMode::kManual\)/.test(motionCpp) &&
-      /kNonManual &&/.test(serviceCpp) &&
-      /!RequiresHeightMap\(s\.gait\)/.test(serviceCpp) &&
-      /restoreManualIfNeeded/.test(radioJava) &&
-      /sendGait/.test(radioJava) &&
+      /QueueGait/.test(gaitCpp) &&
+      /StopUnwantedMarch/.test(gaitCpp) &&
+      /void QueueGait/.test(motionHpp) &&
+      /StopUnwantedMarch\(\)/.test(motionCpp) &&
+      /pendingGait/.test(radioJava) &&
+      /stopUnwantedMarch/.test(radioJava) &&
+      !/restoreManualIfNeeded/.test(radioJava) &&
       !/SitDown[\s\S]{0,500}emergency_source = 5/.test(motionCpp));
+// 站着点爬坡不能把步态码发给主机，也不能让摇杆把记下的档冲出去。
+// 否则主机自己踏步，再切档只改记录，20Hz 速度 0 还在喂，狗踏个不停。
+check('站着点步态不发给主机，踏步用力控停',
+      /StopUnwantedMarch/.test(gaitCpp) &&
+      /QueueGait\(target\)/.test(gaitCpp) &&
+      /不要在这里冲记下的步态/.test(motionCpp) &&
+      !/SetVelocity[\s\S]{0,250}FlushQueuedGait/.test(motionCpp) &&
+      /noteWalkCmd\('torque'\)/.test(appJs) &&
+      /STATE_STEPPING && app\.walkMode !== 'torque'/.test(appJs) &&
+      /stopUnwantedMarch/.test(radioJava) &&
+      !/sendAxes[\s\S]{0,80}flushPendingGait/.test(radioJava));
 check('上下楼那一排有平地这个出口',
       /data-gait="walk" data-short="平地"/.test(html) &&
       /data-gait="stair" data-short="楼梯"/.test(html) &&
@@ -732,7 +744,7 @@ check('两条链路对步态编码的理解一致',
 check('轴放行看记得起立，过渡和急停仍挡',
       /bool AxisCommandsApply\(BasicState s, bool standing/.test(protoHpp) &&
       /inline bool JointsLocked/.test(protoHpp) &&
-      /emergency_source >= 2 && emergency_source <= 6/.test(protoHpp) &&
+      /emergency_source >= 4 && emergency_source <= 6/.test(protoHpp) &&
       /return standing;/.test(protoHpp) &&
       /if \(IsStandSitTransient\(s\)\) return false/.test(protoHpp));
 check('屏幕摇杆在 2.4G 下也能推',

@@ -465,13 +465,12 @@ void MotionClient::StandUp() {
     axes_unlocked_ = false;
     torqued_ = false;
     stepping_ = false;
+    queued_gait_set_ = false;
     step_at_ = {};
   }
   std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n",
               ToString(Snapshot().basic_state));
   SendSimple(cmd::kRlStandUp);
-  // 楼梯会把主机留在非手动。网关重启清不掉，起立后不拉回来摇杆就没速度。
-  SetControlMode(ControlMode::kManual);
 }
 
 void MotionClient::SitDown() {
@@ -495,12 +494,19 @@ void MotionClient::SitDown() {
   }
   ReleaseAxes();
   {
+    const RobotState s = Snapshot();
+    if (s.control_mode == ControlMode::kNonManual) {
+      SetControlMode(ControlMode::kManual);
+    }
+  }
+  {
     std::lock_guard<std::mutex> lock(state_mutex_);
     last_stand_sit_ = LastStandSit::kSat;
     state_.rl_standing = false;
     axes_unlocked_ = false;
     torqued_ = false;
     stepping_ = false;
+    queued_gait_set_ = false;
     step_at_ = {};
   }
   std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
@@ -516,6 +522,7 @@ void MotionClient::AdoptPosture(bool standing) {
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;
+  queued_gait_set_ = false;
   step_at_ = {};
   std::printf("[运动] 采纳遥控端告知的姿态：%s（遥测=%s）\n",
               standing ? "站立" : "坐下", ToString(state_.basic_state));
@@ -533,6 +540,7 @@ void MotionClient::UnloadForce() {
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;
+  queued_gait_set_ = false;
   step_at_ = {};
   std::printf("[运动] 卸力 0x21010202（遥测=%s）\n", ToString(state_.basic_state));
 }
@@ -567,7 +575,45 @@ void MotionClient::EnterStepping() {
 
 void MotionClient::SetGait(Gait gait) {
   const uint32_t code = GaitCommandCode(gait);
-  if (code != 0) SendSimple(code);
+  if (code == 0) return;
+  std::printf("[运动] 步态 → %s 0x%08x\n", ToString(gait), code);
+  SendSimple(code);
+}
+
+void MotionClient::QueueGait(Gait gait) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  queued_gait_ = gait;
+  queued_gait_set_ = true;
+  std::printf("[运动] 步态记下 %s（站着不发给主机）\n", ToString(gait));
+}
+
+void MotionClient::FlushQueuedGait() {
+  Gait gait = Gait::kWalk;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!queued_gait_set_) return;
+    gait = queued_gait_;
+    queued_gait_set_ = false;
+  }
+  SetGait(gait);
+}
+
+void MotionClient::StopUnwantedMarch() {
+  bool user_step = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    user_step = stepping_;
+  }
+  if (user_step) return;
+  // 遥测常把踏步报成坐下，不能等 basic_state==踏步再停。力控把踏步切走。
+  ReleaseAxes();
+  EnterTorqueStand();
+  std::printf("[运动] 停踏步：力控 0x2101020A\n");
+}
+
+bool MotionClient::UserStepping() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  return stepping_;
 }
 
 void MotionClient::SetBodyHeight(HeightGear gear) {
@@ -597,6 +643,7 @@ void MotionClient::SoftEmergencyStop() {
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;
+  queued_gait_set_ = false;
   step_at_ = {};
 }
 
@@ -618,6 +665,7 @@ int32_t MotionClient::Normalize(float v) {
 }
 
 void MotionClient::SetVelocity(float vx, float vy, float wz) {
+  // 不要在这里冲记下的步态。杆一动就发爬坡，主机会自己踏步，再切档也停不掉。
   std::lock_guard<std::mutex> lock(axis_mutex_);
   // 协议里 Y 向线速度与偏航角速度的映射带一个负号：轴为正表示向右平移 /
   // 向右转，而机体系 Y 轴左为正、偏航逆时针为正，故此处取反。
