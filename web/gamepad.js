@@ -605,7 +605,10 @@
           say('已经趴着');
           return;
         }
-        send({ t: 'cmd', name: 'stand' });
+        send({
+          t: 'cmd',
+          name: app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up',
+        });
         say(app.isStandingUi && app.isStandingUi() ? '趴下' : '起立');
         return;
       }

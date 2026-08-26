@@ -446,10 +446,12 @@ void MotionClient::StandOrSit() {
 }
 
 void MotionClient::StandUp() {
-  const RobotState s = Snapshot();
-  if (s.telemetry_alive && IsStandSitTransient(s.basic_state)) {
-    std::printf("[运动] 忽略起立：当前正在%s\n", ToString(s.basic_state));
-    return;
+  {
+    std::lock_guard<std::mutex> lock(axis_mutex_);
+    if (Clock::now() < axis_hold_until_) {
+      std::printf("[运动] 忽略起立：刚发过起/趴\n");
+      return;
+    }
   }
   ReleaseAxes();
   {
@@ -461,15 +463,18 @@ void MotionClient::StandUp() {
     stepping_ = false;
     step_at_ = {};
   }
-  std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n", ToString(s.basic_state));
+  std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n",
+              ToString(Snapshot().basic_state));
   SendSimple(cmd::kRlStandUp);
 }
 
 void MotionClient::SitDown() {
-  const RobotState s = Snapshot();
-  if (s.telemetry_alive && IsStandSitTransient(s.basic_state)) {
-    std::printf("[运动] 忽略趴下：当前正在%s\n", ToString(s.basic_state));
-    return;
+  {
+    std::lock_guard<std::mutex> lock(axis_mutex_);
+    if (Clock::now() < axis_hold_until_) {
+      std::printf("[运动] 忽略趴下：刚发过起/趴\n");
+      return;
+    }
   }
   ReleaseAxes();
   {
@@ -481,24 +486,20 @@ void MotionClient::SitDown() {
     stepping_ = false;
     step_at_ = {};
   }
-  std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n", ToString(s.basic_state));
+  std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
+              ToString(Snapshot().basic_state));
   SendSimple(cmd::kRlSitDown);
 }
 
 void MotionClient::AdoptPosture(bool standing) {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  const auto next = standing ? LastStandSit::kStood : LastStandSit::kSat;
-  if (last_stand_sit_ == next) return;
-  last_stand_sit_ = next;
+  last_stand_sit_ = standing ? LastStandSit::kStood : LastStandSit::kSat;
   state_.rl_standing = standing;
-  // 站立不在这里解锁轴：起立后摇杆必须空着，力控/起步才 armed。
-  // 反过来趴下必须锁回去，否则上一次力控留下的解锁会让趴着的狗也收轴。
-  if (!standing) {
-    axes_unlocked_ = false;
-    torqued_ = false;
-    stepping_ = false;
-    step_at_ = {};
-  }
+  // 切档只交接站没站。力控/起步是切换指令，带着上一条链路的记忆会发反。
+  axes_unlocked_ = false;
+  torqued_ = false;
+  stepping_ = false;
+  step_at_ = {};
   std::printf("[运动] 采纳遥控端告知的姿态：%s（遥测=%s）\n",
               standing ? "站立" : "坐下", ToString(state_.basic_state));
 }
@@ -524,9 +525,8 @@ void MotionClient::EnterTorqueStand() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     step_at_ = {};
-    // 遥测常停在坐下。本端刚起步也要能停步，单看遥测会把力控发成空指令。
-    stop_step = stepping_ ||
-                (s.telemetry_alive && s.basic_state == BasicState::kStepping);
+    // 踏步指令是切换。本地 stepping_ 切档后会撒谎，只能信主机报的踏步。
+    stop_step = s.telemetry_alive && s.basic_state == BasicState::kStepping;
     stepping_ = false;
     torqued_ = true;
     axes_unlocked_ = true;
@@ -549,17 +549,18 @@ void MotionClient::EnterStepping() {
   bool need_torque = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    // 遥测常停在坐下。本端已踏步或正在补力控，再按一次等于停步。
-    already = stepping_ || step_at_ != Clock::time_point{} ||
-              (s.telemetry_alive && s.basic_state == BasicState::kStepping);
+    already = s.telemetry_alive && s.basic_state == BasicState::kStepping;
     if (already) {
       stepping_ = true;
       axes_unlocked_ = true;
       return;
     }
+    if (step_at_ != Clock::time_point{}) {
+      axes_unlocked_ = true;
+      return;
+    }
     const bool in_torque =
-        torqued_ ||
-        (s.telemetry_alive && s.basic_state == BasicState::kTorqueStanding);
+        s.telemetry_alive && s.basic_state == BasicState::kTorqueStanding;
     need_torque = !in_torque;
     torqued_ = true;
     axes_unlocked_ = true;
@@ -657,6 +658,11 @@ void MotionClient::SetCommanding(bool on) {
     connect_confirmed_.store(false);
     std::printf("[运动] 本端接管：开始向运动主机发心跳\n");
   } else if (!on && was) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    axes_unlocked_ = false;
+    torqued_ = false;
+    stepping_ = false;
+    step_at_ = {};
     std::printf("[运动] 本端松开：停止向运动主机发心跳，原厂手柄可单独接管\n");
   }
 }

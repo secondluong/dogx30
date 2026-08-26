@@ -85,8 +85,8 @@ final class RadioLink {
             java.util.Arrays.asList("stand", "stand_up", "sit", "sit_down",
                                     "unload", "estop"));
 
-    /** 起立刚发出去的这一小段不发轴，免得把柔和的起身掐硬。点过力控也等。 */
-    private static final long AXIS_AFTER_STAND_MS = 1500;
+    /** 起立刚发出去的这一小段不发轴，免得把柔和的起身掐硬。 */
+    private static final long AXIS_AFTER_STAND_MS = 400;
     /** 屏幕摇杆多久没更新就当松手。掉帧或页面卡住时不能让狗一直走。 */
     private static final long SCREEN_AXIS_HOLD_MS = 400;
     /** 先力控再踏步之间留多久，主机还在过渡里会丢掉后一条。 */
@@ -375,8 +375,7 @@ final class RadioLink {
     private boolean axesApply() {
         if (emergency) return false;
         if (telemFresh() && telemState == ST_EMERGENCY) return false;
-        // 起立后摇杆空着。点过力控/起步就发：遥测常停在 0/1/2 不再改口，
-        // 再按遥测挡，两条链路推杆都没反应。
+        // 起立后摇杆空着。点过力控/起步就发。刚起立那一小段仍停，免得掐硬。
         if (!(torqued || stepping)) return false;
         if (lastStandAt != 0
                 && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS) {
@@ -461,27 +460,32 @@ final class RadioLink {
                 clearWalk();
                 break;
             case "torque":
-                if (stepping) {
+                // 踏步是切换。本地 stepping 切档后会撒谎，只能信主机报的踏步。
+                if (telemFresh() && telemState == ST_STEPPING) {
                     sendSimple(STEP);
-                    stepping = false;
                 } else {
                     sendSimple(TORQUE);
                 }
                 torqued = true;
+                stepping = false;
                 break;
             case "step":
                 if (emergency) break;
-                // RL 起立后遥测仍报趴着，standing 可能还是 false。起步意味着我们认为站着。
                 standing = true;
-                if (stepping) break; // 已经踏步就别再切，切一次等于停步
-                if (!torqued) {
-                    sendSimple(TORQUE);
+                if (telemFresh() && telemState == ST_STEPPING) {
                     torqued = true;
-                    onRadioDelayed(stepTask, ARM_GAP_MS);
+                    stepping = true;
                     break;
                 }
-                sendSimple(STEP);
-                stepping = true;
+                if (telemFresh() && telemState == ST_TORQUE_STANDING) {
+                    sendSimple(STEP);
+                    torqued = true;
+                    stepping = true;
+                    break;
+                }
+                sendSimple(TORQUE);
+                torqued = true;
+                onRadioDelayed(stepTask, ARM_GAP_MS);
                 break;
             case "estop":
                 cancelPendingStand();

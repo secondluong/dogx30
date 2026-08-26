@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826i';
+const WEB_BUILD = '0826j';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -509,7 +509,6 @@ function syncRadioStanding(st0) {
   const up = typeof st.standing === 'boolean' ? st.standing : nativeRadioStanding();
   if (up !== app.rlStanding) {
     app.rlStanding = up;
-    if (!up) app.walkMode = null;
     changed = true;
   }
   if (st.poseKnown) notePose(isStandingUi());
@@ -768,7 +767,13 @@ function adoptRadioPath(path, announce) {
   const upright = changed ? handoffPose() : null;
   app.radioPath = next;
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
-  if (changed) notifyNativeRadio();
+  if (changed) {
+    // 力控/起步是切换指令。带着上一条链路的记忆切过去会发反：
+    // 力控变成踏步、起步变成停步。切档后两边都重新点。
+    app.walkMode = null;
+    paintWalkButtons();
+    notifyNativeRadio();
+  }
   if (changed && upright !== null) {
     // 交给 2.4G 立刻生效；交给网关要等拿到控制权，所以先存着，claim 时带过去。
     if (next === 'radio') pushPoseToRadio(upright);
@@ -1417,7 +1422,7 @@ function radioCmdFromEl(el) {
     if (el.dataset.cmd === 'stand') {
       if (app.emergencyLocked) return 'unload';
       // 明确发起立或趴下。发「stand」会翻转，狗已经站着时页面按钮就把狗按趴。
-      if (radioDirect()) return nativeRadioStanding() ? 'sit_down' : 'stand_up';
+      // 2.4G 刚切回来时本机 standing 常是 false，不能信它，否则「趴下」会再发起立。
       return isStandingUi() ? 'sit_down' : 'stand_up';
     }
     return el.dataset.cmd;

@@ -633,7 +633,14 @@ check('起步是进入踏步，不是切换',
       /if \(already\)/.test(motionCpp) &&
       /ARM_GAP_MS/.test(radioJava) &&
       /onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava) &&
-      /if \(stepping\) break/.test(radioJava));
+      /telemState == ST_STEPPING/.test(radioJava));
+// 切档后不能带着上一条链路的「在踏步」去发切换指令，否则力控变起步、起步变停步。
+check('切档后力控起步重新点，起趴不翻转',
+      /app\.walkMode = null/.test(appJs) &&
+      /return isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(appJs) &&
+      /name: app\.isStandingUi && app\.isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(read('gamepad.js')) &&
+      /stop_step = s\.telemetry_alive && s\.basic_state == BasicState::kStepping/.test(motionCpp) &&
+      /telemFresh\(\) && telemState == ST_STEPPING/.test(radioJava));
 // 力控站立唯一的用处是用摇杆调身高/俯仰，所以那个状态下摇杆走姿态通道。
 // 起立后（还没力控/起步）摇杆必须空着，以前 rlStanding 直接走速度，MESH 上
 // 没点起步也能推，和 2.4G 两套手感。
