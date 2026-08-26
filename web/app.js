@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826e';
+const WEB_BUILD = '0826f';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -52,7 +52,8 @@ function paintVerChip() {
   const el = $('set-app-ver');
   if (!el) return;
   const apk = nativeAppVersion();
-  el.textContent = apk ? ('包 ' + apk + ' · 网页 ' + WEB_BUILD) : ('网页 ' + WEB_BUILD);
+  const gw = app.gwVersion ? (' · 网关 ' + app.gwVersion) : '';
+  el.textContent = (apk ? ('包 ' + apk + ' · 网页 ' + WEB_BUILD) : ('网页 ' + WEB_BUILD)) + gw;
 }
 
 function nativeRadioPath() {
@@ -96,6 +97,8 @@ const app = {
   walkMode: null,         // 由遥测推断：'torque' | 'step'
   poseHandoff: null,      // 待交接给网关的姿态（切档时记下，网关认了才算完）
   poseHintWarned: false,  // 旧网关的提示只说一次，别在遥控时反复弹
+  gwVersion: '',          // hello.version，设置里能对上板子装的是哪一版
+  gwPoseAdopt: false,     // hello.pose_adopt：这份网关认不认 claim.standing
   modePick: null,         // G20 三挡或点按：manual | assist | auto
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
@@ -213,6 +216,7 @@ function connect() {
     if (dropFromLive && !isAppShell) app.radioFallback = true;
     app.hasControl = false;
     app.holder = 0;
+    app.gwPoseAdopt = false;
     setLink(false);
     renderControl();
     if (dropFromLive) {
@@ -243,6 +247,9 @@ function connect() {
         app.clientId = msg.client_id;
         app.holder = msg.holder || 0;
         app.hasControl = !!msg.control;
+        app.gwVersion = msg.version ? String(msg.version) : '';
+        app.gwPoseAdopt = !!msg.pose_adopt;
+        paintVerChip();
         renderControl();
         if (window.X30Settings) window.X30Settings.onHello(msg);
         if (isAppShell && app.radioPath === 'mesh') requestControl();
@@ -816,7 +823,9 @@ app.adoptRadioPath = adoptRadioPath;
 // 手持壳连上就要权：关掉原厂 App 不会把权交过来，操作员也不该再点一次。
 // 网页控制台仍是观察者，避免笔记本开着就把手柄的权抢走。
 function requestControl() {
-  if (app.hasControl) return;
+  // 已经有权时通常不必再发。但切回 MESH 时 poseHandoff 还在，必须再发一条带
+  // standing 的 claim，否则网关记的还是切走之前的趴着 —— 这正是「旧版」误报的来源。
+  if (app.hasControl && app.poseHandoff === null) return;
   if (radioDirect()) return;
   if (!linkOpen()) {
     radioHint();
@@ -859,11 +868,15 @@ function checkPoseHint(s) {
   }
   // 没拿到控制权时网关本来就不会采纳，这不算旧版，也别急着报。
   if (!app.hasControl) return;
+  // 新网关会在 hello 里声明 pose_adopt。对不上就先等，别说成旧版 ——
+  // 以前靠 1.5 秒猜，claim 还在路上也会弹出那条吓人的横幅。
+  if (app.gwPoseAdopt) return;
   if (poseHintAt === 0) poseHintAt = Date.now();
   if (Date.now() - poseHintAt < 1500 || app.poseHintWarned) return;
   app.poseHintWarned = true;
-  showBanner('板子上的网关还是旧版，切档时的姿态没同步过去。' +
-             '请更新网关，否则推杆会被网关吞掉（按钮显示的是实际姿态）', 8000);
+  const ver = app.gwVersion ? ('（板子上报 ' + app.gwVersion + '）') : '';
+  showBanner('板子上的网关还不会交接姿态' + ver +
+             '。仓库里已经有了，请在 RK3588 上重跑 install.sh，只更 App 不够。', 8000);
 }
 
 // ---------------------------------------------------------------------------

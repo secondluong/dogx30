@@ -514,7 +514,11 @@ check('切档时把姿态交接给接手的一侧',
       /void adoptPosture\(boolean up\)/.test(radioJava) &&
       /onRadio\(\(\) -> adoptOnRadio\(up\)\)/.test(radioJava) &&
       /void AdoptPosture\(bool standing\)/.test(motionHpp) &&
-      /msg\.Has\("standing"\)/.test(serviceCpp));
+      /msg\.Has\("standing"\)/.test(serviceCpp) &&
+      /Key\("pose_adopt", true\)/.test(serviceCpp) &&
+      /app\.gwPoseAdopt = !!msg\.pose_adopt/.test(appJs) &&
+      /if \(app\.gwPoseAdopt\) return/.test(appJs) &&
+      /hasControl && app\.poseHandoff === null/.test(appJs));
 // 交接不能发一次就算完：那条 claim 可能没被授权，网关也可能是旧版不认这个键。
 // 认下来之前界面按自己知道的显示，否则切回 MESH 左下角又变成「起立」。
 check('网关认下来之前按自己知道的显示',

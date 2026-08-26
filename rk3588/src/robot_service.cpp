@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.2.0";
+constexpr const char* kVersion = "0.2.1";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。
@@ -433,6 +433,9 @@ void RobotService::OnConnect(WsServer::ClientId id) {
       // 本机是否支持在线改配置。只是个能力位，不含任何配置内容 ——
       // 遥控端据此决定要不要显示「设置」入口，真要取值还得凭令牌。
       .Key("config", ConfigEnabled())
+      // 认不认 claim.standing。旧网关没有这个键，App 据此判断该不该提示「请重装网关」，
+      // 不再靠「交接 1.5 秒对不上」去猜 —— 那条路误报很多（claim 还在路上、权还没到手）。
+      .Key("pose_adopt", true)
       .EndObject();
   server_.Send(id, w.Take());
   server_.Send(id, BuildStateJson());

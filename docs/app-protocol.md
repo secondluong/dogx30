@@ -212,13 +212,16 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 连上立即下发一次。
 
 ```json
-{"t":"hello","version":"0.2.0","client_id":3,"control":false,"lease_ms":2000,
- "config":true}
+{"t":"hello","version":"0.2.1","client_id":3,"control":false,"lease_ms":2000,
+ "config":true,"pose_adopt":true}
 ```
 
 `config` 是个能力位：本机是否支持在线改配置（网关要以 `--config` 启动）。
 它不含任何配置内容，遥控端只用它决定要不要显示「设置」入口；
 真要取值仍须凭令牌。
+
+`pose_adopt` 也是能力位：认不认 `claim.standing`。旧网关没有这个键。
+遥控端据此判断该不该提示「请在 RK3588 上重装网关」，不再靠交接超时去猜。
 
 ### 控制权变更
 
