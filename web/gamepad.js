@@ -625,6 +625,8 @@
           return;
         }
         var target = nextGait(app.gait, key === 'gait_up' ? 1 : -1);
+        // 和高亮规则一样：先按切的显示，网关回结果再确认或退回。
+        if (app.markGait) app.markGait(target);
         send({ t: 'cmd', name: 'gait', value: target });
         say(gaitName(target));
       }

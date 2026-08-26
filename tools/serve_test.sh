@@ -132,7 +132,7 @@ run_scenario "未配置媒体源" no-media nomedia
 run_scenario "姿态交接" pose-handoff pose
 
 # 起立后只推杆就要能走：力控站立、踏步这两级台阶由网关自己踩。
-run_scenario "推杆自动起步" auto-arm autoarm
+run_scenario "起步要人按" arm-steps armsteps
 
 # 点云：需要额外拉一个假 ROS master，所以不套 run_scenario。
 # 验的是 XML-RPC 发现、TCPROS 握手、解析、降采样、量化下行这一整条链，

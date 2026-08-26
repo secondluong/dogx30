@@ -534,21 +534,24 @@ check('切档交接 App 记住的姿态',
       /if \(st\.poseKnown\) return isStandingUi\(\);/.test(appJs) &&
       /\n  return poseMem;\n\}/.test(appJs) &&
       /if \(granted && msg\.Has\("standing"\)\)/.test(serviceCpp));
-// 力控/起步挂在 B1/B2（现场量的是 CH9、CH10，下标 = CH号-1，按下 1950）。
-// 两条链路各读一份通道表：MESH 走 gamepad.js，2.4G 走原生 RadioLink，
-// 只改一边的表现是「同一颗键在一条链路上好用、另一条不认」。
+// 力控/起步挂在 B1/B2（现场量的是 CH9、CH10，下标 = CH号-1，按下 1950 —— 和别的
+// 键反向，所以按下判定要按中位分两边）。
+//
+// 这两颗只许网页那层派发：踏步是**切换**指令，本机和网页各发一条就等于一按一停，
+// 狗刚起步又停下。网页那层还兼着出声和刷 walkMode（推杆提示要用），所以它必须经手。
 var gamepadJs = read('gamepad.js');
-check('B1/B2 两条链路同一份通道',
+check('B1/B2 只由网页那层发，不和原生重复',
       /torque: \{ ch: 8, press: 1950 \}/.test(gamepadJs) &&
       /step: \{ ch: 9, press: 1950 \}/.test(gamepadJs) &&
-      /pressed\(ch, 8, 1950\)/.test(radioJava) &&
-      /pressed\(ch, 9, 1950\)/.test(radioJava) &&
-      /prevTorque/.test(radioJava) &&
-      /commandOnRadio\("torque"\)/.test(radioJava) &&
-      /commandOnRadio\("step"\)/.test(radioJava) &&
-      // 判定方式两边必须一致，否则高有效那两颗只在一条链路上认。
-      /press < 1500 \? v <= mid : v >= mid/.test(radioJava) &&
-      /press < 1500 \? v <= mid : v >= mid/.test(gamepadJs));
+      /press < 1500 \? v <= mid : v >= mid/.test(gamepadJs) &&
+      // 原生只收起立/趴下/急停这三颗幂等的，B1/B2 不许在这里再发一遍。
+      !/pressed\(ch, 8/.test(radioJava) &&
+      !/pressed\(ch, 9/.test(radioJava) &&
+      !/commandOnRadio\("torque"\)/.test(radioJava) &&
+      !/commandOnRadio\("step"\)/.test(radioJava) &&
+      /commandOnRadio\("stand_up"\)/.test(radioJava) &&
+      // 2.4G 下网页那条路要转回本机发，否则这两颗只在 MESH 下好用。
+      /radioPose\(key\)/.test(gamepadJs));
 
 // 急停后必须能找到卸力：不卸力起立是发不动的。实体红键是原生那侧收的（网页并不
 // 经手），没有遥测时只有 RadioLink 记着这件事，所以那个标志一定要读。
@@ -557,23 +560,29 @@ check('急停后左下角变卸力，实体红键也算',
       /basic >= 0 \? basic === STATE_EMERGENCY : !!st\.emergency/.test(appJs) &&
       /btn\.textContent = '卸力'/.test(appJs));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
-check('菜单收起时就显示当前档位加箭头',
+// 收起来的样子是「步态|常规 ›」：菜单名要留着（只显示「常规」认不出这颗管什么），
+// 后面跟当前那一档和箭头。
+check('菜单收起时显示「菜单名|当前档 ›」',
       !!htmlIds['acc-val-gait'] &&
       !!htmlIds['acc-val-stair'] &&
       !!htmlIds['acc-val-height'] &&
       /function paintPickers/.test(appJs) &&
       /paintPickers\(\);/.test(appJs) &&
       /app\.gaitPending/.test(appJs) &&
-      /el\.dataset\.label/.test(appJs) &&
+      /class="acc-name">步态</.test(html) &&
+      /class="acc-name">上下楼踏面</.test(html) &&
+      /class="acc-name">身高</.test(html) &&
       /class="acc-arrow"[^>]*>›</.test(html) &&
+      /\.acc-name \{/.test(styleText) &&
       /\.acc-arrow \{/.test(styleText) &&
+      // 分隔的竖线由 CSS 加，当前档为空时靠 :empty 一起收掉。
+      /\.acc-cur:not\(:empty\)::before/.test(styleText) &&
       /\.acc-pop \.btn\.sm\.active::after/.test(styleText));
-// 三颗按钮上原来写的是菜单名（步态/上下楼踏面/身高），现在换成当前那一档。
-// 名字只在还不知道选了什么时兜底，所以留在 data-label 里，不再硬写在按钮文字上。
-check('按钮上不再重复菜单名',
-      /data-label="步态"/.test(html) &&
-      !/data-acc="gait">步态</.test(html) &&
-      /aria-label="步态"/.test(html));
+// 「上下楼踏面」这颗显示的是踏面材质（实心/格栅/无踢面）—— 菜单名就是这个意思，
+// 而楼梯用哪种步态归「步态」那颗显示。
+check('踏面那颗显示的是踏面材质',
+      /\{ val: 'acc-val-stair', sel: '\[data-stair\]\.active' \}/.test(appJs) &&
+      /class="btn sm active" data-stair="solid"/.test(html));
 // 刚开机或刚切过来时我们什么都没点过，档位只能问狗。身高是单独一条报文，
 // 不解它就只能显示「我点过的」，那在切档之后必然是错的。
 check('2.4G 的档位也听狗自己报',
@@ -583,44 +592,57 @@ check('2.4G 的档位也听狗自己报',
       /RADIO_GAIT_KEYS/.test(appJs) &&
       /function syncRadioPickers/.test(appJs) &&
       /syncRadioPickers\(radioSt\)/.test(appJs));
-// 力控站立、踏步不是运动学上的必要动作，只是状态机的两级台阶。原厂 App 起立后
-// 推杆直接走，我们却要操作员先点力控再点起步 —— 戴手套在阳光下容易点错，顺序也
-// 没人记得。现在推杆时两条链路各自替他踩。
-check('推杆就走，力控和起步不用人点',
-      /void ArmForWalk\(\)/.test(motionHpp) &&
-      /void MotionClient::ArmForWalk\(\)/.test(motionCpp) &&
-      /ArmForWalk\(\);/.test(motionCpp) &&
-      /kWalkIntent/.test(motionCpp) &&
-      /private void armForWalk\(\)/.test(radioJava) &&
-      /if \(axesPushed\(ax\)\) armForWalk\(\)/.test(radioJava));
-// 台阶要一级一级踩：力控刚发就跟一条踏步，运动主机还在过渡里会丢掉后一条，
-// 现场表现是推了半天狗只在原地力控站着。
-check('两级台阶之间留出状态机迁移时间',
-      /kArmGapMs/.test(motionCpp) &&
-      /arm_next_/.test(motionCpp) &&
-      /ARM_GAP_MS/.test(radioJava) &&
-      /now < armNextAt/.test(radioJava) &&
-      /onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava));
-// 力控站立唯一的用处是用摇杆调身高/俯仰。人点过力控就不能替他起步，否则这个
-// 功能没了；没点过时推杆一律当「要走」，哪怕遥测报的是力控站立。
-check('人点了力控就不替他起步',
-      /function noteWalkIntent/.test(appJs) &&
-      /app\.torqueByUser = true/.test(appJs) &&
-      /if \(app\.torqueByUser &&/.test(appJs) &&
-      /if \(app\.basicState === STATE_TORQUE_STANDING\) return 'vel'/.test(appJs) &&
-      /if \(emergency \|\| torqueByUser\) return;/.test(radioJava) &&
-      /torqueByUser = true/.test(radioJava));
-// 上下楼那三档是必选一项：狗还没进楼梯步态时也得亮着一个，否则操作员不知道上楼
-// 会用哪种。「上楼用这个」（pick）与「狗真在这个步态」（active）分开记 ——
-// 后者跟着遥测灭，前者不能灭。
-check('上下楼三档必选其一',
-      /class="btn sm pick" data-gait="stair"/.test(html) &&
-      /function markStairPick/.test(appJs) &&
-      /markStairPick\(b\.dataset\.gait\)/.test(appJs) &&
-      /markStairPick\(key\)/.test(appJs) &&
-      /#stair-row \[data-gait\]\.pick/.test(appJs) &&
-      /\.acc-pop \.btn\.sm\.pick \{/.test(styleText) &&
-      /\.acc-pop \.btn\.sm\.pick::after/.test(styleText));
+// 起立之后要先点力控再点起步才收速度。曾经让程序自己把这两级台阶踩掉（推杆就走），
+// 撤了：踏步是**切换**指令，程序补的那一条和人自己按的那一条会互相抵消，狗刚起步又
+// 停下，而人完全看不出是谁发的。两条链路都不许再自动踩。
+check('两条链路都不再自动补力控/起步',
+      !/ArmForWalk/.test(motionHpp) &&
+      !/ArmForWalk/.test(motionCpp) &&
+      !/kWalkIntent/.test(motionCpp) &&
+      !/armForWalk/.test(radioJava) &&
+      !/axesPushed/.test(radioJava) &&
+      !/torqueByUser/.test(radioJava) &&
+      !/torqueByUser/.test(appJs));
+// 漏了那两下的表现是「推杆完全没反应」—— 界面上什么都不会变，现场最难猜。
+// 所以推杆而狗还没进踏步时要出声说清该按什么。
+check('推杆但没起步时出声提醒',
+      /请先按力控、起步之后才能行走/.test(appJs) &&
+      /function checkNeedArm/.test(appJs) &&
+      /checkNeedArm\(c\)/.test(appJs) &&
+      // 遥测说踏步才算真能走；没遥测时退回本端记的起步。
+      /app\.basicState === STATE_STEPPING/.test(appJs) &&
+      /app\.walkMode === 'step'/.test(appJs) &&
+      /speak\(ARM_HINT\)/.test(appJs) &&
+      /ARM_HINT_GAP/.test(appJs));
+// 起步不再替人补力控：这两下必须各按一次。漏了由 checkNeedArm 出声。
+check('起步不再替人补力控',
+      !/ARM_GAP_MS/.test(radioJava) &&
+      !/stepTask/.test(radioJava) &&
+      /stepping = !stepping/.test(radioJava));
+// 力控站立唯一的用处是用摇杆调身高/俯仰，所以那个状态下摇杆走姿态通道。
+check('力控站立时摇杆是调姿态',
+      /if \(app\.basicState === STATE_TORQUE_STANDING\) return 'pose'/.test(appJs) &&
+      /if \(app\.walkMode === 'torque'\) return 'pose'/.test(appJs));
+// 上下楼那一排里必须有「平地」：少了它，选过楼梯就再没法从这个菜单回到平地走。
+// 平地就是常规步态，两个菜单里各有一颗 walk，指的是同一个步态。
+check('上下楼那一排有平地这个出口',
+      /data-gait="walk" data-short="平地"/.test(html) &&
+      /data-gait="stair" data-short="楼梯"/.test(html) &&
+      /data-gait="stairmulti"/.test(html) &&
+      /data-gait="stair45"/.test(html));
+// 步态高亮以人点的为准，遥测只在读数真的变了时接管。以前每帧照遥测标一次，而狗的
+// gait_state 在好几种常见情况下一直报 0（收不到遥测、切换被拒、楼梯要地形图配合），
+// 人点了爬坡下一帧就被顶回常规，看着像「点了没选上」。
+check('步态高亮跟着人点的走，不被遥测每帧顶回去',
+      /function adoptGaitTelem/.test(appJs) &&
+      /meshGaitSeen = adoptGaitTelem\(s\.gait_key, meshGaitSeen\)/.test(appJs) &&
+      /radioGaitSeen = adoptGaitTelem\(key, radioGaitSeen\)/.test(appJs) &&
+      !/markGait\(s\.gait_key\)/.test(appJs) &&
+      // 点的时候先乐观标上，网关说切不成再退回去。
+      /gaitBefore = app\.gait/.test(appJs) &&
+      /if \(gaitBefore\) markGait\(gaitBefore\)/.test(appJs) &&
+      /if \(msg\.gait_key\) markGait\(msg\.gait_key\)/.test(appJs) &&
+      /Key\("gait_key", GaitKey\(target\)\)/.test(serviceCpp));
 
 // 狗趴着时底栏那三个档位菜单要收起来，两条链路一个样。2.4G 以前一律亮着，因为那时
 // 没有姿态读数；现在能读遥测了，就只在「知道姿态」的前提下收（html.pose-known）。

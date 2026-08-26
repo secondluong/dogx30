@@ -127,11 +127,6 @@ class MotionClient {
   void EnterTorqueStand();  // 初始站立 -> 力控站立
   void ToggleStepping();    // 力控站立 <-> 踏步 切换
 
-  // 推杆就走：把「力控站立 -> 踏步」这两级台阶替操作员踩掉。SetVelocity 一旦
-  // 看出推杆意图就会调它，所以上层不必再要求先点力控、再点起步 —— 那两下不是
-  // 运动学上的必要动作，原厂 App 起立后推杆直接走。
-  // 姿态调节走 SetPose，不经过这里，不会被误判成要走。
-  void ArmForWalk();
   void SetGait(Gait gait);
   void SetBodyHeight(HeightGear gear);
   void SetControlMode(ControlMode mode);
@@ -217,12 +212,6 @@ class MotionClient {
   // 操作员点了力控/起步。RL 起立后遥测仍报 0，AxisCommandsApply 会把轴吞掉；
   // 网关重启也会丢掉 last_stand_sit_。这条记下「按可走发轴」。趴下/急停清掉。
   bool axes_unlocked_ = false;
-
-  // 自动踩台阶踩到哪一级了。只在**没有遥测**时用得上 —— 有遥测就直接看
-  // basic_state。踏步是切换指令，重发一次就会停步，所以必须记住发过没发过。
-  enum class Armed { kNone, kTorqued, kStepped };
-  Armed armed_{Armed::kNone};
-  std::chrono::steady_clock::time_point arm_next_{};
 };
 
 }  // namespace x30

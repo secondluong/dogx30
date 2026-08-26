@@ -14,13 +14,6 @@ using Clock = std::chrono::steady_clock;
 // 又远短于起身本身的两秒，所以不影响「站起来就能推杆走」。
 constexpr int kAxisHoldMs = 300;
 
-// 推杆推到多少算「我要走」。要高过轴指令自己的死区，免得手抖或通道噪声就把狗
-// 踩进踏步；又要低到正常推杆一定过得去。
-constexpr float kWalkIntent = 0.2f;
-// 自动踩台阶时两级之间留多久。状态机迁移要工夫，力控刚发就跟一条踏步，主机还在
-// 过渡里，后一条会被直接忽略 —— 现场表现是推了半天狗只在原地力控站着。
-constexpr int kArmGapMs = 500;
-
 // 从原始报文里安全地取出一个结构体。长度不足就返回 false，避免越界读。
 template <typename T>
 bool Extract(const uint8_t* data, int len, T* out) {
@@ -493,15 +486,11 @@ void MotionClient::EnterTorqueStand() {
   SendSimple(cmd::kTorqueStand);
   std::lock_guard<std::mutex> lock(state_mutex_);
   axes_unlocked_ = true;
-  armed_ = Armed::kTorqued;
 }
 void MotionClient::ToggleStepping() {
   SendSimple(cmd::kSteppingToggle);
   std::lock_guard<std::mutex> lock(state_mutex_);
   axes_unlocked_ = true;
-  // 这是**切换**指令，所以记的是切过去之后停在哪一级。没遥测时 ArmForWalk 全靠
-  // 它，操作员手动点了停步之后也得能重新自动踩上来。
-  armed_ = armed_ == Armed::kStepped ? Armed::kTorqued : Armed::kStepped;
 }
 
 void MotionClient::SetGait(Gait gait) {
@@ -546,14 +535,11 @@ int32_t MotionClient::Normalize(float v) {
   return std::max(-kAxisMax, std::min(kAxisMax, raw));
 }
 
+// 曾经在这里替操作员把「力控站立」「踏步」这两级台阶踩掉（推杆就走）。撤了：
+// 踏步是**切换**指令，程序补的那一条会和操作员自己按的那一条抵消，狗刚起步又停
+// 下，而人完全看不出是谁发的。现在仍然要人按这两下，漏了由 App 出声提醒
+// （web/app.js 的 checkNeedArm）。
 void MotionClient::SetVelocity(float vx, float vy, float wz) {
-  // 推了杆就是要走。原厂 App 起立后推杆直接走，而这台机器的状态机要先「力控站立」
-  // 再「踏步」才收速度 —— 那两下不是运动学上的必要动作，只是台阶，所以这里替
-  // 操作员踩。姿态调节走 SetPose，不经过这里，不会被误当成要走。
-  if (std::abs(vx) > kWalkIntent || std::abs(vy) > kWalkIntent ||
-      std::abs(wz) > kWalkIntent) {
-    ArmForWalk();
-  }
   std::lock_guard<std::mutex> lock(axis_mutex_);
   // 协议里 Y 向线速度与偏航角速度的映射带一个负号：轴为正表示向右平移 /
   // 向右转，而机体系 Y 轴左为正、偏航逆时针为正，故此处取反。
@@ -562,50 +548,6 @@ void MotionClient::SetVelocity(float vx, float vy, float wz) {
   axis_right_x_ = Normalize(-wz);
   axis_right_y_ = 0;  // 踏步态下右摇杆 Y 无定义
   axis_deadline_ = Clock::now() + std::chrono::milliseconds(cfg_.command_timeout_ms);
-}
-
-void MotionClient::ArmForWalk() {
-  bool step = false;  // false = 力控站立，true = 踏步
-  BasicState st;
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    if (Clock::now() < arm_next_) return;
-    st = state_.basic_state;
-    const bool stood = last_stand_sit_ == LastStandSit::kStood;
-    if (state_.telemetry_alive) {
-      if (st == BasicState::kStepping) return;  // 已经能走了
-      if (st == BasicState::kTorqueStanding) {
-        step = true;
-      } else if (st == BasicState::kInitialStanding) {
-        // 站着就能踩，哪怕是原厂手柄扶起来的 —— 遥测这两档不含糊。
-        step = false;
-      } else if (st == BasicState::kSitting && stood) {
-        // RL 起立之后遥测仍报坐下（见 protocol.hpp）。这一档有歧义，只有我们
-        // 自己发过起立才敢当站着看：否则就是对趴着的狗踩台阶，而起立必须人按。
-        //
-        // 而且这一档的遥测永远不会改口，没法用它判断踩到第几级了，只能像没遥测
-        // 那样按 armed_ 数台阶。以前这里不数，于是每 500 ms 重发一条力控，主机
-        // 忽略、我们再发，操作员自己点的起步还会被这串重发顶掉（冒烟测试里表现
-        // 为「起步指令被正确解析」时好时坏）。
-        if (armed_ == Armed::kStepped) return;
-        step = armed_ == Armed::kTorqued;
-      } else {
-        return;  // 起立中 / 坐下中 / 急停，不插手
-      }
-    } else {
-      // 没遥测（狗的 network.toml 没登记本机）时只能按顺序踩。踏步是切换指令，
-      // 重发会停步，所以每级只发一次；起立/趴下时 ReleaseAxes 清掉重来。
-      if (!stood || armed_ == Armed::kStepped) return;
-      step = armed_ == Armed::kTorqued;
-    }
-    // 两级之间要留时间：力控刚发就跟一条踏步，主机还在过渡里，后一条会被忽略。
-    arm_next_ = Clock::now() + std::chrono::milliseconds(kArmGapMs);
-  }
-  // 这两个自己要拿 state_mutex_，只能在锁外调；它们也顺手更新 armed_。
-  if (step) ToggleStepping();
-  else EnterTorqueStand();
-  std::printf("[运动] 推杆自动补一步：%s（遥测=%s）\n", step ? "踏步" : "力控站立",
-              ToString(st));
 }
 
 void MotionClient::SetPose(float height, float roll, float pitch, float yaw) {
@@ -618,13 +560,6 @@ void MotionClient::SetPose(float height, float roll, float pitch, float yaw) {
 }
 
 void MotionClient::ReleaseAxes() {
-  {
-    // 起立/趴下会把状态机打回去，自动踩台阶的进度跟着作废：下一次推杆要从力控
-    // 那一级重新踩，否则没遥测时只会发一条踏步，狗站着不动。
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    armed_ = Armed::kNone;
-    arm_next_ = Clock::time_point{};
-  }
   std::lock_guard<std::mutex> lock(axis_mutex_);
   axis_left_y_ = axis_left_x_ = axis_right_x_ = axis_right_y_ = 0;
   axis_deadline_ = Clock::time_point{};

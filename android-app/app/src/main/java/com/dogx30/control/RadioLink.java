@@ -87,10 +87,6 @@ final class RadioLink {
 
     /** 没有遥测时，起立后等这么久才发轴，免得把柔和的起身掐硬。 */
     private static final long AXIS_AFTER_STAND_MS = 1500;
-    /** 推杆推到多少算「我要走」。高过 axis() 的死区 0.12，手抖和通道噪声不算。 */
-    private static final float ARM_PUSH = 0.2f;
-    /** 自动踩台阶时两级之间留多久。状态机迁移要工夫，紧跟着发第二条会被忽略。 */
-    private static final long ARM_GAP_MS = 500;
     /** 屏幕摇杆多久没更新就当松手。掉帧或页面卡住时不能让狗一直走。 */
     private static final long SCREEN_AXIS_HOLD_MS = 400;
 
@@ -136,17 +132,12 @@ final class RadioLink {
     private boolean poseKnown;
     private boolean torqued;
     private boolean stepping;
-    /** 操作员自己点了力控：那时摇杆是调身高/俯仰，不能替他起步。 */
-    private boolean torqueByUser;
-    private long armNextAt;
     /** effAxes 的返回缓冲。每 tick 都要算一次，没必要每次新建。 */
     private final float[] axBuf = new float[3];
     private boolean emergency;
     private boolean prevStand;
     private boolean prevSit;
     private boolean prevEstop;
-    private boolean prevTorque;
-    private boolean prevStep;
     private boolean buttonsPrimed;
     private int tick;
     private int sentOk;
@@ -343,20 +334,7 @@ final class RadioLink {
     private void clearWalk() {
         torqued = false;
         stepping = false;
-        torqueByUser = false;
-        armNextAt = 0;
-        if (handler != null) handler.removeCallbacks(stepTask);
     }
-
-    /** 点了起步之后隔一拍才补的那条踏步，见 commandOnRadio 的 "step"。 */
-    private final Runnable stepTask = new Runnable() {
-        @Override
-        public void run() {
-            if (!standing || emergency || stepping) return;
-            sendSimple(STEP);
-            stepping = true;
-        }
-    };
 
     /**
      * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
@@ -463,30 +441,12 @@ final class RadioLink {
                     sendSimple(TORQUE);
                 }
                 torqued = true;
-                // 人点的力控：接下来推杆是调姿态，armForWalk 别去替他起步。
-                torqueByUser = true;
                 break;
             case "step":
                 if (!standing) break;
-                torqueByUser = false;
-                if (stepping) {
-                    // 再点一次是停步。停下来之后再推杆会重新自动踩上来。
-                    sendSimple(STEP);
-                    stepping = false;
-                    armNextAt = System.currentTimeMillis() + ARM_GAP_MS;
-                    break;
-                }
-                if (!torqued) {
-                    sendSimple(TORQUE);
-                    torqued = true;
-                    // 力控和踏步之间要隔开：主机还在过渡里，同一帧跟上的那条会被
-                    // 忽略，表现就是点了起步却只在原地力控站着。
-                    onRadioDelayed(stepTask, ARM_GAP_MS);
-                    armNextAt = System.currentTimeMillis() + ARM_GAP_MS * 2;
-                    break;
-                }
+                // 不再替人补力控：力控和起步必须各按一次。漏了由网页出声提醒。
                 sendSimple(STEP);
-                stepping = true;
+                stepping = !stepping;
                 break;
             case "estop":
                 cancelPendingStand();
@@ -1039,39 +999,36 @@ final class RadioLink {
             handleButtons(snap.ch);
         }
         float[] ax = effAxes(snap.ch);
-        if (axesPushed(ax)) armForWalk();
         if (axesApply()) sendAxes(ax);
     }
 
+    /**
+     * 起立 / 趴下 / 急停这三颗在这里读。它们发的指令重复一次也无害（都是幂等的），
+     * 所以本机和网页那层各读一遍不要紧 —— 网页那层还要负责出声和刷界面。
+     *
+     * B1/B2（力控、起步）**不在这里**：踏步是切换指令，本机和网页各发一条就等于
+     * 一按一停，狗刚起步又停下。那两颗统一由 web/gamepad.js 的 G20_BTN 派发，
+     * 2.4G 下它转头调回本机的 command()，MESH 下走网关，两条链路都只发一次。
+     */
     private void handleButtons(int[] ch) {
         if (ch.length <= 12 || !rcLive(ch)) return;
         boolean stand = pressed(ch, 10, 1050);
         boolean sit = pressed(ch, 6, 1050);
         boolean estop = pressed(ch, 12, 1050);
-        // B1 / B2（现场量的是 CH9、CH10，下标 = CH号-1），按下是 1950。
-        // 推杆本来就会自己踩力控/踏步这两级，这两颗是给「停步」和「用摇杆调姿态」留的。
-        boolean torque = pressed(ch, 8, 1950);
-        boolean step = pressed(ch, 9, 1950);
         // 首帧只记档。上电通道常是 0，会被当成急停按下，狗会动一下并锁关节。
         if (!buttonsPrimed) {
             prevStand = stand;
             prevSit = sit;
             prevEstop = estop;
-            prevTorque = torque;
-            prevStep = step;
             buttonsPrimed = true;
             return;
         }
         if (stand && !prevStand) commandOnRadio("stand_up");
         if (sit && !prevSit) commandOnRadio("sit_down");
         if (estop && !prevEstop) commandOnRadio("estop");
-        if (torque && !prevTorque) commandOnRadio("torque");
-        if (step && !prevStep) commandOnRadio("step");
         prevStand = stand;
         prevSit = sit;
         prevEstop = estop;
-        prevTorque = torque;
-        prevStep = step;
     }
 
     private static boolean rcLive(int[] ch) {
@@ -1127,61 +1084,6 @@ final class RadioLink {
         axBuf[1] = lx;
         axBuf[2] = rx;
         return axBuf;
-    }
-
-    /** 推到这个程度就当「我要走」。要高过 axis() 自己的死区，免得手抖也算。 */
-    private static boolean axesPushed(float[] a) {
-        return Math.abs(a[0]) > ARM_PUSH || Math.abs(a[1]) > ARM_PUSH
-                || Math.abs(a[2]) > ARM_PUSH;
-    }
-
-    /**
-     * 推杆就走：起立之后自动把「力控站立 → 踏步」这两级台阶踩掉。
-     *
-     * 这两下不是运动学上的必要动作，只是状态机的台阶。原厂 App 起立后推杆直接走，
-     * 而我们的操作员要先点力控再点起步 —— 戴手套在阳光下多点两次很容易点错，
-     * 顺序也没人记得。操作员自己点过力控就不插手：那时他要的是用摇杆调身高/俯仰。
-     */
-    private void armForWalk() {
-        if (emergency || torqueByUser) return;
-        long now = System.currentTimeMillis();
-        if (now < armNextAt) return;
-        // 起立本身是一段柔和轨迹，等它站稳再踩，免得把起身掐硬。
-        if (now - lastStandAt < AXIS_AFTER_STAND_MS) return;
-        boolean step;
-        if (telemFresh()) {
-            if (telemState == ST_STEPPING) return;               // 已经能走了
-            if (telemState == ST_TORQUE_STANDING) {
-                step = true;
-            } else if (telemState == ST_INITIAL_STANDING) {
-                // 站着就能踩，哪怕是原厂手柄或别人扶起来的 —— 遥测这两档不含糊。
-                step = false;
-            } else if (telemState == ST_SITTING && standing) {
-                // RL 起立后遥测仍报坐下（见 protocol.hpp）。这一档有歧义，
-                // 只有我们自己发过起立才敢当站着看，否则就是对趴着的狗踩台阶。
-                //
-                // 这一档的遥测也永远不会改口，判断不出踩到第几级了，只能像没遥测
-                // 那样自己数台阶 —— 不数就会每 500 ms 重发一条力控，主机忽略、
-                // 我们再发，操作员自己点的起步还会被这串重发顶掉。
-                if (stepping) return;
-                step = torqued;
-            } else {
-                return;                                          // 过渡/急停，不插手
-            }
-        } else {
-            // 没遥测时只能按顺序踩。踏步是切换指令，重发会停步，所以每级只发一次。
-            if (!standing || stepping) return;
-            step = torqued;
-        }
-        if (step) {
-            sendSimple(STEP);
-            stepping = true;
-        } else {
-            sendSimple(TORQUE);
-            torqued = true;
-        }
-        // 两级之间要留时间：力控刚发就跟一条踏步，主机还在过渡里会忽略后一条。
-        armNextAt = now + ARM_GAP_MS;
     }
 
     private void sendAxes(float[] a) {
