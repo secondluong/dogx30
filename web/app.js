@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826f';
+const WEB_BUILD = '0826g';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -129,26 +129,31 @@ function isStandingUi() {
 app.isStandingUi = isStandingUi;
 
 function controlChannel() {
-  // 力控站立时摇杆是调姿态（身高/横滚/俯仰/偏航），这是力控站立唯一的用处；
-  // 踏步态才是走。遥测说得清就听遥测，说不清（2.4G 常收不到）就按本端点过什么记。
-  if (app.basicState === STATE_STEPPING) return 'vel';
-  if (app.basicState === STATE_TORQUE_STANDING) return 'pose';
-  if (app.walkMode === 'step') return 'vel';
-  if (app.walkMode === 'torque') return 'pose';
-  // RL 起立后遥测仍报 0，力控/起步常被主机忽略。原厂此时走速度通道。
-  if (app.rlStanding &&
-      app.basicState !== STATE_SIT_TO_STAND &&
-      app.basicState !== STATE_STAND_TO_SIT) {
-    return 'vel';
+  // 起立之后摇杆先不生效；力控站立调姿态；踏步才走。
+  // 以人点的为准：MESH 遥测常慢一拍，听遥测的话刚点起步推杆还会被当成没起步。
+  if (app.walkMode === 'step' || app.basicState === STATE_STEPPING) return 'vel';
+  if (app.walkMode === 'torque' || app.basicState === STATE_TORQUE_STANDING) {
+    return 'pose';
   }
   return null;
 }
 
 function effectiveWalk() {
-  if (app.basicState === STATE_STEPPING) return 'step';
-  if (app.basicState === STATE_TORQUE_STANDING) return 'torque';
   return app.walkMode;
 }
+
+function noteWalkCmd(name) {
+  if (name === 'torque') app.walkMode = 'torque';
+  else if (name === 'step') app.walkMode = 'step';
+  else if (name === 'stand' || name === 'stand_up' || name === 'sit' ||
+           name === 'sit_down' || name === 'unload' || name === 'estop') {
+    app.walkMode = null;
+  } else {
+    return;
+  }
+  paintWalkButtons();
+}
+app.noteWalkCmd = noteWalkCmd;
 
 function paintWalkButtons() {
   const walk = effectiveWalk();
@@ -383,12 +388,9 @@ function checkNeedArm(c) {
   if (!radioDirect() && !app.hasControl) return;
   if (!isStandingUi() || app.emergencyLocked || app.lioAligning) return;
   if (stickTarget() === 'ptz') return;
-  // 遥测说已经踏步才算真能走。本端点过起步但遥测还停在力控/初始站立，
-  // 说明那条指令没被狗吃进去，仍然要提醒。没遥测时退回本端记的 walkMode。
-  if (app.basicState === STATE_STEPPING) return;
-  if (app.basicState !== STATE_TORQUE_STANDING &&
-      app.basicState !== STATE_INITIAL_STAND &&
-      app.walkMode === 'step') return;
+  // 点过起步或遥测已踏步，就是能走。以前 MESH 上遥测还停在力控/初始站立时
+  // 不认本端点的起步，推杆仍喊「请先按力控、起步」—— 2.4G 没遥测反而不会。
+  if (app.walkMode === 'step' || app.basicState === STATE_STEPPING) return;
   const now = Date.now();
   if (now - armHintAt < ARM_HINT_GAP) return;
   armHintAt = now;
@@ -528,6 +530,7 @@ let radioGaitSeen = '';
 let radioHeightSeen = null;
 // 网关报来的步态读数（MESH）。和上面那个 2.4G 的一样，只用来认「读数变了」。
 let meshGaitSeen = '';
+let meshWalkSeen = -1;
 
 function syncRadioPickers(st) {
   // 这个回路按发轴频率在跑，读数没变就别重扫一遍 DOM。
@@ -596,14 +599,8 @@ function applyRadioPose(name) {
     paintWalkButtons();
     return;
   }
-  if (name === 'torque') {
-    app.walkMode = 'torque';
-    paintWalkButtons();
-    return;
-  }
-  if (name === 'step') {
-    app.walkMode = 'step';
-    paintWalkButtons();
+  if (name === 'torque' || name === 'step') {
+    noteWalkCmd(name);
     return;
   }
   if (name === 'manual' || name === 'auto') {
@@ -1052,9 +1049,18 @@ function renderState(s) {
   wrap.classList.toggle('dog-prone', !standing);
   paintStandButton();
   if (!radioDirect()) {
-    if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
-    else if (s.basic_state === STATE_TORQUE_STANDING) app.walkMode = 'torque';
-    else if (!standing) app.walkMode = null;
+    // 只在读数变了时跟遥测：每帧盖的话，刚点的起步会被还没改口的「力控站立」灭掉，
+    // B1/B2 和屏幕按钮都像没选上。
+    if (s.basic_state !== meshWalkSeen) {
+      meshWalkSeen = s.basic_state;
+      if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
+      else if (s.basic_state === STATE_TORQUE_STANDING && app.walkMode !== 'step') {
+        // 刚点的起步不要被还没改口的「力控站立」灭掉。
+        app.walkMode = 'torque';
+      } else if (!standing) app.walkMode = null;
+    } else if (!standing) {
+      app.walkMode = null;
+    }
   }
   paintWalkButtons();
   if (!standing) closeAccordions();
@@ -1464,16 +1470,7 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
       speak('LIO 对准中');
       return;
     }
-    if (name === 'torque') {
-      app.walkMode = 'torque';
-      paintWalkButtons();
-    } else if (name === 'step') {
-      app.walkMode = 'step';
-      paintWalkButtons();
-    } else if (name === 'sit_down') {
-      app.walkMode = null;
-      paintWalkButtons();
-    }
+    noteWalkCmd(name);
   }));
 });
 document.querySelectorAll('[data-gait]').forEach((b) => {

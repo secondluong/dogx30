@@ -124,8 +124,9 @@ class MotionClient {
   // 这条就是让那份记忆对上。只有拿到控制权的客户端能调。
   void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
-  void EnterTorqueStand();  // 初始站立 -> 力控站立
-  void ToggleStepping();    // 力控站立 <-> 踏步 切换
+  void EnterTorqueStand();  // 进力控站立。已经在踏步就先停步，狗会静止站住。
+  void ToggleStepping();    // 力控站立 <-> 踏步 切换（命令行用）
+  void EnterStepping();     // 进踏步。已经踏步不再切回去；还没力控就先补力控。
 
   void SetGait(Gait gait);
   void SetBodyHeight(HeightGear gear);
@@ -212,6 +213,12 @@ class MotionClient {
   // 操作员点了力控/起步。RL 起立后遥测仍报 0，AxisCommandsApply 会把轴吞掉；
   // 网关重启也会丢掉 last_stand_sit_。这条记下「按可走发轴」。趴下/急停清掉。
   bool axes_unlocked_ = false;
+
+  // 没遥测时记力控/踏步踩到哪了。踏步是切换指令，重发会停步。
+  bool torqued_{false};
+  bool stepping_{false};
+  // 力控刚发就跟一条踏步，主机还在过渡里会丢掉。TxLoop 到点再发。
+  std::chrono::steady_clock::time_point step_at_{};
 };
 
 }  // namespace x30

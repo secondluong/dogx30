@@ -89,6 +89,8 @@ final class RadioLink {
     private static final long AXIS_AFTER_STAND_MS = 1500;
     /** 屏幕摇杆多久没更新就当松手。掉帧或页面卡住时不能让狗一直走。 */
     private static final long SCREEN_AXIS_HOLD_MS = 400;
+    /** 先力控再踏步之间留多久，主机还在过渡里会丢掉后一条。 */
+    private static final long ARM_GAP_MS = 500;
 
     private static final int HEARTBEAT = 0x21040001;
     private static final int CONNECT = 0x21020001;
@@ -334,7 +336,17 @@ final class RadioLink {
     private void clearWalk() {
         torqued = false;
         stepping = false;
+        if (handler != null) handler.removeCallbacks(stepTask);
     }
+
+    private final Runnable stepTask = new Runnable() {
+        @Override
+        public void run() {
+            if (!standing || emergency || stepping) return;
+            sendSimple(STEP);
+            stepping = true;
+        }
+    };
 
     /**
      * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
@@ -444,9 +456,15 @@ final class RadioLink {
                 break;
             case "step":
                 if (!standing) break;
-                // 不再替人补力控：力控和起步必须各按一次。漏了由网页出声提醒。
+                if (stepping) break; // 已经踏步就别再切，切一次等于停步
+                if (!torqued) {
+                    sendSimple(TORQUE);
+                    torqued = true;
+                    onRadioDelayed(stepTask, ARM_GAP_MS);
+                    break;
+                }
                 sendSimple(STEP);
-                stepping = !stepping;
+                stepping = true;
                 break;
             case "estop":
                 cancelPendingStand();

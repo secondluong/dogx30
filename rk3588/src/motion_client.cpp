@@ -13,6 +13,8 @@ using Clock = std::chrono::steady_clock;
 // 起立/趴下之后停发轴多久。够盖住遥测把过渡态报上来的滞后（实测几十毫秒），
 // 又远短于起身本身的两秒，所以不影响「站起来就能推杆走」。
 constexpr int kAxisHoldMs = 300;
+// 力控和踏步之间要留时间：主机还在过渡里，紧跟着的踏步会被丢掉。
+constexpr int kArmGapMs = 500;
 
 // 从原始报文里安全地取出一个结构体。长度不足就返回 false，避免越界读。
 template <typename T>
@@ -107,6 +109,20 @@ void MotionClient::TxLoop() {
     }
 
     // 心跳必须先于一切。丢心跳的后果比丢一帧轴指令严重得多。
+    {
+      // 起步在没力控时会先发力控，到点再补踏步。必须在 TX 线程发，别另开定时器。
+      bool due = false;
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (step_at_ != Clock::time_point{} && Clock::now() >= step_at_) {
+          step_at_ = {};
+          stepping_ = true;
+          due = true;
+        }
+      }
+      if (due) SendSimple(cmd::kSteppingToggle);
+    }
+
     if (tick % heartbeat_every == 0) {
       SendSimple(cmd::kHeartbeat);
       // 协议要求在心跳开始后补发一次连接确认。
@@ -412,7 +428,12 @@ void MotionClient::StandOrSit() {
     }
     last_stand_sit_ = sitting ? LastStandSit::kStood : LastStandSit::kSat;
     state_.rl_standing = (last_stand_sit_ == LastStandSit::kStood);
-    if (!sitting) axes_unlocked_ = false;
+    if (!sitting) {
+      axes_unlocked_ = false;
+      torqued_ = false;
+      stepping_ = false;
+      step_at_ = {};
+    }
   }
 
   if (sitting) {
@@ -435,6 +456,10 @@ void MotionClient::StandUp() {
     std::lock_guard<std::mutex> lock(state_mutex_);
     last_stand_sit_ = LastStandSit::kStood;
     state_.rl_standing = true;
+    axes_unlocked_ = false;
+    torqued_ = false;
+    stepping_ = false;
+    step_at_ = {};
   }
   std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n", ToString(s.basic_state));
   SendSimple(cmd::kRlStandUp);
@@ -452,6 +477,9 @@ void MotionClient::SitDown() {
     last_stand_sit_ = LastStandSit::kSat;
     state_.rl_standing = false;
     axes_unlocked_ = false;
+    torqued_ = false;
+    stepping_ = false;
+    step_at_ = {};
   }
   std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n", ToString(s.basic_state));
   SendSimple(cmd::kRlSitDown);
@@ -465,7 +493,12 @@ void MotionClient::AdoptPosture(bool standing) {
   state_.rl_standing = standing;
   // 站立不在这里解锁轴：rl_standing 一为真，AxisCommandsApply 本身就放行。
   // 反过来趴下必须锁回去，否则上一次力控留下的解锁会让趴着的狗也收轴。
-  if (!standing) axes_unlocked_ = false;
+  if (!standing) {
+    axes_unlocked_ = false;
+    torqued_ = false;
+    stepping_ = false;
+    step_at_ = {};
+  }
   std::printf("[运动] 采纳遥控端告知的姿态：%s（遥测=%s）\n",
               standing ? "站立" : "坐下", ToString(state_.basic_state));
 }
@@ -479,18 +512,65 @@ void MotionClient::UnloadForce() {
   last_stand_sit_ = LastStandSit::kSat;
   state_.rl_standing = false;
   axes_unlocked_ = false;
+  torqued_ = false;
+  stepping_ = false;
+  step_at_ = {};
   std::printf("[运动] 卸力 0x21010202（遥测=%s）\n", ToString(state_.basic_state));
 }
 
 void MotionClient::EnterTorqueStand() {
-  SendSimple(cmd::kTorqueStand);
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  axes_unlocked_ = true;
+  const RobotState s = Snapshot();
+  bool stop_step = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    step_at_ = {};
+    stop_step = s.telemetry_alive ? s.basic_state == BasicState::kStepping
+                                  : stepping_;
+    stepping_ = false;
+    torqued_ = true;
+    axes_unlocked_ = true;
+  }
+  // 已经在踏步时再发力控，主机会忽略，狗继续原地踏。先切一次踏步停下来。
+  if (stop_step) SendSimple(cmd::kSteppingToggle);
+  else SendSimple(cmd::kTorqueStand);
 }
+
 void MotionClient::ToggleStepping() {
   SendSimple(cmd::kSteppingToggle);
   std::lock_guard<std::mutex> lock(state_mutex_);
+  stepping_ = !stepping_;
   axes_unlocked_ = true;
+}
+
+void MotionClient::EnterStepping() {
+  const RobotState s = Snapshot();
+  bool already = false;
+  bool need_torque = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    already = s.telemetry_alive ? s.basic_state == BasicState::kStepping
+                                : stepping_;
+    if (already) {
+      stepping_ = true;
+      axes_unlocked_ = true;
+      return;
+    }
+    const bool in_torque = s.telemetry_alive
+                               ? s.basic_state == BasicState::kTorqueStanding
+                               : torqued_;
+    need_torque = !in_torque;
+    torqued_ = true;
+    axes_unlocked_ = true;
+    if (need_torque) {
+      // 先力控，到点再踏步。立刻跟一条会被丢掉，表现为点了起步却只在原地力控。
+      step_at_ = Clock::now() + std::chrono::milliseconds(kArmGapMs);
+    } else {
+      stepping_ = true;
+      step_at_ = {};
+    }
+  }
+  if (need_torque) SendSimple(cmd::kTorqueStand);
+  else SendSimple(cmd::kSteppingToggle);
 }
 
 void MotionClient::SetGait(Gait gait) {
@@ -516,6 +596,9 @@ void MotionClient::SoftEmergencyStop() {
   last_stand_sit_ = LastStandSit::kSat;
   state_.rl_standing = false;
   axes_unlocked_ = false;
+  torqued_ = false;
+  stepping_ = false;
+  step_at_ = {};
 }
 
 void MotionClient::SaveData(bool legacy_firmware) {

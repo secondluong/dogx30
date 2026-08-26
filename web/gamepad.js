@@ -616,6 +616,7 @@
           return;
         }
         send({ t: 'cmd', name: key });
+        if (app.noteWalkCmd) app.noteWalkCmd(key);
         say(key === 'torque' ? '力控' : '起步');
         return;
       }
@@ -711,6 +712,9 @@
     }
 
     api._onRcChannels = function (ev) {
+      // 安卓壳里 poll() 已经在读 pollRc。这里再 apply 一次，同一颗 B1/B2 会
+      // 上升沿走两遍：踏步是切换指令，一按就等于起步又立刻停步，表现为「要点两次」。
+      if (window.X30Native && window.X30Native.pollRc) return;
       applyG20(ev);
     };
 

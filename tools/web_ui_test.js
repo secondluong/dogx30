@@ -618,15 +618,27 @@ check('推杆但没起步时出声提醒',
       /app\.walkMode === 'step'/.test(appJs) &&
       /speak\(ARM_HINT\)/.test(appJs) &&
       /ARM_HINT_GAP/.test(appJs));
-// 起步不再替人补力控：这两下必须各按一次。漏了由 checkNeedArm 出声。
-check('起步不再替人补力控',
-      !/ARM_GAP_MS/.test(radioJava) &&
-      !/stepTask/.test(radioJava) &&
-      /stepping = !stepping/.test(radioJava));
+// 起步是「进入踏步」，不是切换：已经踏步再发一次等于停步。没力控就先补力控。
+check('起步是进入踏步，不是切换',
+      /void EnterStepping/.test(motionHpp) &&
+      /EnterStepping\(\)/.test(serviceCpp) &&
+      /if \(already\)/.test(motionCpp) &&
+      /ARM_GAP_MS/.test(radioJava) &&
+      /onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava) &&
+      /if \(stepping\) break/.test(radioJava));
 // 力控站立唯一的用处是用摇杆调身高/俯仰，所以那个状态下摇杆走姿态通道。
-check('力控站立时摇杆是调姿态',
-      /if \(app\.basicState === STATE_TORQUE_STANDING\) return 'pose'/.test(appJs) &&
-      /if \(app\.walkMode === 'torque'\) return 'pose'/.test(appJs));
+// 起立后（还没力控/起步）摇杆必须空着，以前 rlStanding 直接走速度，MESH 上
+// 没点起步也能推，和 2.4G 两套手感。
+check('力控调姿态、起步才走、起立后摇杆空着',
+      /walkMode === 'step' \|\| app\.basicState === STATE_STEPPING/.test(appJs) &&
+      /walkMode === 'torque' \|\| app\.basicState === STATE_TORQUE_STANDING/.test(appJs) &&
+      !/if \(app\.rlStanding &&\s*\n\s*app\.basicState !== STATE_SIT_TO_STAND/.test(appJs));
+// B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
+check('B1/B2 一次按键、屏幕跟着亮',
+      /function noteWalkCmd/.test(appJs) &&
+      /app\.noteWalkCmd/.test(read('gamepad.js')) &&
+      /if \(window\.X30Native && window\.X30Native\.pollRc\) return/.test(read('gamepad.js')) &&
+      /s\.basic_state !== meshWalkSeen/.test(appJs));
 // 上下楼那一排里必须有「平地」：少了它，选过楼梯就再没法从这个菜单回到平地走。
 // 平地就是常规步态，两个菜单里各有一颗 walk，指的是同一个步态。
 check('上下楼那一排有平地这个出口',
