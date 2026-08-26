@@ -231,6 +231,17 @@ inline bool StandingForLio(BasicState s, bool rl_standing = false) {
   return rl_standing && s == BasicState::kSitting;
 }
 
+// 步态指令主机文档写「仅踏步态」。RL 起立后遥测仍报坐下，编排器若只看
+// basic_state，顶栏已经是「RL 站立」时切步态还会报「当前为坐下」。
+// 力控站立 / 初始站立 / 我们记得 RL 已起立，都放行。真趴着才挡。
+inline bool GaitSwitchApply(BasicState s, bool rl_standing = false) {
+  if (IsStandSitTransient(s) || s == BasicState::kEmergencyOrFall) {
+    return false;
+  }
+  if (TelemUpright(s)) return true;
+  return rl_standing && s == BasicState::kSitting;
+}
+
 enum class Gait : uint8_t {
   kWalk = 0,
   kOffRoad = 1,

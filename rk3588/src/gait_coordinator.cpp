@@ -80,10 +80,13 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
   if (snapshot.gait == target) {
     return {true, "", std::string("已处于") + ToString(target)};
   }
-  if (snapshot.basic_state != BasicState::kStepping) {
+  if (!GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing)) {
+    const char* now =
+        snapshot.rl_standing && snapshot.basic_state == BasicState::kSitting
+            ? "RL 站立（遥测仍报坐下）"
+            : ToString(snapshot.basic_state);
     return {false, "not_stepping",
-            std::string("仅踏步态下可切换步态，当前为") +
-                ToString(snapshot.basic_state)};
+            std::string("趴着切不了步态，当前为") + now};
   }
 
   const bool needs_map = RequiresHeightMap(target);

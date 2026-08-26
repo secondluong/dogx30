@@ -212,7 +212,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 连上立即下发一次。
 
 ```json
-{"t":"hello","version":"0.2.2","client_id":3,"control":false,"lease_ms":2000,
+{"t":"hello","version":"0.2.3","client_id":3,"control":false,"lease_ms":2000,
  "config":true,"pose_adopt":true}
 ```
 
@@ -242,7 +242,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 | --- | --- |
 | `""` | 成功 |
 | `no_telemetry` | 与运动主机失联，无法确认结果 |
-| `not_stepping` | 当前不是踏步态，只有踏步态能切步态 |
+| `not_stepping` | 真趴着（遥测坐下且网关不记得 RL 起立）。站着即可切 |
 | `not_standstill` | 多帧楼梯要求静止，机器狗还在动 |
 | `gait_not_applied` | 指令发了但遥测没确认。楼梯多半是地形图没配合上 |
 

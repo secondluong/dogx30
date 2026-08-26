@@ -413,6 +413,8 @@ var serviceCpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'src', 'robot_service.cpp'), 'utf8');
 var motionCpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'src', 'motion_client.cpp'), 'utf8');
+var gaitCpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'src', 'gait_coordinator.cpp'), 'utf8');
 check('2.4G RadioLink 含起立趴下行走指令',
       /0x21010223/.test(radioJava) &&
       /0x21010222/.test(radioJava) &&
@@ -537,7 +539,9 @@ check('切档交接 App 记住的姿态',
       /if \(!radioDirect\(\) && linkOpen\(\) && app\.alive\) notePose\(standing\)/.test(appJs) &&
       /if \(st\.poseKnown\) return isStandingUi\(\);/.test(appJs) &&
       /\n  return poseMem;\n\}/.test(appJs) &&
-      /if \(granted && msg\.Has\("standing"\)\)/.test(serviceCpp));
+      /if \(granted && msg\.Has\("standing"\)\)/.test(serviceCpp) &&
+      /GaitSwitchApply/.test(gaitCpp) &&
+      /rl_standing/.test(gaitCpp));
 // 力控/起步挂在 B1/B2（现场量的是 CH9、CH10，下标 = CH号-1，按下 1950 —— 和别的
 // 键反向，所以按下判定要按中位分两边）。
 //

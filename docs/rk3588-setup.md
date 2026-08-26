@@ -243,6 +243,9 @@ sudo reboot
 cd ~/dogx30
 cmake -S rk3588 -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
+# 编出来的是 build/x30_gateway。systemd 跑的是 /opt/x30/bin/x30_gateway，
+# 只 cmake 不装的话板子上仍是旧进程。升级：
+#   sudo bash deploy/install.sh && sudo systemctl restart x30-gateway
 bash tools/serve_test.sh            # 应当 20 项全 PASS
 ```
 
