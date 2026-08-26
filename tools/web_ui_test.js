@@ -570,7 +570,8 @@ check('急停后左下角变卸力，实体红键也算',
       /o\.put\("emergency", telemLocked\(\)\)/.test(radioJava) &&
       /o\.put\("emergSrc", telemEmergSrc\)/.test(radioJava) &&
       /TELEM_RUNNING = 0x1008/.test(radioJava) &&
-      /basic === STATE_EMERGENCY \|\| !!st\.emergency \|\| src > 0/.test(appJs) &&
+      /function jointsLocked/.test(appJs) &&
+      /n >= 2 && n <= 6/.test(appJs) &&
       /if \(app\.emergencyLocked\) return false/.test(appJs) &&
       /btn\.textContent = '卸力'/.test(appJs));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
@@ -648,6 +649,9 @@ check('B1/B2 一次按键、屏幕跟着亮',
       /s\.basic_state !== meshWalkSeen/.test(appJs));
 // 上下楼那一排里必须有「平地」：少了它，选过楼梯就再没法从这个菜单回到平地走。
 // 平地就是常规步态，两个菜单里各有一颗 walk，指的是同一个步态。
+check('离开楼梯后回到手动模式',
+      /离开楼梯后回到手动/.test(gaitCpp) &&
+      /SetControlMode\(ControlMode::kManual\)/.test(gaitCpp));
 check('上下楼那一排有平地这个出口',
       /data-gait="walk" data-short="平地"/.test(html) &&
       /data-gait="stair" data-short="楼梯"/.test(html) &&
@@ -719,6 +723,7 @@ check('两条链路对步态编码的理解一致',
 check('轴放行看记得起立，过渡和急停仍挡',
       /bool AxisCommandsApply\(BasicState s, bool standing/.test(protoHpp) &&
       /inline bool JointsLocked/.test(protoHpp) &&
+      /emergency_source >= 2 && emergency_source <= 6/.test(protoHpp) &&
       /return standing;/.test(protoHpp) &&
       /if \(IsStandSitTransient\(s\)\) return false/.test(protoHpp));
 check('屏幕摇杆在 2.4G 下也能推',

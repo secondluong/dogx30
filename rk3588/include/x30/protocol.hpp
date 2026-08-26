@@ -200,11 +200,14 @@ inline bool IsStandSitTransient(BasicState s) {
   return s == BasicState::kSitToStand || s == BasicState::kStandToSit;
 }
 
-// 关节自锁：basic_state=6，或 0x1008 的 emergency_source ≠ 0。
-// 急停之后主机常改回报坐下(0)，原厂看的是来源字节，不是 basic_state。
-// 这时候再发起立/速度会被静默丢掉，必须先卸力。
+// 关节自锁。急停后 basic_state 常改回报坐下，原厂还看 0x1008 的来源字节。
+//
+// 来源 1（尾部急停）与「非手动」的 is_nav_mode=1 只差一个字节。切楼梯会设
+// 非手动；偏移若偏了 1，来源会一直是 1，起立/趴下就被改成卸力。尾部急停
+// 主机同时会报 basic_state=6，所以单靠来源 1 不锁。2–6 才是运动/客户端急停。
 inline bool JointsLocked(BasicState s, uint8_t emergency_source = 0) {
-  return s == BasicState::kEmergencyOrFall || emergency_source != 0;
+  if (s == BasicState::kEmergencyOrFall) return true;
+  return emergency_source >= 2 && emergency_source <= 6;
 }
 
 // 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。其余状态里发轴，

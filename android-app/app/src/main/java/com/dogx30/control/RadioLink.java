@@ -236,7 +236,8 @@ final class RadioLink {
 
     /** 关节自锁。急停后主机常回报坐下，原厂看 0x1008 的来源字节。 */
     private boolean telemLocked() {
-        if (telemFresh() && (telemState == ST_EMERGENCY || telemEmergSrc != 0)) {
+        if (telemFresh() && (telemState == ST_EMERGENCY
+                || (telemEmergSrc >= 2 && telemEmergSrc <= 6))) {
             return true;
         }
         return emergency;
@@ -1228,7 +1229,8 @@ final class RadioLink {
             } else if (telemState == ST_TORQUE_STANDING && !stepping) {
                 torqued = true;
             }
-        } else if (telemState == ST_EMERGENCY || telemEmergSrc != 0) {
+        } else if (telemState == ST_EMERGENCY
+                || (telemEmergSrc >= 2 && telemEmergSrc <= 6)) {
             applyTelemLock();
         } else if (telemState == ST_SITTING) {
             // RL 起立后主机仍报坐下。分不清真趴着还是那种谎报，不动 standing。
@@ -1240,7 +1242,10 @@ final class RadioLink {
     }
 
     private void applyTelemLock() {
-        if (telemState != ST_EMERGENCY && telemEmergSrc == 0) return;
+        if (telemState != ST_EMERGENCY
+                && !(telemEmergSrc >= 2 && telemEmergSrc <= 6)) {
+            return;
+        }
         emergency = true;
         standing = false;
         clearWalk();

@@ -117,6 +117,8 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
     }
     SleepMs(cfg_.settle_delay_ms);
   } else {
+    // 离开楼梯后回到手动，否则 is_nav_mode 一直为 1。
+    motion_.SetControlMode(ControlMode::kManual);
     terrain_.SetStepZMax(RecommendedStepZMax(target));
   }
 
