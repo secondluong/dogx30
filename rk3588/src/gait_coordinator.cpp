@@ -77,9 +77,6 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
     return {false, "no_telemetry",
             "与机器狗失联，无法确认切换结果。请检查网线与运动主机登记。"};
   }
-  if (snapshot.gait == target) {
-    return {true, "", std::string("已处于") + ToString(target)};
-  }
   if (!GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing,
                        snapshot.emergency_source)) {
     const char* now =
@@ -92,6 +89,7 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
 
   const bool needs_map = RequiresHeightMap(target);
   const bool multiframe = RequiresMultiFrame(target);
+  const bool already = snapshot.gait == target;
 
   if (needs_map) {
     // 多帧模式只能在静止时切换，这是文档的硬性约束。
@@ -117,9 +115,14 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
     }
     SleepMs(cfg_.settle_delay_ms);
   } else {
-    // 离开楼梯后回到手动，否则 is_nav_mode 一直为 1。
+    // 离开楼梯后回到手动，否则 is_nav_mode 一直为 1，摇杆速度被地形图链路吃掉。
+    // 楼梯没切成时 gait 仍是 walk：必须先恢复手动，不能「已处于」就直接返回。
     motion_.SetControlMode(ControlMode::kManual);
     terrain_.SetStepZMax(RecommendedStepZMax(target));
+  }
+
+  if (already) {
+    return {true, "", std::string("已处于") + ToString(target)};
   }
 
   motion_.SetGait(target);

@@ -470,6 +470,8 @@ void MotionClient::StandUp() {
   std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n",
               ToString(Snapshot().basic_state));
   SendSimple(cmd::kRlStandUp);
+  // 楼梯会把主机留在非手动。网关重启清不掉，起立后不拉回来摇杆就没速度。
+  SetControlMode(ControlMode::kManual);
 }
 
 void MotionClient::SitDown() {
@@ -494,14 +496,13 @@ void MotionClient::SitDown() {
   ReleaseAxes();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-  last_stand_sit_ = LastStandSit::kSat;
-  state_.rl_standing = false;
-  state_.emergency_source = 5;  // 客户端触发，等遥测改口前界面先认锁定
-  axes_unlocked_ = false;
-  torqued_ = false;
-  stepping_ = false;
-  step_at_ = {};
-}
+    last_stand_sit_ = LastStandSit::kSat;
+    state_.rl_standing = false;
+    axes_unlocked_ = false;
+    torqued_ = false;
+    stepping_ = false;
+    step_at_ = {};
+  }
   std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
               ToString(Snapshot().basic_state));
   SendSimple(cmd::kRlSitDown);
@@ -576,6 +577,12 @@ void MotionClient::SetBodyHeight(HeightGear gear) {
 void MotionClient::SetControlMode(ControlMode mode) {
   SendSimple(mode == ControlMode::kManual ? cmd::kModeManual
                                           : cmd::kModeNonManual);
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (state_.control_mode != mode) {
+    std::printf("[运动] 控制模式 → %s\n",
+                mode == ControlMode::kManual ? "手动" : "非手动");
+  }
+  state_.control_mode = mode;
 }
 
 void MotionClient::SoftEmergencyStop() {

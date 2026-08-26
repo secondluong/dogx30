@@ -86,7 +86,8 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 6. 等待遥测确认步态真的变了
 
 切到非楼梯步态时，障碍高度阈值会按文档推荐值自动回设（Walk/缓坡 8cm，
-越野 28cm），不需要遥控端操心。
+越野 28cm），并切回手动模式。楼梯没切成、gait 仍是 walk 时也要切回手动，
+否则主机停在非手动，摇杆速度会被地形图链路吃掉。
 
 同一时刻只允许一次切换在途，重复请求会收到 `gait_busy` 错误而不是排队。
 
@@ -213,7 +214,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 连上立即下发一次。
 
 ```json
-{"t":"hello","version":"0.2.9","client_id":3,"control":false,"lease_ms":2000,
+{"t":"hello","version":"0.2.10","client_id":3,"control":false,"lease_ms":2000,
  "config":true,"pose_adopt":true}
 ```
 

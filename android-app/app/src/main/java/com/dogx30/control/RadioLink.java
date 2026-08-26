@@ -68,7 +68,8 @@ final class RadioLink {
     private static final int TELEM_MOTION = 0x1009;
     /** 身高档位是单独一条简单报文，档位就放在头里的 paramters_size，按有符号读。 */
     private static final int TELEM_HEIGHT = 0x11050F08;
-    /** RcsData.emergency_source：头 12 字节之后偏移 73，见 protocol.hpp。 */
+    /** RcsData.is_nav_mode / emergency_source：头 12 字节之后偏移 72/73。 */
+    private static final int RCS_NAV_OFF = 72;
     private static final int RCS_EMERG_OFF = 73;
     private static final int RCS_LEN = 88;
     private static final int HEAD_LEN = 12;
@@ -124,6 +125,7 @@ final class RadioLink {
     private int telemState = -1;
     private int telemGait = -1;
     private int telemEmergSrc;
+    private int telemNavMode;
     private boolean telemRunSeen;
     /** 身高档位：-1 匍匐、0 正常。狗只在变化时报，所以不设新鲜期，收到过就一直算。 */
     private int telemHeight;
@@ -416,6 +418,8 @@ final class RadioLink {
     private synchronized void standNow() {
         if (!enabled) return;
         sendSimple(STAND);
+        sendSimple(MODE_MANUAL);
+        telemNavMode = 0;
         standing = true;
         lastStandAt = System.currentTimeMillis();
         clearWalk();
@@ -502,12 +506,37 @@ final class RadioLink {
                 break;
             default:
                 if (name.startsWith("gait_")) {
-                    sendSimple(gaitCode(name.substring(5)), 0);
+                    sendGait(name.substring(5));
                 } else if (gaitCode(name) != 0) {
-                    sendSimple(gaitCode(name), 0);
+                    sendGait(name);
                 }
                 break;
         }
+    }
+
+    private void sendGait(String gait) {
+        int code = gaitCode(gait);
+        if (code == 0) return;
+        if (isStairGait(gait)) {
+            sendSimple(MODE_AUTO);
+            telemNavMode = 1;
+        } else {
+            sendSimple(MODE_MANUAL);
+            telemNavMode = 0;
+        }
+        sendSimple(code, 0);
+    }
+
+    private static boolean isStairGait(String gait) {
+        return "stair".equals(gait) || "stairmulti".equals(gait)
+                || "stair45".equals(gait);
+    }
+
+    private void restoreManualIfNeeded() {
+        if (telemNavMode != 1) return;
+        if (telemGait == 6 || telemGait == 7 || telemGait == 8) return;
+        sendSimple(MODE_MANUAL);
+        telemNavMode = 0;
     }
 
     private int gaitCode(String gait) {
@@ -1031,7 +1060,10 @@ final class RadioLink {
             handleButtons(snap.ch);
         }
         float[] ax = effAxes(snap.ch);
-        if (axesApply()) sendAxes(ax);
+        if (axesApply()) {
+            restoreManualIfNeeded();
+            sendAxes(ax);
+        }
     }
 
     /**
@@ -1208,6 +1240,7 @@ final class RadioLink {
             return;
         }
         if (code == TELEM_RUNNING && len >= HEAD_LEN + RCS_LEN) {
+            telemNavMode = b[HEAD_LEN + RCS_NAV_OFF] & 0xff;
             telemEmergSrc = b[HEAD_LEN + RCS_EMERG_OFF] & 0xff;
             telemRunSeen = true;
             telemAt = System.currentTimeMillis();

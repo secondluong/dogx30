@@ -477,7 +477,8 @@ check('两条链路共用一份姿态，切档不走散',
 // 起立后推杆就走。RL 起立后遥测仍报 0，以本端记得站着放行。力控只改姿态。
 check('起立后就能发轴',
       /private boolean axesApply\(\)/.test(radioJava) &&
-      /if \(axesApply\(\)\) sendAxes/.test(radioJava) &&
+      /if \(axesApply\(\)\)/.test(radioJava) &&
+      /sendAxes\(ax\)/.test(radioJava) &&
       /return standing \|\| torqued \|\| stepping/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
       /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
@@ -651,7 +652,15 @@ check('B1/B2 一次按键、屏幕跟着亮',
 // 平地就是常规步态，两个菜单里各有一颗 walk，指的是同一个步态。
 check('离开楼梯后回到手动模式',
       /离开楼梯后回到手动/.test(gaitCpp) &&
-      /SetControlMode\(ControlMode::kManual\)/.test(gaitCpp));
+      /SetControlMode\(ControlMode::kManual\)/.test(gaitCpp) &&
+      gaitCpp.indexOf('SetControlMode(ControlMode::kManual)') <
+        gaitCpp.indexOf('std::string("已处于")') &&
+      /SetControlMode\(ControlMode::kManual\)/.test(motionCpp) &&
+      /kNonManual &&/.test(serviceCpp) &&
+      /!RequiresHeightMap\(s\.gait\)/.test(serviceCpp) &&
+      /restoreManualIfNeeded/.test(radioJava) &&
+      /sendGait/.test(radioJava) &&
+      !/SitDown[\s\S]{0,500}emergency_source = 5/.test(motionCpp));
 check('上下楼那一排有平地这个出口',
       /data-gait="walk" data-short="平地"/.test(html) &&
       /data-gait="stair" data-short="楼梯"/.test(html) &&
