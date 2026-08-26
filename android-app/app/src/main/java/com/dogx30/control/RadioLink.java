@@ -145,6 +145,8 @@ final class RadioLink {
     private boolean prevStand;
     private boolean prevSit;
     private boolean prevEstop;
+    private boolean prevTorque;
+    private boolean prevStep;
     private boolean buttonsPrimed;
     private int tick;
     private int sentOk;
@@ -1043,23 +1045,33 @@ final class RadioLink {
 
     private void handleButtons(int[] ch) {
         if (ch.length <= 12 || !rcLive(ch)) return;
-        boolean stand = pressed(ch, 10);
-        boolean sit = pressed(ch, 6);
-        boolean estop = pressed(ch, 12);
+        boolean stand = pressed(ch, 10, 1050);
+        boolean sit = pressed(ch, 6, 1050);
+        boolean estop = pressed(ch, 12, 1050);
+        // B1 / B2（现场量的是 CH9、CH10，下标 = CH号-1），按下是 1950。
+        // 推杆本来就会自己踩力控/踏步这两级，这两颗是给「停步」和「用摇杆调姿态」留的。
+        boolean torque = pressed(ch, 8, 1950);
+        boolean step = pressed(ch, 9, 1950);
         // 首帧只记档。上电通道常是 0，会被当成急停按下，狗会动一下并锁关节。
         if (!buttonsPrimed) {
             prevStand = stand;
             prevSit = sit;
             prevEstop = estop;
+            prevTorque = torque;
+            prevStep = step;
             buttonsPrimed = true;
             return;
         }
         if (stand && !prevStand) commandOnRadio("stand_up");
         if (sit && !prevSit) commandOnRadio("sit_down");
         if (estop && !prevEstop) commandOnRadio("estop");
+        if (torque && !prevTorque) commandOnRadio("torque");
+        if (step && !prevStep) commandOnRadio("step");
         prevStand = stand;
         prevSit = sit;
         prevEstop = estop;
+        prevTorque = torque;
+        prevStep = step;
     }
 
     private static boolean rcLive(int[] ch) {
@@ -1071,11 +1083,16 @@ final class RadioLink {
         return ok >= 4;
     }
 
-    private static boolean pressed(int[] ch, int index) {
+    /**
+     * 和 gamepad.js 的 pwmPressed 同一套判定：按下值在中位以下就按「低有效」看，
+     * 在中位以上按「高有效」。L1/L2/急停按下是 1050，B1/B2 按下是 1950。
+     */
+    private static boolean pressed(int[] ch, int index, int press) {
         if (index < 0 || index >= ch.length) return false;
         int v = ch[index];
         if (v < 900 || v > 2100) return false;
-        return v <= 1275;
+        int mid = (press + 1500) / 2;
+        return press < 1500 ? v <= mid : v >= mid;
     }
 
     /**
@@ -1142,7 +1159,12 @@ final class RadioLink {
             } else if (telemState == ST_SITTING && standing) {
                 // RL 起立后遥测仍报坐下（见 protocol.hpp）。这一档有歧义，
                 // 只有我们自己发过起立才敢当站着看，否则就是对趴着的狗踩台阶。
-                step = false;
+                //
+                // 这一档的遥测也永远不会改口，判断不出踩到第几级了，只能像没遥测
+                // 那样自己数台阶 —— 不数就会每 500 ms 重发一条力控，主机忽略、
+                // 我们再发，操作员自己点的起步还会被这串重发顶掉。
+                if (stepping) return;
+                step = torqued;
             } else {
                 return;                                          // 过渡/急停，不插手
             }

@@ -29,7 +29,14 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826b';
+const WEB_BUILD = '0826c';
+
+// 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
+// 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
+// 同一拍里后念的覆盖先念的，所以不必先取消什么。
+function speak(text) {
+  if (window.X30Voice) window.X30Voice.say(text);
+}
 
 function nativeAppVersion() {
   try {
@@ -147,8 +154,6 @@ function effectiveWalk() {
   return app.walkMode;
 }
 
-// 底栏已经不放力控/起步了（推杆自己会踩），这里只剩实体手柄那两颗按钮的回显，
-// 以及网页版控制台可能还挂着的同名按钮 —— 没有元素时就是空转。
 function paintWalkButtons() {
   const walk = effectiveWalk();
   document.querySelectorAll('[data-cmd="torque"]').forEach((b) => {
@@ -308,6 +313,9 @@ function onGaitResult(msg) {
   }
   // 失败原因往往很长（要写清楚该去查什么），给足停留时间。
   showBanner(msg.msg || '步态切换失败', 9000);
+  // 点的时候已经念过档位名了。切不成必须再念一句盖掉它，否则人听到「爬坡」
+  // 就以为换上了 —— 而这几秒的延迟里他多半已经把视线移回狗身上。
+  speak('步态没切成');
 }
 
 function hasNativeRadio() {
@@ -377,11 +385,13 @@ function radioHint(kind) {
     showBanner(kind === 'g20'
       ? '当前 2.4G：起立/趴下/行走直达运动主机'
       : '2.4G 姿态没发出去。请先切回 MESH 看画面，或重装 App');
+    speak('2.4G 没发出去');
     return;
   }
   showBanner(kind === 'g20'
     ? '网关未连。要备份请切到 2.4G'
     : '网关未连，屏幕按钮走不了。请先恢复 MESH');
+  speak('网关未连');
 }
 app.radioHint = radioHint;
 
@@ -691,6 +701,7 @@ function applyRadioPath(announce) {
       }
       if (announce) {
         showBanner('已切到 2.4G。指令走 G20 数传，不经网关');
+        speak('已切 2.4G');
       }
       setTimeout(() => {
         if (!radioDirect() || !hasNativeRadio()) return;
@@ -703,6 +714,7 @@ function applyRadioPath(announce) {
       }, 2000);
     } else if (announce) {
       showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
+      speak('没有 2.4G 直达');
     }
     paintRadioLink();
     return;
@@ -714,6 +726,7 @@ function applyRadioPath(announce) {
     showBanner(linkOpen()
       ? '已切到 MESH，网关接管'
       : '已选 MESH，等网关连上后自动接管');
+    speak(linkOpen() ? '已切 MESH' : 'MESH 还没连上');
   }
   paintRadioBtn();
 }
@@ -1070,12 +1083,15 @@ function paintModes() {
   });
 }
 
+// 开关类的按钮上只有名字，没有「现在是开还是关」。屏幕上看一眼就知道，
+// 但这两个在 App 上是 G20 的 R1/R2 按的，人根本没在看屏幕。
 function toggleGas() {
   const el = $('gas-panel');
   if (!el) return;
   el.classList.toggle('hidden');
   const shown = !el.classList.contains('hidden');
   if ($('btn-gas')) $('btn-gas').classList.toggle('active', shown);
+  speak(shown ? '气体已开' : '气体已关');
 }
 
 function toggleTelem() {
@@ -1083,6 +1099,7 @@ function toggleTelem() {
   $('telemetry').classList.toggle('hidden');
   const shown = !$('telemetry').classList.contains('hidden');
   if ($('btn-telem')) $('btn-telem').classList.toggle('active', shown);
+  speak(shown ? '指标已开' : '指标已关');
 }
 
 function updateStickAvailability() {
@@ -1301,12 +1318,15 @@ $('btn-control').addEventListener('click', () => {
     radioHint();
     return;
   }
+  // 按钮上永远写着「控制权」，念它等于什么都没说。
   if (app.hasControl) {
     app.radioFallback = true;
     send({ t: 'yield' });
+    speak('已交还控制权');
   } else {
     app.radioFallback = false;
     send(claimMsg());
+    speak('申请控制权');
   }
 });
 
@@ -1369,6 +1389,7 @@ function fireRadioFromEl(el) {
   const st = nativeRadioStatus() || {};
   if (!st.ready) {
     showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
+    speak('2.4G 还没通');
   }
   applyRadioPose(name);
   markPending(el);
@@ -1384,7 +1405,12 @@ function guarded(fn) {
       return;
     }
     if (radioOnly() || !linkOpen()) { radioHint(); return; }
-    if (!app.hasControl) { showBanner('请先申请控制权'); return; }
+    if (!app.hasControl) {
+      showBanner('请先申请控制权');
+      // 盖掉刚才念的按钮名：一颗被拦下的按钮念出「起立」，比不念更容易误导。
+      speak('没有控制权');
+      return;
+    }
     fn(ev);
   };
 }
@@ -1405,6 +1431,7 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
     markPending(b);
     if (name === 'step' && app.lioAligning) {
       showBanner('LIO 还在对准，请站稳，不要走', 4000);
+      speak('LIO 对准中');
       return;
     }
     if (name === 'torque') {
@@ -1421,7 +1448,11 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
 });
 document.querySelectorAll('[data-gait]').forEach((b) => {
   b.addEventListener('click', guarded(() => {
-    if (app.gaitPending) return;
+    if (app.gaitPending) {
+      // 切换中按钮是禁用的，但实体手柄那条路进不到禁用，人也可能赶在禁用生效前点上。
+      speak('步态切换中');
+      return;
+    }
     // 点了楼梯里的哪一种，必选项就是它 —— 这条是「上楼用哪种」的设置，点了就算，
     // 与狗当前是不是真进了那个步态（楼梯要地形图配合，可能不成）分开记。
     markStairPick(b.dataset.gait);
@@ -1451,6 +1482,7 @@ document.querySelectorAll('[data-mode]').forEach((b) => {
       paintModes();
       closeBarPops();
       showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
+      speak('辅助模式未接入');
       return;
     }
     guarded(() => {
@@ -1459,13 +1491,16 @@ document.querySelectorAll('[data-mode]').forEach((b) => {
       markPending(b);
       paintModes();
       closeBarPops();
+      speak(mode === 'manual' ? '手动模式' : '导航模式');
     })(ev);
   });
 });
 
 $('btn-media').addEventListener('click', () => {
   $('hud-layout').classList.toggle('hidden');
-  $('btn-media').classList.toggle('active', !$('hud-layout').classList.contains('hidden'));
+  const shown = !$('hud-layout').classList.contains('hidden');
+  $('btn-media').classList.toggle('active', shown);
+  speak(shown ? '画面列表已开' : '画面列表已关');
 });
 
 $('btn-telem').addEventListener('click', () => {
@@ -1489,12 +1524,14 @@ $('chip-stick').addEventListener('click', () => {
       : '已申请控制权，推杆转云台');
   }
   paintStickChip();
+  speak(webStickTarget === 'ptz' ? '摇杆控布控球' : '摇杆控机器狗');
 });
 
 $('btn-sticks').addEventListener('click', () => {
   $('hud-sticks').classList.toggle('hidden');
   const shown = !$('hud-sticks').classList.contains('hidden');
   $('btn-sticks').classList.toggle('active', shown);
+  speak(shown ? '摇杆已开' : '摇杆已关');
   if (!shown) {
     app.left.x = 0;
     app.left.y = 0;
@@ -1561,9 +1598,18 @@ $('btn-swap').addEventListener('click', (e) => {
   if (isAppShell) return;
   viewLayout.mode = viewLayout.mode === '1x1' ? '2x2' : '1x1';
   applyLayout();
+  // 按钮上写的是「点了会变成什么」，与切换之后的状态正好相反，所以按结果念。
+  speak(viewLayout.mode === '2x2' ? '四宫格' : '单画面');
 });
 
 const VIEW_CYCLE = ['dog_cam', 'ptz_vis', 'ptz_ir', 'cloud'];
+
+// 画面的中文名只在顶栏那几颗切背景的按钮上写着一份，不再抄第二份 ——
+// 抄了就一定会有一处忘了改。
+function viewLabel(view) {
+  const el = document.querySelector('[data-view-pick="' + view + '"]');
+  return el ? el.textContent.trim() : view;
+}
 
 function syncViewPick() {
   const main = viewLayout.main;
@@ -1583,11 +1629,13 @@ function closeBarPops() {
   }
 }
 
+// 只有 G20 的换画面键会走到这里，那时人正看着狗，屏幕上换了哪一路全靠念。
 function cycleView() {
   const i = VIEW_CYCLE.indexOf(viewLayout.main);
   viewLayout.main = VIEW_CYCLE[(i < 0 ? 0 : i + 1) % VIEW_CYCLE.length];
   viewLayout.mode = '1x1';
   applyLayout();
+  speak(viewLabel(viewLayout.main));
 }
 
 $('btn-mode').addEventListener('click', (e) => {
@@ -1665,6 +1713,9 @@ document.querySelectorAll('.acc-btn').forEach((btn) => {
       pop.classList.remove('hidden');
       btn.classList.add('active');
     }
+    // 这三颗按钮上是当前档位（步态 · 常规），点它只是展开菜单，什么都没改。
+    // 照字念会让人以为刚把步态设成了常规。
+    speak((btn.getAttribute('aria-label') || '') + (open ? '收起' : '展开'));
   });
 });
 
@@ -1723,6 +1774,9 @@ function bootstrap() {
 
   connect();
 
+  // 语音要第一个起来：它挂的是 document 上的委托监听，比谁都先能用，
+  // 后面几个模块初始化时若报了错，至少按键还出声，现场能听出是哪一步没起来。
+  if (window.X30Voice) window.X30Voice.initVoice();
   if (window.X30Media) window.X30Media.initMedia(send, showBanner);
   if (window.X30DogCam) window.X30DogCam.init();
   if (window.X30Capture) window.X30Capture.initCapture(showBanner);

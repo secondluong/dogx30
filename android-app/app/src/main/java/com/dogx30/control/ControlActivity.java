@@ -33,6 +33,7 @@ public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
     private NativeVideo video;
+    private Tts tts;
     private LinearLayout overlay;
     private TextView overlayMsg;
     private EditText overlayHost;
@@ -66,6 +67,8 @@ public class ControlActivity extends AppCompatActivity {
         // 根布局是 #0D1117，与网页 --bg 同色，所以没画面时观感不变。
         web.setBackgroundColor(Color.TRANSPARENT);
         video = new NativeVideo(findViewById(R.id.native_video), this::pushVideoState);
+        // 引擎初始化要一秒左右，越早开始越好：开机后第一次按键往往就在这一秒里。
+        tts = new Tts(this);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -285,6 +288,29 @@ public class ControlActivity extends AppCompatActivity {
             RadioLink.get().adoptPosture(standing);
         }
 
+        /**
+         * 按键语音。WebView 里没有 speechSynthesis（见 Tts 的注释），网页那侧念的
+         * 每一句都从这里出去。返回 false 时网页会自己想办法。
+         */
+        @JavascriptInterface
+        public boolean speak(String text) {
+            Tts t = tts;
+            return t != null && t.speak(text);
+        }
+
+        @JavascriptInterface
+        public void ttsStop() {
+            Tts t = tts;
+            if (t != null) t.stop();
+        }
+
+        /** init / ok / none，见 Tts。设置面板照这个写「为什么不出声」。 */
+        @JavascriptInterface
+        public String ttsStatus() {
+            Tts t = tts;
+            return t == null ? Tts.NONE : t.status();
+        }
+
         /** 2.4G 下的机身相机。地址由网页给：现场换相机不该为此重新编包。 */
         @JavascriptInterface
         public void videoStart(String url) {
@@ -442,6 +468,8 @@ public class ControlActivity extends AppCompatActivity {
         web.onPause();
         // 解码器和 2.4G 带宽都不该在后台白占。
         if (video != null) video.pauseForBackground();
+        // 切后台了还在念上一句按键，念的又是已经不在操作的那台机器，只会吓人一跳。
+        if (tts != null) tts.stop();
     }
 
     @Override
@@ -455,6 +483,8 @@ public class ControlActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (video != null) video.stop();
+        // 不 shutdown 的话引擎连接会一直挂着，下次进来再 new 一个就是泄漏。
+        if (tts != null) tts.shutdown();
         if (web != null) {
             web.loadUrl("about:blank");
             web.destroy();

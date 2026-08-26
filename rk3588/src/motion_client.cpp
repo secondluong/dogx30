@@ -582,7 +582,13 @@ void MotionClient::ArmForWalk() {
       } else if (st == BasicState::kSitting && stood) {
         // RL 起立之后遥测仍报坐下（见 protocol.hpp）。这一档有歧义，只有我们
         // 自己发过起立才敢当站着看：否则就是对趴着的狗踩台阶，而起立必须人按。
-        step = false;
+        //
+        // 而且这一档的遥测永远不会改口，没法用它判断踩到第几级了，只能像没遥测
+        // 那样按 armed_ 数台阶。以前这里不数，于是每 500 ms 重发一条力控，主机
+        // 忽略、我们再发，操作员自己点的起步还会被这串重发顶掉（冒烟测试里表现
+        // 为「起步指令被正确解析」时好时坏）。
+        if (armed_ == Armed::kStepped) return;
+        step = armed_ == Armed::kTorqued;
       } else {
         return;  // 起立中 / 坐下中 / 急停，不插手
       }

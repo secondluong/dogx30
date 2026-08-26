@@ -29,7 +29,14 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825n';
+const WEB_BUILD = '0826c';
+
+// 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
+// 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
+// 同一拍里后念的覆盖先念的，所以不必先取消什么。
+function speak(text) {
+  if (window.X30Voice) window.X30Voice.say(text);
+}
 
 function nativeAppVersion() {
   try {
@@ -87,6 +94,10 @@ const app = {
   gaitPending: false,
   lioAligning: false,
   walkMode: null,         // 由遥测推断：'torque' | 'step'
+  torqueByUser: false,    // 人点的力控（要用摇杆调姿态），不是自动踩台阶踩上来的
+  stairPick: 'stair',     // 上下楼用哪种楼梯步态。必选一项，所以有默认值
+  poseHandoff: null,      // 待交接给网关的姿态（切档时记下，网关认了才算完）
+  poseHintWarned: false,  // 旧网关的提示只说一次，别在遥控时反复弹
   modePick: null,         // G20 三挡或点按：manual | assist | auto
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
@@ -117,8 +128,16 @@ function isStandingUi() {
 app.isStandingUi = isStandingUi;
 
 function controlChannel() {
+  // 操作员自己点了「力控」，摇杆就是调姿态（身高/横滚/俯仰/偏航）—— 这是力控站立
+  // 唯一的用处，得留着。没点过就一律走速度通道：推杆就是要走，力控/踏步那两级
+  // 台阶由网关（ArmForWalk）和 2.4G 那侧（RadioLink.armForWalk）自己踩掉。
+  // 以前这里一进力控站立就改发姿态，操作员推杆只在原地起伏，只能再点一次起步。
+  if (app.torqueByUser &&
+      (app.basicState === STATE_TORQUE_STANDING || app.walkMode === 'torque')) {
+    return 'pose';
+  }
   if (app.basicState === STATE_STEPPING) return 'vel';
-  if (app.basicState === STATE_TORQUE_STANDING) return 'pose';
+  if (app.basicState === STATE_TORQUE_STANDING) return 'vel';
   // RL 起立后遥测仍报 0，力控/起步常被主机忽略。原厂此时走速度通道。
   if (app.rlStanding &&
       app.basicState !== STATE_SIT_TO_STAND &&
@@ -126,7 +145,6 @@ function controlChannel() {
     return 'vel';
   }
   if (app.walkMode === 'step') return 'vel';
-  if (app.walkMode === 'torque') return 'pose';
   return null;
 }
 
@@ -284,6 +302,7 @@ function setGaitPending(pending) {
   document.querySelectorAll('[data-gait]').forEach((b) => {
     b.disabled = pending;
   });
+  paintPickers();
 }
 
 function onGaitResult(msg) {
@@ -294,6 +313,9 @@ function onGaitResult(msg) {
   }
   // 失败原因往往很长（要写清楚该去查什么），给足停留时间。
   showBanner(msg.msg || '步态切换失败', 9000);
+  // 点的时候已经念过档位名了。切不成必须再念一句盖掉它，否则人听到「爬坡」
+  // 就以为换上了 —— 而这几秒的延迟里他多半已经把视线移回狗身上。
+  speak('步态没切成');
 }
 
 function hasNativeRadio() {
@@ -314,15 +336,37 @@ function radioDirect() {
 
 function send(obj) {
   if (!obj) return;
+  if (obj.t === 'cmd') noteWalkIntent(obj.name);
   // 只有安装包真能直达时，2.4G 才停掉网关运动。否则切 2.4G 等于把 MESH 也掐死。
   if (radioDirect() && hasNativeRadio()) {
     const t = obj.t;
     if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'ptz') return;
     if (t === 'cmd' && obj.name !== 'estop') return;
   }
+  // 走网关发过起立/趴下之后，网关那份记忆就是它自己刚写的，比我们从 2.4G 带过来
+  // 的旧认知新。不在这里放手，操作员在 MESH 下按趴下之后界面还会显示站立。
+  if (obj.t === 'cmd' && POSE_CMDS[obj.name]) app.poseHandoff = null;
   if (app.ws && app.ws.readyState === WebSocket.OPEN) {
     app.ws.send(JSON.stringify(obj));
   }
+}
+
+// 会改变姿态的那几条。与 RadioLink.POSE_CMDS 同一份清单。
+const POSE_CMDS = {
+  stand: true, stand_up: true, sit: true, sit_down: true,
+  unload: true, estop: true,
+};
+
+// 点了这些之后，摇杆重新回到「推杆就是要走」。与 RadioLink 里清掉 torqueByUser 的
+// 时机一致：起步是明确要走，起立/趴下/卸力/急停把状态机打回去，力控意图不该留着。
+const WALK_INTENT_CMDS = ['step', 'stand', 'stand_up', 'sit', 'sit_down',
+                          'unload', 'estop'];
+
+// 推杆是要走还是要调姿态，只由这一处记。两条链路的指令都会流过 send 或
+// applyRadioPose，所以放那两处调，不必在每个按钮上各记一遍。
+function noteWalkIntent(name) {
+  if (name === 'torque') app.torqueByUser = true;
+  else if (WALK_INTENT_CMDS.indexOf(name) >= 0) app.torqueByUser = false;
 }
 
 function linkOpen() {
@@ -341,11 +385,13 @@ function radioHint(kind) {
     showBanner(kind === 'g20'
       ? '当前 2.4G：起立/趴下/行走直达运动主机'
       : '2.4G 姿态没发出去。请先切回 MESH 看画面，或重装 App');
+    speak('2.4G 没发出去');
     return;
   }
   showBanner(kind === 'g20'
     ? '网关未连。要备份请切到 2.4G'
     : '网关未连，屏幕按钮走不了。请先恢复 MESH');
+  speak('网关未连');
 }
 app.radioHint = radioHint;
 
@@ -395,6 +441,10 @@ function nativeRadioStanding() {
 function syncRadioStanding(st0) {
   if (!radioDirect()) return;
   const st = st0 || nativeRadioStatus() || {};
+  // 姿态有把握（收到遥测，或本端确实发过起立/趴下）时才让「趴着就收起菜单」生效。
+  // 没把握的时候狗可能明明站着，菜单一收就再也点不开 —— 那是当初 2.4G 不管趴没趴
+  // 都亮着菜单的原因。现在能读遥测了，就按知不知道来分。
+  document.documentElement.classList.toggle('pose-known', !!st.poseKnown);
   const basic = typeof st.basic === 'number' ? st.basic : -1;
   let changed = false;
   if (basic >= 0 && basic !== app.basicState) {
@@ -410,12 +460,14 @@ function syncRadioStanding(st0) {
     app.basicState = 0;
     changed = true;
   }
-  if (basic >= 0) {
-    const locked = basic === STATE_EMERGENCY;
-    if (locked !== app.emergencyLocked) {
-      app.emergencyLocked = locked;
-      changed = true;
-    }
+  // 急停常常是原生那侧收到实体红键按下的（RadioLink.handleButtons 直接发 estop，
+  // 网页并不经手）。没有遥测时 basic 一直是 -1，只有 RadioLink 自己记着这件事，
+  // 不读它的话左下角一直显示「起立」，操作员就找不到卸力 —— 而急停后不卸力
+  // 起立是发不动的。有遥测时以遥测为准：别人卸过力我们也得跟着改口。
+  const locked = basic >= 0 ? basic === STATE_EMERGENCY : !!st.emergency;
+  if (locked !== app.emergencyLocked) {
+    app.emergencyLocked = locked;
+    changed = true;
   }
   // statusJson 里已经带了姿态，别再多走一次桥：每次桥调用都是一趟同步 Binder，
   // 而这个回路按发轴频率在跑。
@@ -425,6 +477,7 @@ function syncRadioStanding(st0) {
     if (!up) app.walkMode = null;
     changed = true;
   }
+  if (st.poseKnown) notePose(isStandingUi());
   if (!changed) return;
   const wrap = $('stage-wrap');
   if (wrap) {
@@ -437,8 +490,41 @@ function syncRadioStanding(st0) {
   updateStickAvailability();
 }
 
+// 2.4G 下狗自己报的步态/身高。有它就不必靠「我这次点过什么」——
+// 刚开机或刚从 MESH 切过来时我们什么都没点过，菜单上却该显出真实档位。
+const RADIO_GAIT_KEYS = {
+  0: 'walk', 1: 'offroad', 2: 'slope', 3: 'run', 6: 'stair',
+  7: 'stairmulti', 8: 'stair45', 32: 'lwalk', 33: 'mountain', 34: 'silent',
+};
+
+let radioGaitSeen = '';
+let radioHeightSeen = null;
+
+function syncRadioPickers(st) {
+  // 这个回路按发轴频率在跑，读数没变就别重扫一遍 DOM。
+  const key = RADIO_GAIT_KEYS[st.gait] || '';
+  const height = typeof st.height === 'number' ? st.height : null;
+  if (key === radioGaitSeen && height === radioHeightSeen) return;
+  radioGaitSeen = key;
+  radioHeightSeen = height;
+  if (key) markGait(key);
+  if (height !== null) {
+    const crawl = height < 0;
+    document.querySelectorAll('[data-height]').forEach((b) => {
+      b.classList.toggle('active',
+        crawl ? b.dataset.height === 'crawl' : b.dataset.height === 'normal');
+    });
+  }
+  paintPickers();
+}
+
 // 2.4G 没有网关遥测时，本地先把起立后的步态/身高菜单亮出来。
 function applyRadioPose(name) {
+  noteWalkIntent(name);
+  // 点过之后先按点的显示，但下一帧要让遥测重新说一次：狗可能没接受这次切换
+  // （楼梯步态要地形图配合），那时候亮着新档位就是在骗人。
+  radioGaitSeen = '';
+  radioHeightSeen = null;
   const wrap = $('stage-wrap');
   if (name === 'estop') {
     app.emergencyLocked = true;
@@ -507,17 +593,66 @@ function applyRadioPose(name) {
         (name === 'height_low' && b.dataset.height === 'crawl') ||
         (name === 'height_normal' && b.dataset.height === 'normal'));
     });
+    paintPickers();
     return;
   }
   const gaits = ['walk', 'slope', 'offroad', 'lwalk', 'mountain', 'silent',
                  'stair', 'stairmulti', 'stair45'];
   if (gaits.indexOf(name) >= 0) {
     app.gait = name;
-    document.querySelectorAll('[data-gait]').forEach((b) => {
-      b.classList.toggle('active', b.dataset.gait === name);
-    });
+    markGait(name);
+    paintPickers();
   }
 }
+
+// 楼梯那三档长在「上下楼踏面」菜单里，是**必选一项**的设置：上楼时到底用哪种，
+// 任何时候都得有个答案，所以有默认值、也不会被遥测灭成一个都不亮。
+// active 表示「狗现在真在这个步态」，pick 表示「上楼就用这个」，两者分开记。
+const STAIR_GAITS = ['stair', 'stairmulti', 'stair45'];
+
+function markStairPick(key) {
+  if (STAIR_GAITS.indexOf(key) < 0) return;
+  app.stairPick = key;
+  document.querySelectorAll('#stair-row [data-gait]').forEach((b) => {
+    b.classList.toggle('pick', b.dataset.gait === key);
+  });
+  paintPickers();
+}
+
+// 标「狗现在在哪个步态」。遥测报的是楼梯步态时，必选项也跟着挪过去，
+// 免得菜单里一个亮 active、另一个亮 pick，看着像选了两个。
+function markGait(key) {
+  document.querySelectorAll('[data-gait]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.gait === key);
+  });
+  markStairPick(key);
+}
+
+// 把当前选的那一档写到收起的菜单标题上（步态 · 常规）。
+// 只读 DOM 里已经标好的 active，不另存一份状态：两条链路各有一处在标 active
+// （MESH 看遥测、2.4G 看发过什么），再存一份就一定会有一处忘了同步。
+const PICKERS = [
+  { val: 'acc-val-gait', sel: '[data-gait].active' },
+  { val: 'acc-val-stair', sel: '#stair-row [data-gait].pick' },
+  { val: 'acc-val-height', sel: '[data-height].active' },
+];
+
+function paintPickers() {
+  for (const p of PICKERS) {
+    const el = $(p.val);
+    if (!el) continue;
+    const on = document.querySelector(p.sel);
+    // 还不知道选的是哪一档（没遥测、这一档里也没点过）时退回菜单名，
+    // 不然按钮上是一片空白，操作员不知道那颗是干什么的。
+    // 有 data-short 的用短名：底栏就那么宽，长名字会把整排挤成两行。
+    let text = on ? (on.dataset.short || on.textContent) : (el.dataset.label || '');
+    // 步态切换要跨运动主机与感知主机按序设置，楼梯还要等狗停稳，可达数秒。
+    // 这期间显示旧值加省略号，比直接跳到新值老实。
+    if (p.val === 'acc-val-gait' && app.gaitPending) text += '…';
+    if (el.textContent !== text) el.textContent = text;
+  }
+}
+app.paintPickers = paintPickers;
 app.applyRadioPose = applyRadioPose;
 
 // 这个按钮同时是档位和链路灯：字是走哪条路，颜色是那条路通不通 ——
@@ -566,6 +701,7 @@ function applyRadioPath(announce) {
       }
       if (announce) {
         showBanner('已切到 2.4G。指令走 G20 数传，不经网关');
+        speak('已切 2.4G');
       }
       setTimeout(() => {
         if (!radioDirect() || !hasNativeRadio()) return;
@@ -578,6 +714,7 @@ function applyRadioPath(announce) {
       }, 2000);
     } else if (announce) {
       showBanner('这台 App 还没有 2.4G 直达，控制仍走 MESH');
+      speak('没有 2.4G 直达');
     }
     paintRadioLink();
     return;
@@ -589,6 +726,7 @@ function applyRadioPath(announce) {
     showBanner(linkOpen()
       ? '已切到 MESH，网关接管'
       : '已选 MESH，等网关连上后自动接管');
+    speak(linkOpen() ? '已切 MESH' : 'MESH 还没连上');
   }
   paintRadioBtn();
 }
@@ -596,9 +734,22 @@ function applyRadioPath(announce) {
 function adoptRadioPath(path, announce) {
   const next = path === 'radio' ? 'radio' : 'mesh';
   const changed = app.radioPath !== next;
+  // 切档前先把「狗现在站没站」记下来：两侧各自只知道自己发过什么，而狗 RL 起立后
+  // 遥测仍报坐下，谁都从遥测里认不出来。不交接的表现就是切一次档姿态变回趴着，
+  // 而且轴会被接手那侧吞掉 —— 狗明明站着却推不动。
+  const upright = changed ? handoffPose() : null;
   app.radioPath = next;
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
   if (changed) notifyNativeRadio();
+  if (changed && upright !== null) {
+    // 交给 2.4G 立刻生效；交给网关要等拿到控制权，所以先存着，claim 时带过去。
+    if (next === 'radio') pushPoseToRadio(upright);
+    else {
+      app.poseHandoff = upright;
+      poseHintAt = 0;
+      app.poseHintWarned = false;
+    }
+  }
   applyRadioPath(!!announce);
   renderControl();
   // 切档只改指令走哪条路，不主动断网关：两条链路同时在（平板既连着 WiFi 又开着
@@ -607,6 +758,37 @@ function adoptRadioPath(path, announce) {
   if (changed) connect();
   if (window.X30DogCam) window.X30DogCam.onRadioPath();
 }
+// 当前这一侧对姿态有把握吗？没把握就返回 null，宁可不交接 ——
+// 猜错的代价是按「趴下」时狗反而站起来，比多按一次起立严重得多。
+// 任一侧确定过姿态就记在这里。两侧各自只知道自己发过什么，而狗 RL 起立后遥测仍报
+// 坐下，所以谁都可能「此刻不知道」。App 是唯一一直在场的一方，切档交接的应该是这份
+// 记忆，而不是「当前这侧现在知不知道」—— 以前只交接当前侧的认知，切档那一刻正好
+// 没遥测（平板地址没登记、或网关够不着狗）就交接不出去，表现就是切档姿态有时对
+// 有时不对。App 重启后记忆为空，那才真的交不出去。
+let poseMem = null;
+
+function notePose(up) {
+  if (typeof up === 'boolean') poseMem = up;
+}
+
+function handoffPose() {
+  if (radioDirect()) {
+    // 2.4G 侧：原生发过起立/趴下，或者收到了狗的遥测，才算有依据。
+    const st = nativeRadioStatus() || {};
+    if (st.poseKnown) return isStandingUi();
+  } else if (linkOpen() && app.alive) {
+    // MESH 侧：网关连着且它够得着狗，那份记忆就是有依据的。
+    return isStandingUi();
+  }
+  return poseMem;
+}
+
+function pushPoseToRadio(upright) {
+  try {
+    window.X30Native.radioAdoptPose(!!upright);
+  } catch (e) { /* 网页没有原生桥 */ }
+}
+
 function setRadioPath(path) {
   adoptRadioPath(path, true);
 }
@@ -626,7 +808,44 @@ function requestControl() {
     showBanner('控制权被 #' + app.holder + ' 占用');
     return;
   }
-  send({ t: 'claim' });
+  send(claimMsg());
+}
+// 手柄那一层也从这里要权：它自己拼 claim 的话，切档带的姿态就丢了。
+app.claimMsg = claimMsg;
+
+// 刚从 2.4G 切过来时把姿态一并告知：那段起立/趴下没经过网关，它记的是旧的。
+// 这里**不清掉** app.poseHandoff：这条 claim 可能没被授权（权在别人手上），
+// 也可能网关是旧版根本不认这个键。清早了就等于交接丢了，而丢了的表现正是
+// 「切回 MESH 左下角又变成起立」。等网关的读数真对上了再算交接完（renderState）。
+function claimMsg() {
+  const claim = { t: 'claim' };
+  if (app.poseHandoff !== null) {
+    claim.standing = app.poseHandoff;
+    if (poseHintAt === 0) poseHintAt = Date.now();
+  }
+  return claim;
+}
+
+// 旧网关不认 claim 里的 standing，会静默忽略。只更新 App 没更新板子很容易发生，
+// 而那时候界面自己知道姿态、网关不知道：按钮按我们知道的显示（见 renderState），
+// 但轴仍会被网关吞掉，所以必须说清楚该更新哪一头。
+let poseHintAt = 0;
+
+function checkPoseHint(s) {
+  if (app.poseHandoff === null) return;
+  if (!!s.rl_standing === app.poseHandoff) {
+    // 网关改口了（新网关采纳，或操作员自己按了一次起立/趴下），交接到此结束。
+    app.poseHandoff = null;
+    poseHintAt = 0;
+    return;
+  }
+  // 没拿到控制权时网关本来就不会采纳，这不算旧版，也别急着报。
+  if (!app.hasControl) return;
+  if (poseHintAt === 0) poseHintAt = Date.now();
+  if (Date.now() - poseHintAt < 1500 || app.poseHintWarned) return;
+  app.poseHintWarned = true;
+  showBanner('板子上的网关还是旧版，切档时的姿态没同步过去。' +
+             '请更新网关，否则推杆会被网关吞掉（按钮显示的是实际姿态）', 8000);
 }
 
 // ---------------------------------------------------------------------------
@@ -704,8 +923,12 @@ function renderState(s) {
   if (s.alive) app.warnedRobotDown = false;
   // 2.4G 直达后运动遥测改回平板，网关会一直报坐下。不能再用它改口。
   if (!radioDirect()) {
+    checkPoseHint(s);
     app.basicState = s.basic_state;
-    app.rlStanding = !!s.rl_standing;
+    // 交接还没被网关认下来时宁可信自己：这份认知来自 2.4G 那段我们亲手发出去的
+    // 起立/趴下，而网关只是「没见过任何指令」。信网关的表现就是切回 MESH 后
+    // 左下角又变成「起立」，再按一次狗会先趴下去。
+    app.rlStanding = app.poseHandoff !== null ? app.poseHandoff : !!s.rl_standing;
     app.emergencyLocked = s.basic_state === STATE_EMERGENCY || !!s.emergency_source;
   } else if (s.alive && s.basic_state === STATE_EMERGENCY) {
     app.emergencyLocked = true;
@@ -782,21 +1005,23 @@ function renderState(s) {
     $('banner').classList.add('hidden');
   }
 
-  document.querySelectorAll('[data-gait]').forEach((b) => {
-    b.classList.toggle('active', s.gait_key === b.dataset.gait);
-  });
+  markGait(s.gait_key);
   document.querySelectorAll('[data-height]').forEach((b) => {
     b.classList.toggle('active',
       (s.height_gear === 0 && b.dataset.height === 'normal') ||
       (s.height_gear < 0 && b.dataset.height === 'crawl'));
   });
+  paintPickers();
 
   // 起立/坐下走的是运动主机自己的轨迹，过渡中再点一次会打断甚至反转。
   const standing = isStandingUi();
+  if (!radioDirect() && linkOpen() && app.alive) notePose(standing);
   const wrap = $('stage-wrap');
   wrap.classList.toggle('dog-up', standing);
   wrap.classList.toggle('dog-prone', !standing);
   paintStandButton();
+  // 趴下了力控意图就作废（可能是别人按的趴下），下次起立后推杆照旧自动起步。
+  if (!standing) app.torqueByUser = false;
   if (!radioDirect()) {
     if (s.basic_state === STATE_STEPPING) app.walkMode = 'step';
     else if (s.basic_state === STATE_TORQUE_STANDING) app.walkMode = 'torque';
@@ -858,12 +1083,15 @@ function paintModes() {
   });
 }
 
+// 开关类的按钮上只有名字，没有「现在是开还是关」。屏幕上看一眼就知道，
+// 但这两个在 App 上是 G20 的 R1/R2 按的，人根本没在看屏幕。
 function toggleGas() {
   const el = $('gas-panel');
   if (!el) return;
   el.classList.toggle('hidden');
   const shown = !el.classList.contains('hidden');
   if ($('btn-gas')) $('btn-gas').classList.toggle('active', shown);
+  speak(shown ? '气体已开' : '气体已关');
 }
 
 function toggleTelem() {
@@ -871,6 +1099,7 @@ function toggleTelem() {
   $('telemetry').classList.toggle('hidden');
   const shown = !$('telemetry').classList.contains('hidden');
   if ($('btn-telem')) $('btn-telem').classList.toggle('active', shown);
+  speak(shown ? '指标已开' : '指标已关');
 }
 
 function updateStickAvailability() {
@@ -1029,6 +1258,7 @@ setInterval(() => {
   const c = activeChannels();
   if (onRadio) {
     syncRadioStanding(radioSt);
+    syncRadioPickers(radioSt);
     sendRadioVel(c);
     return;
   }
@@ -1088,12 +1318,15 @@ $('btn-control').addEventListener('click', () => {
     radioHint();
     return;
   }
+  // 按钮上永远写着「控制权」，念它等于什么都没说。
   if (app.hasControl) {
     app.radioFallback = true;
     send({ t: 'yield' });
+    speak('已交还控制权');
   } else {
     app.radioFallback = false;
-    send({ t: 'claim' });
+    send(claimMsg());
+    speak('申请控制权');
   }
 });
 
@@ -1156,6 +1389,7 @@ function fireRadioFromEl(el) {
   const st = nativeRadioStatus() || {};
   if (!st.ready) {
     showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
+    speak('2.4G 还没通');
   }
   applyRadioPose(name);
   markPending(el);
@@ -1171,7 +1405,12 @@ function guarded(fn) {
       return;
     }
     if (radioOnly() || !linkOpen()) { radioHint(); return; }
-    if (!app.hasControl) { showBanner('请先申请控制权'); return; }
+    if (!app.hasControl) {
+      showBanner('请先申请控制权');
+      // 盖掉刚才念的按钮名：一颗被拦下的按钮念出「起立」，比不念更容易误导。
+      speak('没有控制权');
+      return;
+    }
     fn(ev);
   };
 }
@@ -1192,6 +1431,7 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
     markPending(b);
     if (name === 'step' && app.lioAligning) {
       showBanner('LIO 还在对准，请站稳，不要走', 4000);
+      speak('LIO 对准中');
       return;
     }
     if (name === 'torque') {
@@ -1208,7 +1448,14 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
 });
 document.querySelectorAll('[data-gait]').forEach((b) => {
   b.addEventListener('click', guarded(() => {
-    if (app.gaitPending) return;
+    if (app.gaitPending) {
+      // 切换中按钮是禁用的，但实体手柄那条路进不到禁用，人也可能赶在禁用生效前点上。
+      speak('步态切换中');
+      return;
+    }
+    // 点了楼梯里的哪一种，必选项就是它 —— 这条是「上楼用哪种」的设置，点了就算，
+    // 与狗当前是不是真进了那个步态（楼梯要地形图配合，可能不成）分开记。
+    markStairPick(b.dataset.gait);
     setGaitPending(true);
     send({
       t: 'cmd',
@@ -1235,6 +1482,7 @@ document.querySelectorAll('[data-mode]').forEach((b) => {
       paintModes();
       closeBarPops();
       showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
+      speak('辅助模式未接入');
       return;
     }
     guarded(() => {
@@ -1243,13 +1491,16 @@ document.querySelectorAll('[data-mode]').forEach((b) => {
       markPending(b);
       paintModes();
       closeBarPops();
+      speak(mode === 'manual' ? '手动模式' : '导航模式');
     })(ev);
   });
 });
 
 $('btn-media').addEventListener('click', () => {
   $('hud-layout').classList.toggle('hidden');
-  $('btn-media').classList.toggle('active', !$('hud-layout').classList.contains('hidden'));
+  const shown = !$('hud-layout').classList.contains('hidden');
+  $('btn-media').classList.toggle('active', shown);
+  speak(shown ? '画面列表已开' : '画面列表已关');
 });
 
 $('btn-telem').addEventListener('click', () => {
@@ -1273,12 +1524,14 @@ $('chip-stick').addEventListener('click', () => {
       : '已申请控制权，推杆转云台');
   }
   paintStickChip();
+  speak(webStickTarget === 'ptz' ? '摇杆控布控球' : '摇杆控机器狗');
 });
 
 $('btn-sticks').addEventListener('click', () => {
   $('hud-sticks').classList.toggle('hidden');
   const shown = !$('hud-sticks').classList.contains('hidden');
   $('btn-sticks').classList.toggle('active', shown);
+  speak(shown ? '摇杆已开' : '摇杆已关');
   if (!shown) {
     app.left.x = 0;
     app.left.y = 0;
@@ -1345,9 +1598,18 @@ $('btn-swap').addEventListener('click', (e) => {
   if (isAppShell) return;
   viewLayout.mode = viewLayout.mode === '1x1' ? '2x2' : '1x1';
   applyLayout();
+  // 按钮上写的是「点了会变成什么」，与切换之后的状态正好相反，所以按结果念。
+  speak(viewLayout.mode === '2x2' ? '四宫格' : '单画面');
 });
 
 const VIEW_CYCLE = ['dog_cam', 'ptz_vis', 'ptz_ir', 'cloud'];
+
+// 画面的中文名只在顶栏那几颗切背景的按钮上写着一份，不再抄第二份 ——
+// 抄了就一定会有一处忘了改。
+function viewLabel(view) {
+  const el = document.querySelector('[data-view-pick="' + view + '"]');
+  return el ? el.textContent.trim() : view;
+}
 
 function syncViewPick() {
   const main = viewLayout.main;
@@ -1367,11 +1629,13 @@ function closeBarPops() {
   }
 }
 
+// 只有 G20 的换画面键会走到这里，那时人正看着狗，屏幕上换了哪一路全靠念。
 function cycleView() {
   const i = VIEW_CYCLE.indexOf(viewLayout.main);
   viewLayout.main = VIEW_CYCLE[(i < 0 ? 0 : i + 1) % VIEW_CYCLE.length];
   viewLayout.mode = '1x1';
   applyLayout();
+  speak(viewLabel(viewLayout.main));
 }
 
 $('btn-mode').addEventListener('click', (e) => {
@@ -1449,6 +1713,9 @@ document.querySelectorAll('.acc-btn').forEach((btn) => {
       pop.classList.remove('hidden');
       btn.classList.add('active');
     }
+    // 这三颗按钮上是当前档位（步态 · 常规），点它只是展开菜单，什么都没改。
+    // 照字念会让人以为刚把步态设成了常规。
+    speak((btn.getAttribute('aria-label') || '') + (open ? '收起' : '展开'));
   });
 });
 
@@ -1464,6 +1731,7 @@ document.querySelectorAll('[data-stair]').forEach((b) => {
     document.querySelectorAll('[data-stair]').forEach((x) => {
       x.classList.toggle('active', x.dataset.stair === b.dataset.stair);
     });
+    paintPickers();
   });
 });
 
@@ -1501,9 +1769,14 @@ function bootstrap() {
   syncNativeRadioPath();
   applyRadioPath(false);
   renderControl();
+  // 踏面默认是实心（HTML 里就带 active），开机就该显出来。
+  paintPickers();
 
   connect();
 
+  // 语音要第一个起来：它挂的是 document 上的委托监听，比谁都先能用，
+  // 后面几个模块初始化时若报了错，至少按键还出声，现场能听出是哪一步没起来。
+  if (window.X30Voice) window.X30Voice.initVoice();
   if (window.X30Media) window.X30Media.initMedia(send, showBanner);
   if (window.X30DogCam) window.X30DogCam.init();
   if (window.X30Capture) window.X30Capture.initCapture(showBanner);

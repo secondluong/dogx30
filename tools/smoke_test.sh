@@ -20,12 +20,20 @@ if [[ -z "$GATEWAY" || ! -x "$GATEWAY" ]]; then
   exit 1
 fi
 
+# 端口一律现挑，别用默认的 43893/43897：板子上装好的那份服务占着 43897，
+# 撞上之后遥测会被分走一半，急停和看门狗这些断言随机红。原因见 ports.sh。
+# shellcheck source=tools/ports.sh
+source "$(dirname "$0")/ports.sh"
+ROBOT_PORT=$(free_port udp)
+LOCAL_PORT=$(free_port udp)
+TERRAIN_PORT=$(free_port udp)
+
 SIM_LOG=$(mktemp)
 GW_LOG=$(mktemp)
 trap 'rm -f "$SIM_LOG" "$GW_LOG"' EXIT
 
-python3 -u tools/x30_sim.py --listen-port 43893 --target 127.0.0.1:43897 \
-    > "$SIM_LOG" 2>&1 &
+python3 -u tools/x30_sim.py --listen-port "$ROBOT_PORT" --terrain-port "$TERRAIN_PORT" \
+    --target "127.0.0.1:$LOCAL_PORT" > "$SIM_LOG" 2>&1 &
 SIM_PID=$!
 trap 'kill $SIM_PID 2>/dev/null; rm -f "$SIM_LOG" "$GW_LOG"' EXIT
 
@@ -70,7 +78,8 @@ fi
   echo "s"
   echo "unload";   sleep 1
   echo "q"
-} | "$GATEWAY" --robot-ip 127.0.0.1 --local-port 43897 --interactive > "$GW_LOG" 2>&1
+} | "$GATEWAY" --robot-ip 127.0.0.1 --robot-port "$ROBOT_PORT" \
+      --local-port "$LOCAL_PORT" --interactive > "$GW_LOG" 2>&1
 
 kill $SIM_PID 2>/dev/null
 wait $SIM_PID 2>/dev/null
@@ -149,8 +158,8 @@ echo "================ RL 遥测撒谎后仍能趴下 ===================="
 # 实机 RL 起立后 basic_state 仍报 0。若网关信遥测，第二次「坐/站」会再发起立。
 LIE_SIM=$(mktemp)
 LIE_GW=$(mktemp)
-python3 -u tools/x30_sim.py --listen-port 43893 --target 127.0.0.1:43897 \
-    --lie-rl-state > "$LIE_SIM" 2>&1 &
+python3 -u tools/x30_sim.py --listen-port "$ROBOT_PORT" --terrain-port "$TERRAIN_PORT" \
+    --target "127.0.0.1:$LOCAL_PORT" --lie-rl-state > "$LIE_SIM" 2>&1 &
 LIE_PID=$!
 for _ in $(seq 100); do
   grep -q "仿真器已启动" "$LIE_SIM" 2>/dev/null && break
@@ -162,7 +171,8 @@ done
   echo "stand"; sleep 3
   echo "stand"; sleep 3
   echo "q"
-} | "$GATEWAY" --robot-ip 127.0.0.1 --local-port 43897 --interactive > "$LIE_GW" 2>&1
+} | "$GATEWAY" --robot-ip 127.0.0.1 --robot-port "$ROBOT_PORT" \
+      --local-port "$LOCAL_PORT" --interactive > "$LIE_GW" 2>&1
 kill $LIE_PID 2>/dev/null
 wait $LIE_PID 2>/dev/null
 if grep -q "RL趴下中" "$LIE_SIM"; then

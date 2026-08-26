@@ -22,7 +22,14 @@ fi
 # shellcheck source=deploy/config_util.sh
 source "$ROOT/deploy/config_util.sh"
 
-PORT=8137           # 躲开 8080，避免和已安装的服务撞
+# 端口现挑，别用默认值：装好的那份服务占着 8080 和 43897，另一轮测试在跑时
+# 还会再撞一次。原因见 ports.sh。
+# shellcheck source=tools/ports.sh
+source "$ROOT/tools/ports.sh"
+PORT=$(free_port tcp)
+SIM_PORT=$(free_port udp)
+TELEM_PORT=$(free_port udp)
+TERRAIN_PORT=$(free_port udp)
 TMP=$(mktemp -d)
 CONF="$TMP/conf/gateway.conf"
 TOKEN_FILE="$TMP/conf/admin.token"
@@ -58,6 +65,9 @@ wait_ready() {
 conf_defaults
 ROBOT_IP="127.0.0.1"
 PERCEPTION_IP="127.0.0.2"
+ROBOT_PORT="$SIM_PORT"
+LOCAL_PORT="$TELEM_PORT"
+PERCEPTION_PORT="$TERRAIN_PORT"
 HTTP_PORT="$PORT"
 BIND_ADDR="127.0.0.1"
 write_gateway_conf "$CONF"
@@ -65,7 +75,9 @@ TOKEN="54longqr"
 
 start_gateway() {   # start_gateway <日志> [额外环境…]
   local log=$1
-  python3 -u "$ROOT/tools/x30_sim.py" > "$TMP/sim.log" 2>&1 &
+  python3 -u "$ROOT/tools/x30_sim.py" --listen-port "$SIM_PORT" \
+      --terrain-port "$TERRAIN_PORT" --target "127.0.0.1:$TELEM_PORT" \
+      > "$TMP/sim.log" 2>&1 &
   SIM_PID=$!
   wait_ready "$TMP/sim.log" "仿真器已启动" "仿真器" || return 1
 
@@ -90,7 +102,7 @@ pass "网关按配置文件启动"
 
 # 配置文件里写的地址必须真的被用上。只验"进程活着"是不够的 ——
 # 参数没接上时它照样活着，只是连错了地方。
-if grep -q "已连接 127.0.0.1:43893" "$TMP/gw.log"; then
+if grep -q "已连接 127.0.0.1:$SIM_PORT" "$TMP/gw.log"; then
   pass "运动主机地址取自配置文件"
 else
   fail "运动主机地址没有取自配置文件" "$(head -3 "$TMP/gw.log")"
@@ -123,7 +135,7 @@ echo
 echo "== 改完之后必须还能起来 =="
 if start_gateway "$TMP/gw2.log"; then
   pass "带着改后的配置重新启动成功"
-  if grep -q "已连接 192.168.1.203:43893" "$TMP/gw2.log"; then
+  if grep -q "已连接 192.168.1.203:$SIM_PORT" "$TMP/gw2.log"; then
     pass "重启后用的是新地址"
   else
     fail "重启后没用新地址" "$(head -3 "$TMP/gw2.log")"
@@ -142,6 +154,9 @@ echo "== 密码不对时一律拒绝 =="
 conf_defaults
 ROBOT_IP="127.0.0.1"
 PERCEPTION_IP="127.0.0.2"
+ROBOT_PORT="$SIM_PORT"
+LOCAL_PORT="$TELEM_PORT"
+PERCEPTION_PORT="$TERRAIN_PORT"
 HTTP_PORT="$PORT"
 BIND_ADDR="127.0.0.1"
 write_gateway_conf "$CONF"
@@ -186,7 +201,9 @@ echo "== systemd 托管时才自己退出重启 =="
 # 用 INVOCATION_ID 判断，那是 systemd 给每个服务实例设的环境变量。
 TOKEN="54longqr"
 
-python3 -u "$ROOT/tools/x30_sim.py" > "$TMP/sim.log" 2>&1 &
+python3 -u "$ROOT/tools/x30_sim.py" --listen-port "$SIM_PORT" \
+    --terrain-port "$TERRAIN_PORT" --target "127.0.0.1:$TELEM_PORT" \
+    > "$TMP/sim.log" 2>&1 &
 SIM_PID=$!
 wait_ready "$TMP/sim.log" "仿真器已启动" "仿真器" || FAILED=1
 

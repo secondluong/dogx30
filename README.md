@@ -25,6 +25,13 @@ RK3588 开发板挂载在机器狗背上，作为载荷计算机接入机身内�
 仍待现场验证的只剩一件事：**那台地面站的摇杆到底能不能被 Android 读到**
 （有些是直接走 S.BUS 到电台的）。
 
+**按键会念出来**：现场人盯的是狗不是平板，按下去到底进没进指令，光靠屏幕上那条
+横幅说不清楚 —— 而实体键那条路上连横幅都没人看。所以每一次按键都念一声，念的是
+**做成了什么**：被拦下（没控制权、网关没连、步态切不动）就改口念拦下的原因，
+开关类按钮念切完之后的状态。安卓 WebView 里没有 speechSynthesis，App 壳走原生
+TextToSpeech（`Tts.java`），网页那侧才用浏览器合成。按住对讲期间自动闭嘴，
+不然喇叭念的话会被自己的麦克风采回去。开关在设置面板里，默认开。
+
 **激光点云已打通**：网关直接说 ROS 的线上协议订阅 `/lidar_points`，
 体素降采样加坐标量化后以二进制帧下行，遥控端 WebGL 渲染。
 实测单帧 88 KB、2 Hz，约 1.44 Mbps，落在 MESH 预算内。
@@ -50,6 +57,7 @@ RK3588 开发板挂载在机器狗背上，作为载荷计算机接入机身内�
 | `web/media.js` | 视频与对讲：解码能力探测、WHEP 拉流、按住说话 |
 | `web/cloud.js` | 点云渲染：WebGL 直接吃 int16，不引 three.js |
 | `web/gamepad.js` | 物理手柄输入：映射、死区、曲线、上升沿、掉线归零 |
+| `web/voice.js` | **按键语音播报**：念的是这一下做成了什么，被拦下就改口 |
 | `web/settings.js` | **设置面板**：在线改主机地址、监听地址、点云参数 |
 | `deploy/` | systemd 服务与一键安装脚本 |
 | `deploy/config_util.sh` | `gateway.conf` 的读写，安装脚本与体检脚本共用一份 |
@@ -70,6 +78,7 @@ RK3588 开发板挂载在机器狗背上，作为载荷计算机接入机身内�
 | `tools/cloud_probe.py` | 点云探针：解回坐标验格式、精度、抽帧、退订 |
 | `tools/rtsp_probe.py` | 探 RTSP 流的编码/分辨率/音轨，用来填 `media.json`，不依赖 ffmpeg |
 | `tools/gamepad_test.js` | 手柄输入层测试：死区、符号约定、上升沿、掉线归零 |
+| `tools/voice_test.js` | 按键语音测试：改口覆盖、挑哪个引擎、对讲期间闭嘴 |
 | `tools/shutdown_test.sh` | 关停耗时测试，对端不可达时也要能干净退出 |
 | `tools/install_dryrun.sh` | 空跑安装脚本的参数替换 |
 | `tools/checkup_test.sh` | 验体检脚本能把安装脚本写下的参数原样读回来 |
@@ -78,6 +87,7 @@ RK3588 开发板挂载在机器狗背上，作为载荷计算机接入机身内�
 | `tools/fix_eol.py` | 把 CRLF 换成 LF，Windows 上编辑后跑一下 |
 | `tools/bind_check.sh` | 验证 `--bind` 确实把服务限制在指定网卡上 |
 | `tools/check_scripts.sh` | shell 脚本静态检查 |
+| `tools/ports.sh` | 给测试现挑空闲端口，别跟板子上装好的那份服务抢 |
 | `docs/system-architecture.md` | **系统架构、网络拓扑、当前进度** |
 | `docs/media-architecture.md` | 视频与对讲：选型依据、带宽策略、待确认项 |
 | `docs/pointcloud-architecture.md` | 点云：为什么不装 ROS、带宽怎么砍、踩过的坑 |

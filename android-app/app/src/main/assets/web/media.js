@@ -376,6 +376,13 @@ function talkStop() {
 
 let talkBanner = null;
 
+// 按住说话期间语音播报要闭嘴：平板喇叭念出来的话会被自己的麦克风采回去，
+// 传到狗那侧就是回声。判据用 talkStream 而不是 talkPc —— 麦克风一开就算，
+// 那时 WHIP 还没协商完，而回声正是从麦克风那一刻起就有了。
+function talking() {
+  return !!media.talkStream;
+}
+
 function setTalk(on, showBanner) {
   const talkBtns = document.querySelectorAll('.btn-talk');
   talkBtns.forEach((b) => b.classList.toggle('active', on));
@@ -429,5 +436,5 @@ function resync() {
 }
 
 window.X30Media = {
-  initMedia, onMediaPlan, stopAll, onLayout, setTalk, onLinkOpen, resync,
+  initMedia, onMediaPlan, stopAll, onLayout, setTalk, onLinkOpen, resync, talking,
 };

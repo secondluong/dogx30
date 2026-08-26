@@ -1025,6 +1025,17 @@ html.shell-app .hud-info {
   backdrop-filter: blur(6px);
   white-space: nowrap;
 }
+/* 力控/起步：起立上方竖排，跟起立一样的底色。 */
+.hud-stand .hud-walk {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hud-stand .hud-walk .btn {
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
 .hud-stand-btn.need {
   background: #c9a227;
   border-color: #c9a227;
@@ -1114,7 +1125,9 @@ html.shell-app .hud-info {
 /* 2.4G 那侧只在姿态有把握时才跟着收（html.pose-known 由遥测或本端发过的起立/趴下
    置上）。收不到遥测又谁都没按过时，狗可能明明站着，菜单一收就再也点不开。 */
 html:not(.radio-24) .dog-prone .hud-menus,
-html.radio-24.pose-known .dog-prone .hud-menus { display: none !important; }
+html:not(.radio-24) .dog-prone .hud-stand .hud-walk,
+html.radio-24.pose-known .dog-prone .hud-menus,
+html.radio-24.pose-known .dog-prone .hud-stand .hud-walk { display: none !important; }
 
 .hud-sticks { position: absolute; inset: 0; z-index: 8; pointer-events: none; }
 .hud-sticks .stick-wrap { position: absolute; bottom: 88px; pointer-events: auto; }

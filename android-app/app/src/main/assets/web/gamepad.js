@@ -191,7 +191,8 @@
     return { update: update, reset: reset, tuning: tuning, map: map };
   }
 
-  // 现场量过的 G20 通道。数组下标 = CH号 - 1。中位 1500，按键按下约 1050。
+  // 现场量过的 G20 通道。数组下标 = CH号 - 1。中位 1500，按键按下约 1050，
+  // 但 B1/B2（CH9、CH10）反过来，按下是 1950 —— 所以判定要按中位分两边。
   // 右摇杆 CH1/CH2 只用来转向：CH2 参与死区，不进俯仰，避免上下推变成抬头。
   // PWM 增大按「右 / 前」理解；通道约定左移、左转为正，所以 lat/turn 取反。
   function pwmAxis(v, invert) {
@@ -223,6 +224,10 @@
   var G20_BTN = {
     stand_up: { ch: 10, press: 1050 },
     sit_down: { ch: 6, press: 1050 },
+    // B1 / B2（现场量的是 CH9、CH10，下标 = CH号-1）。这两颗按下是 1950 而不是
+    // 1050，pwmPressed 按中位分方向，两种都认。
+    torque: { ch: 8, press: 1950 },
+    step: { ch: 9, press: 1950 },
     shot: { ch: 7, press: 1050 },
     talk: { ch: 5, press: 1050 },
     view_next: { ch: 11, press: 1050 },
@@ -330,6 +335,19 @@
   // --- 浏览器侧 -------------------------------------------------------------
 
   if (typeof document === 'undefined') return api;
+
+  // 实体键上没有字，按的时候人也不在看屏幕 —— 这条路上语音是唯一的回执，
+  // 所以每一条派发出去的指令都念一声，被拦下的也念（见 app.radioHint）。
+  function say(text) {
+    if (window.X30Voice) window.X30Voice.say(text);
+  }
+
+  // 步态的中文名只在屏幕按钮上写着一份，肩键循环时照着念，不再抄一份对照表。
+  function gaitName(key) {
+    var el = document.querySelector('[data-gait="' + key + '"]');
+    if (!el) return key;
+    return el.getAttribute('data-say') || el.textContent.trim();
+  }
 
   var state = {
     core: null,
@@ -470,6 +488,7 @@
       if (key === 'estop') {
         if (!radioPose('estop')) send({ t: 'cmd', name: 'estop' });
         showBanner('已发送软急停（手柄）');
+        say('急停');
         return;
       }
       if (key === 'shot') {
@@ -503,29 +522,59 @@
           else showBanner('网关未连，请用 G20 摇杆走已对频的 2.4G，不必点控制权');
           return;
         }
-        if (!app.hasControl) send({ t: 'claim' });
+        // 走 app.claimMsg：刚从 2.4G 切过来时这条 claim 要把姿态一并带给网关，
+        // 自己拼一个空 claim 会把交接吞掉（表现是切回 MESH 又显示「起立」）。
+        if (!app.hasControl) {
+          send(app.claimMsg ? app.claimMsg() : { t: 'claim' });
+          say('申请控制权');
+        }
         return;
       }
       if (key === 'yield') {
-        if (app.hasControl) send({ t: 'yield' });
+        if (app.hasControl) {
+          send({ t: 'yield' });
+          say('已交还控制权');
+        }
         return;
       }
       if (app.radioOnly && app.radioOnly()) {
         if (key === 'stand_up' || key === 'sit_down' || key === 'stand') {
           if (app.emergencyLocked) {
-            if (radioPose('unload')) return;
+            if (radioPose('unload')) {
+              say('卸力');
+              return;
+            }
           } else if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) {
+            // 什么都没发出去。不念的话人听不出是「按到了但没必要」还是「没按上」。
+            say('已经站着');
             return;
           } else if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) {
+            say('已经趴着');
             return;
-          } else if (radioPose(key === 'stand' ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up') : key)) {
-            return;
+          } else {
+            var want = key === 'stand'
+              ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up')
+              : key;
+            if (radioPose(want)) {
+              say(want === 'sit_down' ? '趴下' : '起立');
+              return;
+            }
           }
         } else if (key === 'torque' || key === 'step') {
-          if (radioPose(key)) return;
+          if (radioPose(key)) {
+            say(key === 'torque' ? '力控' : '起步');
+            return;
+          }
         } else if (key === 'gait_up' || key === 'gait_dn') {
-          if (app.gaitPending) return;
-          if (radioPose(nextGait(app.gait, key === 'gait_up' ? 1 : -1))) return;
+          if (app.gaitPending) {
+            say('步态切换中');
+            return;
+          }
+          var next = nextGait(app.gait, key === 'gait_up' ? 1 : -1);
+          if (radioPose(next)) {
+            say(gaitName(next));
+            return;
+          }
         }
         if (app.radioHint) app.radioHint('g20');
         else showBanner('当前 2.4G：按键走无线电，不经网关');
@@ -538,31 +587,46 @@
           return;
         }
         showBanner('请先申请控制权');
+        say('没有控制权');
         return;
       }
       if (key === 'stand_up' || key === 'sit_down' || key === 'stand') {
         // 急停自锁时原厂 ⑤/㉑ 是卸力，不是 RL 起/趴。
         if (app.emergencyLocked) {
           send({ t: 'cmd', name: 'unload' });
+          say('卸力');
           return;
         }
-        if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) return;
-        if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) return;
+        if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) {
+          say('已经站着');
+          return;
+        }
+        if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) {
+          say('已经趴着');
+          return;
+        }
         send({ t: 'cmd', name: 'stand' });
+        say(app.isStandingUi && app.isStandingUi() ? '趴下' : '起立');
         return;
       }
       if (key === 'torque' || key === 'step') {
         if (key === 'step' && app.lioAligning) {
           showBanner('LIO 还在对准，请站稳，不要走', 4000);
+          say('LIO 对准中');
           return;
         }
         send({ t: 'cmd', name: key });
+        say(key === 'torque' ? '力控' : '起步');
         return;
       }
       if (key === 'gait_up' || key === 'gait_dn') {
-        if (app.gaitPending) return;
+        if (app.gaitPending) {
+          say('步态切换中');
+          return;
+        }
         var target = nextGait(app.gait, key === 'gait_up' ? 1 : -1);
         send({ t: 'cmd', name: 'gait', value: target });
+        say(gaitName(target));
       }
     }
 
@@ -611,6 +675,7 @@
             if (state.stickTarget !== tog) {
               state.stickTarget = tog;
               showBanner(tog === 'ptz' ? '摇杆：布控球' : '摇杆：机器狗');
+              say(tog === 'ptz' ? '摇杆控布控球' : '摇杆控机器狗');
             }
           }
         } else if (!tog) {

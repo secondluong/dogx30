@@ -9,6 +9,14 @@
     <!-- 后续接入视频时云台/相机可能需要，先声明为可选，避免无摄像头设备装不上。 -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- 安卓 11 起有包可见性限制：不声明这一条就看不见系统的语音引擎，
+         TextToSpeech 初始化直接失败，而且没有任何报错 —— 表现是按键一句都不念。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <application
         android:name=".X30App"
         android:allowBackup="false"

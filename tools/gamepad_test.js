@@ -43,6 +43,10 @@ check('2000 为满量程', near(G.pwmAxis(2000, false), 1));
 check('取反后左转为正', near(G.pwmAxis(1000, true), 1));
 check('1050 算按下', G.pwmPressed(1050, 1050));
 check('1500 不算按下', !G.pwmPressed(1500, 1050));
+// B1/B2 按下是往上打到 1950，和 L1/L2 那几颗方向相反，判定得按中位分两边。
+check('高有效的键 1950 算按下、1050 不算',
+      G.pwmPressed(1950, 1950) && !G.pwmPressed(1500, 1950) &&
+      !G.pwmPressed(1050, 1950));
 
 var rest = [1500, 1500, 1500, 1500];
 var idle = G.g20Channels(rest, 0.12, 0.4);
@@ -469,12 +473,29 @@ var storage = {};
 var pads = [];
 var docHandlers = {};
 
+// 步态的中文名不在这个模块里，是从屏幕按钮上读的（gaitName），
+// 所以假 DOM 也得能回答 [data-gait=...] 这一问。
+var GAIT_LABEL = {
+  walk: '常规', slope: '爬坡', offroad: '越野',
+  lwalk: '低姿', mountain: '山地', silent: '静音',
+};
+
 global.document = {
   getElementById: function (id) { return elements[id] || null; },
+  querySelector: function (sel) {
+    var m = /\[data-gait="(\w+)"\]/.exec(String(sel));
+    if (!m || !GAIT_LABEL[m[1]]) return null;
+    return {
+      getAttribute: function () { return null; },
+      textContent: GAIT_LABEL[m[1]],
+    };
+  },
   addEventListener: function (t, fn) { docHandlers[t] = fn; },
   hidden: false,
 };
 global.navigator = { getGamepads: function () { return pads; } };
+// 实体键按下去屏幕上没有任何变化，语音是这条路上唯一的回执，所以一并测。
+var spoken = [];
 global.window = {
   localStorage: {
     getItem: function (k) {
@@ -485,6 +506,7 @@ global.window = {
   },
   requestAnimationFrame: function (fn) { rafQueue.push(fn); },
   prompt: function () { return global.__promptReply; },
+  X30Voice: { say: function (t) { spoken.push(t); } },
 };
 global.self = global.window;
 
@@ -552,13 +574,16 @@ check('前推后通道有值且 engaged', ch.engaged === true && ch.fwd > 0.9,
       JSON.stringify(ch));
 
 // 没有控制权时按功能键只提示，不发指令
-sent = []; banners = [];
+sent = []; banners = []; spoken = [];
 pads = [makePad([0, 0, 0, 0], [0])];
 pump(1);
 check('无控制权时按键不下发指令', sent.length === 0, JSON.stringify(sent));
 check('无控制权时给出提示',
       banners.length === 1 && banners[0].indexOf('控制权') >= 0,
       JSON.stringify(banners));
+check('无控制权时也念一声，不然实体键按下去毫无回音',
+      spoken.length === 1 && spoken[0] === '没有控制权',
+      JSON.stringify(spoken));
 
 appState.radioFallback = true;
 sent = []; banners = [];
@@ -588,7 +613,7 @@ appState.radioFallback = false;
 
 // 拿到控制权后同一个键要能下发
 appState.hasControl = true;
-sent = [];
+sent = []; spoken = [];
 pads = [makePad([0, 0, 0, 0], [])];
 pump(1);
 pads = [makePad([0, 0, 0, 0], [0])];
@@ -596,9 +621,12 @@ pump(1);
 check('有控制权时按键下发 stand',
       sent.length === 1 && sent[0].t === 'cmd' && sent[0].name === 'stand',
       JSON.stringify(sent));
+// 这个键在狗身上是翻转的，念的必须是这一下的方向，不是键的名字。
+check('坐站键念的是这一下要做的动作',
+      spoken.length === 1 && spoken[0] === '起立', JSON.stringify(spoken));
 
 // 肩键循环步态
-sent = [];
+sent = []; spoken = [];
 pads = [makePad([0, 0, 0, 0], [])];
 pump(1);
 pads = [makePad([0, 0, 0, 0], [5])];
@@ -606,15 +634,20 @@ pump(1);
 check('肩键切到下一个步态',
       sent.length === 1 && sent[0].name === 'gait' && sent[0].value === 'slope',
       JSON.stringify(sent));
+// 肩键循环时屏幕上只是某颗小按钮换了高亮，人根本看不见换到了哪一档。
+check('肩键念出换到了哪一档',
+      spoken.length === 1 && spoken[0] === '爬坡', JSON.stringify(spoken));
 
 // 步态切换进行中时忽略，避免连点刷出一堆报错
 appState.gaitPending = true;
-sent = [];
+sent = []; spoken = [];
 pads = [makePad([0, 0, 0, 0], [])];
 pump(1);
 pads = [makePad([0, 0, 0, 0], [5])];
 pump(1);
 check('切换进行中忽略肩键', sent.length === 0, JSON.stringify(sent));
+check('忽略时说明是在切换中，不是没按上',
+      spoken.length === 1 && spoken[0] === '步态切换中', JSON.stringify(spoken));
 appState.gaitPending = false;
 
 // 掉线必须立刻归零，否则狗会带着最后的速度一直走到看门狗超时

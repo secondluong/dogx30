@@ -16,6 +16,19 @@ if [[ ! -x "$GATEWAY" ]]; then
   exit 1
 fi
 
+# 端口一律现挑，别用默认的 8080/43893/43897：板子上装好的那份服务占着 8080 和
+# 43897，撞上去要么网关起不来、要么遥测被分走一半。原因见 ports.sh。
+# shellcheck source=tools/ports.sh
+source "$ROOT/tools/ports.sh"
+PORT=$(free_port tcp)
+ROBOT_PORT=$(free_port udp)
+LOCAL_PORT=$(free_port udp)
+TERRAIN_PORT=$(free_port udp)
+ROS_PORT=$(free_port tcp)
+# 这两个是「没人应答」用的，挑完就不往上起东西了。
+DEAD_ROS_PORT=$(free_port tcp)
+DEAD_TERRAIN_PORT=$(free_port udp)
+
 SIM_PID=""
 GW_PID=""
 ROS_PID=""
@@ -61,7 +74,9 @@ run_scenario() {
 
   echo
   echo "== 场景：$title =="
-  python3 -u "$ROOT/tools/x30_sim.py" > "/tmp/x30_sim_$tag.log" 2>&1 &
+  python3 -u "$ROOT/tools/x30_sim.py" --listen-port "$ROBOT_PORT" \
+      --terrain-port "$TERRAIN_PORT" --target "127.0.0.1:$LOCAL_PORT" \
+      > "/tmp/x30_sim_$tag.log" 2>&1 &
   SIM_PID=$!
   if ! wait_ready "/tmp/x30_sim_$tag.log" "仿真器已启动" "仿真器"; then
     FAILED=1; cleanup; return
@@ -70,8 +85,12 @@ run_scenario() {
   # 只听回环。默认监听 0.0.0.0 时，局域网里真在跑的平板会连上测试网关（它每两秒
   # 重连一次同一个端口），抢走全码率槽位，于是媒体编排那组断言莫名失败 ——
   # 排查这种"失败"要花掉一整个下午，而它跟被测代码毫无关系。
-  "$GATEWAY" --robot-ip 127.0.0.1 --perception-ip 127.0.0.1 \
-      --serve --bind 127.0.0.1 --web "$ROOT/web" "$@" \
+  # 额外参数放在最后：场景要覆盖"地形图端口不通"，靠的就是后写的 --perception-port
+  # 盖掉这里给的正常值（网关按出现顺序解析，后面的赢）。
+  "$GATEWAY" --robot-ip 127.0.0.1 --robot-port "$ROBOT_PORT" \
+      --local-port "$LOCAL_PORT" \
+      --perception-ip 127.0.0.1 --perception-port "$TERRAIN_PORT" \
+      --serve --bind 127.0.0.1 --port "$PORT" --web "$ROOT/web" "$@" \
       > "/tmp/x30_gw_$tag.log" 2>&1 &
   GW_PID=$!
   if ! wait_ready "/tmp/x30_gw_$tag.log" "遥控服务已就绪" "网关"; then
@@ -86,7 +105,7 @@ run_scenario() {
     return
   fi
 
-  if ! python3 "$ROOT/tools/ws_probe.py" --host 127.0.0.1 --port 8080 \
+  if ! python3 "$ROOT/tools/ws_probe.py" --host 127.0.0.1 --port "$PORT" \
       --scenario "$probe"; then
     FAILED=1
   fi
@@ -100,7 +119,7 @@ run_scenario "完整协议" full base
 # 主机可达但地形图端口没人监听，模拟感知主机上模块没起来。只改端口这一个变量，
 # 确保失败确实来自地形图通道而不是别的原因。楼梯步态必须如实报错 ——
 # 这是实机上最难查的一类故障，值得单独兜住。
-run_scenario "地形图模块未启动" no-terrain noterrain --perception-port 43555
+run_scenario "地形图模块未启动" no-terrain noterrain --perception-port "$DEAD_TERRAIN_PORT"
 
 # 媒体编排：能力协商、码流降级、全码率槽位仲裁。不需要真视频，
 # 网关本来就只下发计划、不搬运字节。
@@ -120,17 +139,21 @@ run_scenario "推杆自动起步" auto-arm autoarm
 # 这些在现场没法调试 —— 感知主机是机器狗的一部分，出问题只能干等。
 echo
 echo "== 场景：点云下行 =="
-python3 -u "$ROOT/tools/ros_sim.py" --port 11400 --points 60000 \
+python3 -u "$ROOT/tools/ros_sim.py" --port "$ROS_PORT" --points 60000 \
     > /tmp/x30_rossim.log 2>&1 &
 ROS_PID=$!
-python3 -u "$ROOT/tools/x30_sim.py" > /tmp/x30_sim_cloud.log 2>&1 &
+python3 -u "$ROOT/tools/x30_sim.py" --listen-port "$ROBOT_PORT" \
+    --terrain-port "$TERRAIN_PORT" --target "127.0.0.1:$LOCAL_PORT" \
+    > /tmp/x30_sim_cloud.log 2>&1 &
 SIM_PID=$!
 wait_ready /tmp/x30_rossim.log "Ctrl-C 退出" "假 ROS master" || FAILED=1
 wait_ready /tmp/x30_sim_cloud.log "仿真器已启动" "仿真器" || FAILED=1
 
-"$GATEWAY" --robot-ip 127.0.0.1 --perception-ip 127.0.0.1 \
-    --serve --web "$ROOT/web" --cloud \
-    --ros-master http://127.0.0.1:11400 --ros-host 127.0.0.1 \
+"$GATEWAY" --robot-ip 127.0.0.1 --robot-port "$ROBOT_PORT" \
+    --local-port "$LOCAL_PORT" \
+    --perception-ip 127.0.0.1 --perception-port "$TERRAIN_PORT" \
+    --serve --bind 127.0.0.1 --port "$PORT" --web "$ROOT/web" --cloud \
+    --ros-master "http://127.0.0.1:$ROS_PORT" --ros-host 127.0.0.1 \
     > /tmp/x30_gw_cloud.log 2>&1 &
 GW_PID=$!
 wait_ready /tmp/x30_gw_cloud.log "遥控服务已就绪" "网关" || FAILED=1
@@ -140,7 +163,7 @@ if ! kill -0 "$GW_PID" 2>/dev/null; then
   cat /tmp/x30_gw_cloud.log
   FAILED=1
 else
-  if ! python3 "$ROOT/tools/cloud_probe.py" --host 127.0.0.1 --port 8080; then
+  if ! python3 "$ROOT/tools/cloud_probe.py" --host 127.0.0.1 --port "$PORT"; then
     FAILED=1
   fi
 fi
@@ -150,12 +173,16 @@ cleanup
 # 这是现场最可能遇到的情况 —— ROS 可达性至今没验证过。
 echo
 echo "== 场景：感知主机不可达 =="
-python3 -u "$ROOT/tools/x30_sim.py" > /tmp/x30_sim_nocloud.log 2>&1 &
+python3 -u "$ROOT/tools/x30_sim.py" --listen-port "$ROBOT_PORT" \
+    --terrain-port "$TERRAIN_PORT" --target "127.0.0.1:$LOCAL_PORT" \
+    > /tmp/x30_sim_nocloud.log 2>&1 &
 SIM_PID=$!
 wait_ready /tmp/x30_sim_nocloud.log "仿真器已启动" "仿真器" || FAILED=1
-"$GATEWAY" --robot-ip 127.0.0.1 --perception-ip 127.0.0.1 \
-    --serve --web "$ROOT/web" --cloud \
-    --ros-master http://127.0.0.1:11999 --ros-host 127.0.0.1 \
+"$GATEWAY" --robot-ip 127.0.0.1 --robot-port "$ROBOT_PORT" \
+    --local-port "$LOCAL_PORT" \
+    --perception-ip 127.0.0.1 --perception-port "$TERRAIN_PORT" \
+    --serve --bind 127.0.0.1 --port "$PORT" --web "$ROOT/web" --cloud \
+    --ros-master "http://127.0.0.1:$DEAD_ROS_PORT" --ros-host 127.0.0.1 \
     > /tmp/x30_gw_nocloud.log 2>&1 &
 GW_PID=$!
 wait_ready /tmp/x30_gw_nocloud.log "遥控服务已就绪" "网关" || FAILED=1
@@ -165,7 +192,7 @@ if ! kill -0 "$GW_PID" 2>/dev/null; then
   echo "网关启动失败："
   cat /tmp/x30_gw_nocloud.log
   FAILED=1
-elif ! python3 "$ROOT/tools/ws_probe.py" --host 127.0.0.1 --port 8080 \
+elif ! python3 "$ROOT/tools/ws_probe.py" --host 127.0.0.1 --port "$PORT" \
     --scenario cloud-down; then
   FAILED=1
 fi

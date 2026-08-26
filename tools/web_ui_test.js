@@ -534,6 +534,22 @@ check('切档交接 App 记住的姿态',
       /if \(st\.poseKnown\) return isStandingUi\(\);/.test(appJs) &&
       /\n  return poseMem;\n\}/.test(appJs) &&
       /if \(granted && msg\.Has\("standing"\)\)/.test(serviceCpp));
+// 力控/起步挂在 B1/B2（现场量的是 CH9、CH10，下标 = CH号-1，按下 1950）。
+// 两条链路各读一份通道表：MESH 走 gamepad.js，2.4G 走原生 RadioLink，
+// 只改一边的表现是「同一颗键在一条链路上好用、另一条不认」。
+var gamepadJs = read('gamepad.js');
+check('B1/B2 两条链路同一份通道',
+      /torque: \{ ch: 8, press: 1950 \}/.test(gamepadJs) &&
+      /step: \{ ch: 9, press: 1950 \}/.test(gamepadJs) &&
+      /pressed\(ch, 8, 1950\)/.test(radioJava) &&
+      /pressed\(ch, 9, 1950\)/.test(radioJava) &&
+      /prevTorque/.test(radioJava) &&
+      /commandOnRadio\("torque"\)/.test(radioJava) &&
+      /commandOnRadio\("step"\)/.test(radioJava) &&
+      // 判定方式两边必须一致，否则高有效那两颗只在一条链路上认。
+      /press < 1500 \? v <= mid : v >= mid/.test(radioJava) &&
+      /press < 1500 \? v <= mid : v >= mid/.test(gamepadJs));
+
 // 急停后必须能找到卸力：不卸力起立是发不动的。实体红键是原生那侧收的（网页并不
 // 经手），没有遥测时只有 RadioLink 记着这件事，所以那个标志一定要读。
 check('急停后左下角变卸力，实体红键也算',
@@ -615,11 +631,15 @@ check('趴着收起档位菜单，2.4G 姿态没把握时不收',
 
 // 底栏那一排永远是一行。以前力控/起步在 .row.wrap 里，屏幕一窄就折成两行；
 // 现在那两颗直接拿掉了（推杆自己踩），剩下三个档位按钮还要用短名收窄。
+// 力控/起步没有删掉，是挪到了左下角起立按钮上方竖排：推杆自己会踩这两级，但停步和
+// 用摇杆调姿态还得靠它们。
+var standBlock = html.slice(html.indexOf('class="hud-stand"'),
+                           html.indexOf('id="hud-standing"'));
 check('底栏菜单不折行、档位用短名',
-      !/data-cmd="torque"/.test(html) &&
-      !/data-cmd="step"/.test(html) &&
-      !/hud-walk/.test(html) &&
-      !/hud-walk/.test(styleText) &&
+      /data-cmd="torque"/.test(standBlock) &&
+      /data-cmd="step"/.test(standBlock) &&
+      /\.hud-stand \.hud-walk \{/.test(styleText) &&
+      /\.dog-prone \.hud-stand \.hud-walk/.test(styleText) &&
       /data-short="多帧"/.test(html) &&
       /on\.dataset\.short \|\| on\.textContent/.test(appJs) &&
       /flex-wrap: nowrap/.test(styleText));
@@ -828,6 +848,72 @@ check('2×2 时点云保持订阅',
       /cloudVisible/.test(appJs) && /mode === '2x2'/.test(appJs));
 var gasCells = (html.match(/id="g-[a-z0-9]+"/g) || []).length;
 check('气体面板有 10 个指标', gasCells === 10, '实际 ' + gasCells);
+
+// ---------------------------------------------------------------------------
+console.log('\n== 按键语音播报 ==');
+// ---------------------------------------------------------------------------
+// 怎么念、念错了怎么办，由 tools/voice_test.js 真的跑一遍。这里盯的是几处「一改
+// 就整个不出声、而且在电脑上完全看不出来」的接线。
+var voiceJs = read('voice.js');
+var ttsJava = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+            'com', 'dogx30', 'control', 'Tts.java'), 'utf8');
+var manifest = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main',
+            'AndroidManifest.xml'), 'utf8');
+// 安卓 WebView 里没有 speechSynthesis（那个对象有时还在，但 speak() 静默不出声），
+// 所以 App 壳只能走原生 TTS。少了任一环，网页上测着好好的，装到平板上一句不念。
+check('App 壳的语音走原生 TextToSpeech',
+      /X30Native\.speak/.test(voiceJs) &&
+      /public boolean speak\(String text\)/.test(radioBridge) &&
+      /ttsStatus/.test(radioBridge) &&
+      /new Tts\(this\)/.test(radioBridge) &&
+      /tts\.shutdown\(\)/.test(ttsJava) &&
+      /QUEUE_FLUSH/.test(ttsJava) &&
+      /Locale\.CHINA/.test(ttsJava));
+// 安卓 11 起不声明就看不见语音引擎，TextToSpeech 初始化直接失败且不报错。
+check('清单里声明了 TTS 引擎的包可见性',
+      /android\.intent\.action\.TTS_SERVICE/.test(manifest) &&
+      /<queries>/.test(manifest));
+// 逐颗按钮挂必定漏，而且新加按钮的人不会回来补。委托到 document 上，
+// 默认念按钮上的字，不合适的用 data-say 覆盖。
+check('按键播报是委托监听，不是逐颗挂',
+      /addEventListener\('click', onClick, true\)/.test(voiceJs) &&
+      /closest\('button, \[data-say\]'\)/.test(voiceJs) &&
+      /data-say/.test(html));
+// 按钮上的字是当前状态（MESH、2×2）时，照字念正好和这一下要做的事相反。
+check('字与结果相反的按钮不照字念',
+      /id="btn-radio"[^>]*data-say=""/.test(html) &&
+      /id="btn-swap"[^>]*data-say=""/.test(html) &&
+      /speak\('已切 2\.4G'\)/.test(appJs) &&
+      /speak\(viewLayout\.mode === '2x2' \? '四宫格' : '单画面'\)/.test(appJs));
+// 被拦下还念按钮上的字，人就以为指令发出去了 —— 语音比屏幕更容易被当真。
+check('拦下来的按键要改口',
+      /speak\('没有控制权'\)/.test(appJs) &&
+      /speak\('网关未连'\)/.test(appJs) &&
+      /speak\('步态没切成'\)/.test(appJs) &&
+      /say\('没有控制权'\)/.test(read('gamepad.js')));
+// 实体键上没有字，人也不在看屏幕，那条路上语音是唯一的回执。
+check('实体键每一条派发都念',
+      /function gaitName/.test(read('gamepad.js')) &&
+      /say\(gaitName\(target\)\)/.test(read('gamepad.js')) &&
+      /say\('急停'\)/.test(read('gamepad.js')) &&
+      /say\('已经站着'\)/.test(read('gamepad.js')));
+// 平板喇叭念的话会被自己的麦克风采回去，传到狗那侧就是回声。
+check('按住说话时闭嘴',
+      /function talking/.test(read('media.js')) &&
+      /talking,?\s*\n?\};/.test(read('media.js')) &&
+      /X30Media\.talking/.test(voiceJs));
+// 语音是本机偏好，网关没开在线改配置时也得够得着这个开关 ——
+// 以前那种情况下点标题什么都不发生。
+check('语音开关在设置面板里且够得着',
+      !!htmlIds['set-voice'] &&
+      !!htmlIds['set-voice-hint'] &&
+      /X30Voice\.onSettingsOpen/.test(read('settings.js')) &&
+      !/if \(!state\.available && !isAppNative\(\)\) return;/.test(read('settings.js')));
+// voice.js 要排在其余模块前面：它们都会调它念结果。
+check('voice.js 先于其它模块加载',
+      loadOrder.indexOf('voice.js') === 0, loadOrder.join(' '));
 
 // ---------------------------------------------------------------------------
 console.log('\n== 设置面板的字段要与网关认的键一致 ==');

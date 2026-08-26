@@ -915,6 +915,18 @@
     setWanted(false);
   }
 
+  // 工具条上「轨迹」「点云显控」「楼层」按钮上只有名字，看不出现在是开是关，
+  // 所以按结果念，不用 voice.js 那份按字念的默认（见那边的委托监听）。
+  function say(text) {
+    if (window.X30Voice) window.X30Voice.say(text);
+  }
+
+  function floorSay() {
+    if (!opts.floorCut) return '楼层';
+    if (opts.floorView < 0) return '全部楼层';
+    return '第' + (opts.floorView + 1) + '层';
+  }
+
   function bindToolbar() {
     const bar = document.querySelector('.pane-cloud-ctl');
     if (!bar) return;
@@ -960,12 +972,14 @@
       if (t.id === 'btn-trail') {
         opts.trail = !opts.trail;
         applyOpts();
+        say(opts.trail ? '轨迹已开' : '轨迹已关');
         return;
       }
       if (t.id === 'btn-cloud-vis') {
         // 只藏点，不退订、不清轨迹。切走点云背景才会 unsubscribe。
         opts.showPoints = !opts.showPoints;
         applyOpts();
+        say(opts.showPoints ? '点云已显示' : '点云已隐藏');
         return;
       }
       if (t.id === 'btn-floor') {
@@ -976,12 +990,14 @@
         else opts.floorView = -1;
         applyFloorView();
         applyOpts();
+        say(floorSay());
         return;
       }
       if (t.id === 'btn-cloud-clear') {
         persistMap.clear();
         frames.length = 0;
         applyOpts();
+        say('已清除');
       }
     });
 

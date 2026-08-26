@@ -17,13 +17,13 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260826b">
+<link rel="stylesheet" href="style.css?v=20260826c">
 </head>
 <body>
 
 <header class="bar">
   <div class="brand-wrap">
-    <button type="button" class="brand" id="btn-settings">X30 遥控台</button>
+    <button type="button" class="brand" id="btn-settings" data-say="设置">X30 遥控台</button>
     <span class="brand-batt hidden" id="brand-batt"></span>
   </div>
 
@@ -54,7 +54,9 @@
       </div>
     </div>
     <button class="btn btn-ghost" id="btn-control">控制权</button>
-    <button type="button" class="btn btn-ghost" id="btn-radio" title="切换 2.4G 与 MESH">MESH</button>
+    <!-- 这颗和右下角的 2×2 一样，按钮上写的是**当前**状态，照字念正好和这一下
+         要做的事相反。所以不按字念（data-say=""），由处理函数念切完的结果。 -->
+    <button type="button" class="btn btn-ghost" id="btn-radio" data-say="" title="切换 2.4G 与 MESH">MESH</button>
     <button class="btn btn-estop" id="btn-estop">急停</button>
   </div>
 </header>
@@ -94,6 +96,17 @@
            2.4G 地址和收没收到都说清楚，要登记时照着填。 -->
       <p class="set-sect-note" id="set-app-radio-stat">—</p>
       <button type="button" class="btn sm" id="set-app-save">保存并重新连接</button>
+    </div>
+
+    <!-- 语音是本机偏好，与网关配置无关，所以放在解锁之外：网页和 App 都改得了，
+         网关没开在线改配置时也够得着（见 settings.js 的 open）。 -->
+    <div id="set-voice-box" class="set-form">
+      <div class="set-sect">按键语音</div>
+      <label class="gp-check">
+        <input type="checkbox" id="set-voice">
+        <span>按键语音播报：念出这一下做成了什么</span>
+      </label>
+      <p class="set-sect-note" id="set-voice-hint">—</p>
     </div>
 
     <div id="set-unlock-box" class="set-unlock">
@@ -192,18 +205,20 @@
           <button type="button" class="btn sm active" data-cloud-mode="live">实时</button>
           <button type="button" class="btn sm" data-cloud-mode="persist">持久地图</button>
         </div>
+        <!-- 按钮上的字为了省地方缩到了极限（「3s」「5」），念出来听不懂是什么，
+             所以 data-say 里补全。 -->
         <div class="cloud-seg" id="cloud-accum">
           <button type="button" class="btn sm active" data-cloud-accum="0">单帧</button>
-          <button type="button" class="btn sm" data-cloud-accum="3">3s</button>
-          <button type="button" class="btn sm" data-cloud-accum="10">10s</button>
-          <button type="button" class="btn sm" data-cloud-accum="30">30s</button>
+          <button type="button" class="btn sm" data-cloud-accum="3" data-say="累积3秒">3s</button>
+          <button type="button" class="btn sm" data-cloud-accum="10" data-say="累积10秒">10s</button>
+          <button type="button" class="btn sm" data-cloud-accum="30" data-say="累积30秒">30s</button>
         </div>
         <div class="cloud-seg" id="cloud-voxel">
           <span class="cloud-lab">体素</span>
-          <button type="button" class="btn sm" data-cloud-voxel="0.05">5</button>
-          <button type="button" class="btn sm active" data-cloud-voxel="0.10">10</button>
-          <button type="button" class="btn sm" data-cloud-voxel="0.20">20</button>
-          <button type="button" class="btn sm" data-cloud-voxel="0.40">40</button>
+          <button type="button" class="btn sm" data-cloud-voxel="0.05" data-say="体素5厘米">5</button>
+          <button type="button" class="btn sm active" data-cloud-voxel="0.10" data-say="体素10厘米">10</button>
+          <button type="button" class="btn sm" data-cloud-voxel="0.20" data-say="体素20厘米">20</button>
+          <button type="button" class="btn sm" data-cloud-voxel="0.40" data-say="体素40厘米">40</button>
         </div>
         <button type="button" class="btn sm active" id="btn-cloud-vis" title="隐藏点云，轨迹继续留着">点云显控</button>
         <button type="button" class="btn sm active" id="btn-trail" title="用红色画出狗走过的路">轨迹</button>
@@ -232,7 +247,7 @@
   </div>
 
   <div class="hud-layout-bar">
-    <button type="button" class="btn sm hud-swap" id="btn-swap" title="在一主三小和四宫格之间切换">2×2</button>
+    <button type="button" class="btn sm hud-swap" id="btn-swap" data-say="" title="在一主三小和四宫格之间切换">2×2</button>
     <button type="button" class="btn sm" id="btn-media">画面</button>
   </div>
   <div id="hud-layout" class="hud-layout hidden">
@@ -301,12 +316,16 @@
   </div>
 
   <div class="hud-stand">
+    <!-- 力控/起步竖着摆在起立上方。底栏那一排放不下（会折成两行），而这两颗平时
+         用不着 —— 推杆自己会踩这两级，只在要停步或用摇杆调姿态时才点。 -->
+    <div class="hud-walk">
+      <button type="button" class="btn sm" data-cmd="torque">力控</button>
+      <button type="button" class="btn sm" data-cmd="step">起步</button>
+    </div>
     <button type="button" class="btn hud-stand-btn" data-cmd="stand" id="btn-stand">起立</button>
   </div>
 
-  <!-- 底栏不放力控/起步了：推杆自己会踩这两级（RadioLink.armForWalk /
-       MotionClient::ArmForWalk），留着只会把这一排挤成两行。停步和力控调姿态
-       仍在实体手柄上，映射见 gamepad.html。 -->
+  <!-- 底栏只放三个档位：力控/起步挪到左下角起立上方了（放这一排会折成两行）。 -->
   <div id="hud-standing" class="hud-menus">
     <div class="acc">
       <!-- 收起来的时候直接显示当前选的那一档，箭头表示点开还能换。还不知道选的是
@@ -353,7 +372,7 @@
         <div class="row wrap" id="stair-row">
           <button type="button" class="btn sm pick" data-gait="stair" data-short="楼梯">楼梯</button>
           <button type="button" class="btn sm" data-gait="stairmulti" data-short="多帧">楼梯(多帧)</button>
-          <button type="button" class="btn sm" data-gait="stair45" data-short="45°">45°楼梯</button>
+          <button type="button" class="btn sm" data-gait="stair45" data-short="45°" data-say="45度楼梯">45°楼梯</button>
         </div>
       </div>
     </div>
@@ -381,12 +400,14 @@
   </div>
 </main>
 
-<script src="media.js?v=20260820e"></script>
-<script src="capture.js?v=20260820e"></script>
-<script src="cloud.js?v=20260820e"></script>
-<script src="gamepad.js?v=20260820e"></script>
-<script src="settings.js?v=20260820e"></script>
-<script src="dogcam24.js?v=20260826b"></script>
-<script src="app.js?v=20260826b"></script>
+<!-- voice.js 要排在最前：后面几个模块都会调它念结果。 -->
+<script src="voice.js?v=20260826c"></script>
+<script src="media.js?v=20260826c"></script>
+<script src="capture.js?v=20260826c"></script>
+<script src="cloud.js?v=20260826c"></script>
+<script src="gamepad.js?v=20260826c"></script>
+<script src="settings.js?v=20260826c"></script>
+<script src="dogcam24.js?v=20260826c"></script>
+<script src="app.js?v=20260826c"></script>
 </body>
 </html>

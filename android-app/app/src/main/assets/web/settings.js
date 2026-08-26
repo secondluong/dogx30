@@ -301,10 +301,21 @@
   }
 
   function open() {
-    if (!state.available && !isAppNative()) return;
     state.open = true;
     root.classList.remove('hidden');
     fillAppGateway();
+    // 语音开关是本机偏好，面板每次打开都要问一遍引擎起来没有（原生 TTS 初始化
+    // 要一秒左右，开机就点开的话结论会变）。
+    if (window.X30Voice) window.X30Voice.onSettingsOpen();
+    // 网关没开在线改配置时，这个面板里仍有本机能改的东西。以前这里直接 return，
+    // 表现是点了标题什么都不发生 —— 「点了没反应」是最难查的一类。
+    if (!state.available && !isAppNative()) {
+      setLocked(true);
+      $('set-unlock-box').classList.add('hidden');
+      setNote('本机未启用在线改配置（网关需要以 --config 启动），只能改上面这些。',
+              'warn');
+      return;
+    }
     if (state.current) {
       setLocked(false);
     } else {
@@ -453,18 +464,15 @@
   // 和「跑起来了」是两件事。
   function onHello(msg) {
     state.available = !!msg.config;
-    const btn = $('btn-settings');
-    if (btn) {
-      const can = state.available || isAppNative();
-      btn.classList.toggle('can-config', can);
-      btn.title = can ? '打开设置' : '';
-    }
     if (!state.available) {
       if (state.open && !isAppNative()) {
         setNote('本机未启用在线改配置（网关需要以 --config 启动）。', 'warn');
       }
       return;
     }
+    // 面板可能是在网关连上之前打开的，那会儿解锁框被藏了起来（没什么可解锁的）。
+    // 现在网关说它能改配置了，得把门重新露出来，不然要关掉再打开一次才见得到。
+    if (state.open && !state.current) setLocked(true);
     if (state.open && state.token) {
       state.sendFn({ t: 'config_get', token: state.token });
     }
@@ -482,6 +490,10 @@
       $('set-app-save').addEventListener('click', saveAppGateway);
     }
 
+    // 面板里那节本机设置（语音）任何时候都在，所以标题一直是可点的样子 ——
+    // 以前只有网关支持在线改配置时才加下划线，而现在点了总有东西可看。
+    $('btn-settings').classList.add('can-config');
+    $('btn-settings').title = '打开设置';
     $('btn-settings').addEventListener('click', open);
     $('set-close').addEventListener('click', close);
     $('set-unlock').addEventListener('click', unlock);
