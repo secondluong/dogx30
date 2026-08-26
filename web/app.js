@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0825s';
+const WEB_BUILD = '0826a';
 
 function nativeAppVersion() {
   try {
@@ -431,6 +431,10 @@ function nativeRadioStanding() {
 function syncRadioStanding(st0) {
   if (!radioDirect()) return;
   const st = st0 || nativeRadioStatus() || {};
+  // 姿态有把握（收到遥测，或本端确实发过起立/趴下）时才让「趴着就收起菜单」生效。
+  // 没把握的时候狗可能明明站着，菜单一收就再也点不开 —— 那是当初 2.4G 不管趴没趴
+  // 都亮着菜单的原因。现在能读遥测了，就按知不知道来分。
+  document.documentElement.classList.toggle('pose-known', !!st.poseKnown);
   const basic = typeof st.basic === 'number' ? st.basic : -1;
   let changed = false;
   if (basic >= 0 && basic !== app.basicState) {

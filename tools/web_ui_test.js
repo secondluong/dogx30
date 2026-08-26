@@ -595,6 +595,13 @@ check('上下楼三档必选其一',
       /\.acc-pop \.btn\.sm\.pick \{/.test(styleText) &&
       /\.acc-pop \.btn\.sm\.pick::after/.test(styleText));
 
+// 狗趴着时底栏那三个档位菜单要收起来，两条链路一个样。2.4G 以前一律亮着，因为那时
+// 没有姿态读数；现在能读遥测了，就只在「知道姿态」的前提下收（html.pose-known）。
+check('趴着收起档位菜单，2.4G 姿态没把握时不收',
+      /classList\.toggle\('pose-known', !!st\.poseKnown\)/.test(appJs) &&
+      /html\.radio-24\.pose-known \.dog-prone \.hud-menus/.test(styleText) &&
+      /html:not\(\.radio-24\) \.dog-prone \.hud-menus/.test(styleText));
+
 // 底栏那一排永远是一行。以前力控/起步在 .row.wrap 里，屏幕一窄就折成两行；
 // 现在那两颗直接拿掉了（推杆自己踩），剩下三个档位按钮还要用短名收窄。
 check('底栏菜单不折行、档位用短名',

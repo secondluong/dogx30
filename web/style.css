@@ -1111,8 +1111,10 @@ html.shell-app .hud-info {
 /* 网页：趴下只藏步态/踏面/身高。虚拟摇杆由「摇杆」按钮开关，
    趴着也能转布控球，不能用 dog-prone 把杆锁死。
    App 壳没有虚拟杆，由 html.shell-app 整块关掉。 */
-/* 2.4G 以手柄起/趴为准，页面 class 可能还没跟上，菜单仍要能点。 */
-html:not(.radio-24) .dog-prone .hud-menus { display: none !important; }
+/* 2.4G 那侧只在姿态有把握时才跟着收（html.pose-known 由遥测或本端发过的起立/趴下
+   置上）。收不到遥测又谁都没按过时，狗可能明明站着，菜单一收就再也点不开。 */
+html:not(.radio-24) .dog-prone .hud-menus,
+html.radio-24.pose-known .dog-prone .hud-menus { display: none !important; }
 
 .hud-sticks { position: absolute; inset: 0; z-index: 8; pointer-events: none; }
 .hud-sticks .stick-wrap { position: absolute; bottom: 88px; pointer-events: auto; }
