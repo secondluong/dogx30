@@ -270,8 +270,10 @@ class Robot:
             elif code in GAITS:
                 gait_id, name = GAITS[code]
                 required = STAIR_REQUIREMENTS.get(gait_id)
-                if self.state != STEPPING_STATE:
-                    log(f"忽略步态切换，只有踏步态才能切步态（当前「{STATE_NAMES[self.state]}」）")
+                if self.state not in (
+                    INITIAL_STANDING, TORQUE_STANDING, STEPPING_STATE
+                ):
+                    log(f"忽略步态切换，站稳后才能切步态（当前「{STATE_NAMES[self.state]}」）")
                 elif self.height_gear == -1 and gait_id not in (0, 2):
                     log("忽略步态切换，匍匐档只支持 Walk 与缓坡")
                 elif required is not None and self.height_map_mode not in required:
@@ -373,7 +375,9 @@ class Robot:
             if not axes_valid:
                 self._zero_axes()
 
-            if self.state == STEPPING_STATE:
+            # 原厂 RL 起立后（初始站立，遥测常仍报 0）推杆即走，不必再进踏步。
+            # 力控站立仍按姿态轴理解，这里不当速度用。
+            if self.state in (STEPPING_STATE, INITIAL_STANDING):
                 fwd, lat, yaw_rate = GAIT_LIMITS.get(self.gait, (1.2, 0.8, 1.2))
                 if self.height_gear == -1 and self.gait in (0, 2):
                     fwd *= 0.5  # 匍匐档前向速度减半

@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826j';
+const WEB_BUILD = '0826k';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -129,11 +129,19 @@ function isStandingUi() {
 app.isStandingUi = isStandingUi;
 
 function controlChannel() {
-  // 起立之后摇杆先不生效；力控站立调姿态；踏步才走。
-  // 以人点的为准：MESH 遥测常慢一拍，听遥测的话刚点起步推杆还会被当成没起步。
-  if (app.walkMode === 'step' || app.basicState === STATE_STEPPING) return 'vel';
+  // 起立后推杆就走。力控才改成调姿态。不再要求先起步 —— 踏步是切换指令，
+  // 切档后发一条等于停步。
   if (app.walkMode === 'torque' || app.basicState === STATE_TORQUE_STANDING) {
     return 'pose';
+  }
+  if (app.emergencyLocked) return null;
+  if (app.basicState === STATE_SIT_TO_STAND ||
+      app.basicState === STATE_STAND_TO_SIT) {
+    return null;
+  }
+  if (isStandingUi() || app.walkMode === 'step' ||
+      app.basicState === STATE_STEPPING) {
+    return 'vel';
   }
   return null;
 }
@@ -367,36 +375,6 @@ const POSE_CMDS = {
   stand: true, stand_up: true, sit: true, sit_down: true,
   unload: true, estop: true,
 };
-
-// 推杆了但还没进踏步态：喊一句该按什么。狗在初始站立下收不了速度，
-// 表现是「推杆完全没反应」—— 现场最难猜的一种，因为界面上什么都不会变。
-//
-// 曾经试过让程序自己把力控、起步这两级补掉（推杆就走）。撤了：踏步是**切换**
-// 指令，程序补的那一条和操作员自己按的那一条会互相抵消，狗刚起步又停下；而人
-// 完全看不出是谁发的。宁可要求两下明确的按键，按漏了就出声提醒。
-const ARM_HINT = '请先按力控、起步之后才能行走';
-const ARM_PUSH = 0.2;      // 摇杆推过这个量才算「他真想走」
-const ARM_HINT_GAP = 4000; // 一直推着也别念个不停
-let armHintAt = 0;
-
-function checkNeedArm(c) {
-  if (!c) return;
-  const push = Math.max(Math.abs(c.fwd || 0), Math.abs(c.lat || 0),
-                        Math.abs(c.turn || 0));
-  if (push < ARM_PUSH) return;
-  // MESH 下没控制权时推杆本来就发不出去，横幅另有一条在说这件事。
-  if (!radioDirect() && !app.hasControl) return;
-  if (!isStandingUi() || app.emergencyLocked || app.lioAligning) return;
-  if (stickTarget() === 'ptz') return;
-  // 点过起步或遥测已踏步，就是能走。以前 MESH 上遥测还停在力控/初始站立时
-  // 不认本端点的起步，推杆仍喊「请先按力控、起步」—— 2.4G 没遥测反而不会。
-  if (app.walkMode === 'step' || app.basicState === STATE_STEPPING) return;
-  const now = Date.now();
-  if (now - armHintAt < ARM_HINT_GAP) return;
-  armHintAt = now;
-  showBanner(ARM_HINT, 3000);
-  speak(ARM_HINT);
-}
 
 function linkOpen() {
   return !!(app.ws && app.ws.readyState === WebSocket.OPEN);
@@ -1154,9 +1132,8 @@ function updateStickAvailability() {
   const usable = ptz
     ? true
     : radioDirect()
-      ? (isStandingUi() && !app.emergencyLocked && controlChannel() !== null)
-      : (app.hasControl && app.alive && controlChannel() !== null &&
-         !app.lioAligning);
+      ? (isStandingUi() && !app.emergencyLocked)
+      : (app.hasControl && app.alive && isStandingUi() && !app.lioAligning);
   document.querySelectorAll('.stick').forEach((s) => {
     s.classList.toggle('disabled', !usable);
   });
@@ -1306,7 +1283,6 @@ setInterval(() => {
   const radioSt = onRadio ? (nativeRadioStatus() || {}) : null;
   if (onRadio) paintRadioLink(radioSt);
   const c = activeChannels();
-  checkNeedArm(c);
   if (onRadio) {
     syncRadioStanding(radioSt);
     syncRadioPickers(radioSt);
@@ -1428,6 +1404,10 @@ function radioCmdFromEl(el) {
     return el.dataset.cmd;
   }
   if (el.dataset.gait) return el.dataset.gait;
+  if (el.dataset.stair) {
+    if (app.gait === 'stairmulti' || app.gait === 'stair45') return app.gait;
+    return 'stair';
+  }
   if (el.dataset.height === 'crawl') return 'height_low';
   if (el.dataset.height) return 'height_normal';
   if (el.dataset.mode && el.dataset.mode !== 'assist') return el.dataset.mode;
@@ -1775,6 +1755,26 @@ document.querySelectorAll('[data-stair]').forEach((b) => {
       x.classList.toggle('active', x.dataset.stair === b.dataset.stair);
     });
     paintPickers();
+    // 以前只改按钮高亮，狗收不到。点实心/格栅/无踢面就按下发楼梯步态 + 踏面。
+    guarded(() => {
+      if (app.gaitPending) {
+        speak('步态切换中');
+        return;
+      }
+      const gait = (app.gait === 'stairmulti' || app.gait === 'stair45')
+        ? app.gait : 'stair';
+      gaitBefore = app.gait;
+      markGait(gait);
+      setGaitPending(true);
+      send({
+        t: 'cmd',
+        name: 'gait',
+        value: gait,
+        stair_style: b.dataset.stair,
+      });
+      markPending(b);
+      setTimeout(() => { if (app.gaitPending) setGaitPending(false); }, 9000);
+    })(e);
   });
 });
 

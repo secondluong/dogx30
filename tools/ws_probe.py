@@ -204,10 +204,6 @@ def no_terrain_scenario(host, port):
 
     a.send({"t": "cmd", "name": "stand"})
     a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 2)
-    a.send({"t": "cmd", "name": "torque"})
-    a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 3)
-    a.send({"t": "cmd", "name": "step"})
-    a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 4)
 
     a.send({"t": "cmd", "name": "gait", "value": "stair", "stair_style": "solid"})
     res = a.wait_for("gait_result", timeout=8)
@@ -229,7 +225,7 @@ def pose_handoff_scenario(host, port):
 
     2.4G 直连时起立不经过网关，而运动主机 RL 起立后遥测仍报 basic_state=0，
     网关从遥测里也认不出来。不交接的现场表现是：切回 MESH 后左下角还是「起立」，
-    左下角还是「起立」。轴仍然要等力控/起步，起立后摇杆必须空着。
+    切回 MESH 后左下角还是「起立」。轴在记得站着之后就能发，不必再等力控/起步。
     """
     print("\n== 姿态交接 ==")
     a = WsClient(host, port)
@@ -241,7 +237,7 @@ def pose_handoff_scenario(host, port):
     a.wait_for("control", predicate=lambda m: m.get("granted") is True)
     st = a.wait_for("state", timeout=5,
                     predicate=lambda m: m.get("rl_standing") is True)
-    # rl_standing 只表示「记得站着」，用来画按钮和放行步态。轴还要等力控/起步。
+    # rl_standing 表示「记得站着」，用来画按钮、放行步态和起立后推杆。
     check("claim 带 standing 后网关认为狗站着", st.get("rl_standing") is True)
     check("遥测仍报坐下也不改口", st.get("basic_state") == 0, st.get("basic_state"))
 
@@ -266,23 +262,21 @@ def pose_handoff_scenario(host, port):
 
 
 def arm_steps_scenario(host, port):
-    """起立之后只推杆，狗**不该**自己走起来：力控、起步这两下要人按。
+    """起立之后推杆就能走，网关不得再替人发踏步切换码。
 
-    曾经让网关替操作员把这两级台阶踩掉（推杆就走）。撤了 —— 踏步是**切换**指令，
-    网关补的那一条和操作员自己按的那一条会互相抵消，狗刚起步又停下，而现场完全
-    看不出是谁发的。漏按由 App 出声提醒（web/app.js 的 checkNeedArm）。
+    踏步是**切换**指令。切档后记忆一错，力控/起步就会发反，狗一会停一会踏。
+    所以起步不再下发 0x21010201；速度轴在起立后直接放行。
     """
-    print("\n== 起步要人按 ==")
+    print("\n== 起立后推杆就走 ==")
     a = WsClient(host, port)
     a.wait_for("hello")
     a.send({"t": "claim"})
     a.wait_for("control", predicate=lambda m: m.get("granted") is True)
 
     a.send({"t": "cmd", "name": "stand"})
-    # 仿真器的起立轨迹要两秒，之后基础状态是初始站立（1）。
     st = a.wait_for("state", timeout=8,
-                    predicate=lambda m: m.get("basic_state") == 1)
-    check("起立后停在初始站立", st.get("basic_state") == 1, st.get("basic_state"))
+                    predicate=lambda m: m.get("basic_state") == 2)
+    check("起立后停在初始站立", st.get("basic_state") == 2, st.get("basic_state"))
 
     deadline = time.time() + 3
     stepping = False
@@ -296,16 +290,19 @@ def arm_steps_scenario(host, port):
             pass
     check("光推杆不会自己进踏步", not stepping)
 
-    # 人按了这两下就该能走。两下都要发，起步不再替人补力控。
-    a.send({"t": "cmd", "name": "torque"})
-    time.sleep(0.3)
     a.send({"t": "cmd", "name": "step"})
-    st = a.wait_for("state", timeout=8,
-                    predicate=lambda m: m.get("basic_state") == 4)
-    check("按了力控和起步就进踏步", st.get("basic_state") == 4, st.get("basic_state"))
+    time.sleep(0.4)
+    stepping = False
+    deadline = time.time() + 2
+    while time.time() < deadline and not stepping:
+        try:
+            a.wait_for("state", timeout=0.2,
+                       predicate=lambda m: m.get("basic_state") == 4)
+            stepping = True
+        except TimeoutError:
+            pass
+    check("点起步也不会发踏步切换码", not stepping)
 
-    # 走起来之后速度要真的到狗身上，否则「进了踏步」只是空转。这里得继续推 ——
-    # 一停发，网关的看门狗几百毫秒内就会把轴清零（本来就该如此）。
     deadline = time.time() + 5
     vx = 0.0
     while time.time() < deadline and vx <= 0.2:
@@ -315,7 +312,7 @@ def arm_steps_scenario(host, port):
             vx = st.get("vel", {}).get("x", 0.0)
         except TimeoutError:
             pass
-    check("踏步后速度闭环回传", vx > 0.2, f"vx={vx} m/s")
+    check("起立后速度闭环回传", vx > 0.2, f"vx={vx} m/s")
     a.close()
 
 
@@ -694,7 +691,7 @@ def main():
                  "pose-handoff", "arm-steps", "config"],
         help="no-terrain 验证感知主机地形图不可达；media/no-media 验证媒体编排；"
              "cloud-down 验证感知主机 ROS 不可达；pose-handoff 验证 2.4G 切回 MESH "
-             "时的姿态交接；arm-steps 验证起立后必须人按力控/起步才走；config 验证在线改配置",
+             "时的姿态交接；arm-steps 验证起立后推杆就能走且不自动踏步；config 验证在线改配置",
     )
     args = parser.parse_args()
     host, port = args.host, args.port
@@ -777,14 +774,6 @@ def main():
     st = a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 2)
     check("坐 -> 初始站立", st["basic_state"] == 2, st["basic_state_text"])
 
-    a.send({"t": "cmd", "name": "torque"})
-    st = a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 3)
-    check("初始站立 -> 力控站立", st["basic_state"] == 3, st["basic_state_text"])
-
-    a.send({"t": "cmd", "name": "step"})
-    st = a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 4)
-    check("力控站立 -> 踏步", st["basic_state"] == 4, st["basic_state_text"])
-
     print("\n== 步态与速度 ==")
     a.send({"t": "cmd", "name": "gait", "value": "offroad"})
     st = a.wait_for("state", timeout=5, predicate=lambda m: m["gait_key"] == "offroad")
@@ -809,6 +798,15 @@ def main():
     a.drain()
     st = a.wait_for("state")
     check("停发后速度归零", abs(st["vel"]["x"]) < 0.05, f"vx={st['vel']['x']} m/s")
+
+    a.send({"t": "cmd", "name": "torque"})
+    st = a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 3)
+    check("初始站立 -> 力控站立", st["basic_state"] == 3, st["basic_state_text"])
+
+    a.send({"t": "cmd", "name": "step"})
+    time.sleep(0.4)
+    st = a.wait_for("state", timeout=3)
+    check("起步不再切进踏步", st["basic_state"] == 3, st["basic_state_text"])
 
     print("\n== 上下楼 ==")
     # 单帧楼梯：编排器要先把地形图设成实心踏面，再切步态。

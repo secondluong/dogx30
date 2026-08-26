@@ -204,17 +204,16 @@ inline bool IsStandSitTransient(BasicState s) {
 // 实测会把原厂柔和的起身/趴下掐成猛起猛趴——力控站立的左摇杆 Y 是身高，
 // 50 Hz 发 0 等于一直在喊「把身子按到最低」。
 //
-// 正确顺序：起立后摇杆空着；点了力控才发姿态；点了起步才发速度。
-// RL 起立后主机常停在 0/1/2（坐下 / 起立中 / 初始站立）且不再改口。
-// 不能单凭「记得起立」就放行，否则起立后推杆就走；但点过力控/起步之后
-// 再按遥测挡，摇杆就被吞掉。急停除外。起身那一小段由 TxLoop 的
-// axis_hold_until_ 硬停，不靠这条。
-inline bool AxisCommandsApply(BasicState s, bool armed = false) {
+// 起立后就能走：RL 起立后主机常停在 0/2，原厂此时推杆即走。
+// 力控/起步是可选的（力控改姿态），不再当走路门槛 —— 那两下是切换指令，
+// 切档后记忆一错就会发反。起立中 / 坐下中 / 急停仍然不发，免得掐硬。
+inline bool AxisCommandsApply(BasicState s, bool standing = false) {
   if (s == BasicState::kEmergencyOrFall) return false;
   if (s == BasicState::kTorqueStanding || s == BasicState::kStepping) {
     return true;
   }
-  return armed;
+  if (IsStandSitTransient(s)) return false;
+  return standing;
 }
 
 // 运动主机自己报的站立态。不含「我们记得 RL 已起立、遥测仍报坐下」。

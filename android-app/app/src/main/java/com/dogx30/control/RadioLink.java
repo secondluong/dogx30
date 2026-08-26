@@ -89,8 +89,6 @@ final class RadioLink {
     private static final long AXIS_AFTER_STAND_MS = 400;
     /** 屏幕摇杆多久没更新就当松手。掉帧或页面卡住时不能让狗一直走。 */
     private static final long SCREEN_AXIS_HOLD_MS = 400;
-    /** 先力控再踏步之间留多久，主机还在过渡里会丢掉后一条。 */
-    private static final long ARM_GAP_MS = 500;
 
     private static final int HEARTBEAT = 0x21040001;
     private static final int CONNECT = 0x21020001;
@@ -350,38 +348,33 @@ final class RadioLink {
     private void clearWalk() {
         torqued = false;
         stepping = false;
-        if (handler != null) handler.removeCallbacks(stepTask);
     }
-
-    private final Runnable stepTask = new Runnable() {
-        @Override
-        public void run() {
-            if (emergency || stepping) return;
-            sendSimple(STEP);
-            stepping = true;
-        }
-    };
 
     /**
      * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
      *
-     * 正确顺序：起立后摇杆空着；点了力控才发姿态；点了起步才发速度。
-     * RL 起立后主机仍报 basic_state=0，有时停在初始站立。这两种谎报不能单凭
-     * 「记得起立」就放行。以本端点过力控/起步为准。
+     * 起立后就能走，与网关 AxisCommandsApply 一致。RL 起立后遥测常停在 0/2，
+     * 原厂此时推杆即走。力控只改姿态，不再当走路门槛。
      *
-     * 起立中 / 坐下中 / 急停一律不发：那几个状态里轴没有文档定义，实测会把原厂柔和的
-     * 起身趴下掐成猛起猛趴（力控站立的左摇杆 Y 是身高，50 Hz 发 0 等于一直喊「压到最低」）。
+     * 起立中 / 坐下中 / 急停一律不发，免得把柔和起身掐硬。
      */
     private boolean axesApply() {
         if (emergency) return false;
         if (telemFresh() && telemState == ST_EMERGENCY) return false;
-        // 起立后摇杆空着。点过力控/起步就发。刚起立那一小段仍停，免得掐硬。
-        if (!(torqued || stepping)) return false;
         if (lastStandAt != 0
                 && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS) {
             return false;
         }
-        return true;
+        if (telemFresh()) {
+            if (telemState == ST_TORQUE_STANDING || telemState == ST_STEPPING) {
+                return true;
+            }
+            if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
+                return false;
+            }
+            return standing;
+        }
+        return standing || torqued || stepping;
     }
 
     /**
@@ -460,32 +453,16 @@ final class RadioLink {
                 clearWalk();
                 break;
             case "torque":
-                // 踏步是切换。本地 stepping 切档后会撒谎，只能信主机报的踏步。
-                if (telemFresh() && telemState == ST_STEPPING) {
-                    sendSimple(STEP);
-                } else {
-                    sendSimple(TORQUE);
-                }
+                sendSimple(TORQUE);
                 torqued = true;
                 stepping = false;
                 break;
             case "step":
+                // 起立后推杆就能走，不再发踏步切换码。
                 if (emergency) break;
                 standing = true;
-                if (telemFresh() && telemState == ST_STEPPING) {
-                    torqued = true;
-                    stepping = true;
-                    break;
-                }
-                if (telemFresh() && telemState == ST_TORQUE_STANDING) {
-                    sendSimple(STEP);
-                    torqued = true;
-                    stepping = true;
-                    break;
-                }
-                sendSimple(TORQUE);
                 torqued = true;
-                onRadioDelayed(stepTask, ARM_GAP_MS);
+                stepping = true;
                 break;
             case "estop":
                 cancelPendingStand();

@@ -120,13 +120,13 @@ class MotionClient {
   // 为什么本机会不知道：2.4G 直连时起立/趴下由遥控器直接打给运动主机，不经过这里；
   // 而运动主机在 RL 起立后仍报 basic_state=0（见 protocol.hpp），遥测也认不出来。
   // 于是遥控端从 2.4G 切回 MESH 时，本机记的是「坐着」，按钮显示「起立」，
-  // 按钮会显示「起立」。轴仍然要等力控/起步，起立后摇杆必须空着。
+  // 按钮会显示「起立」。起立后推杆就能走，不再等力控/起步。
   // 这条就是让那份记忆对上。只有拿到控制权的客户端能调。
   void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
-  void EnterTorqueStand();  // 进力控站立。已经在踏步就先停步，狗会静止站住。
+  void EnterTorqueStand();  // 进力控站立，只发力控码，不切踏步。
   void ToggleStepping();    // 力控站立 <-> 踏步 切换（命令行用）
-  void EnterStepping();     // 进踏步。已经踏步不再切回去；还没力控就先补力控。
+  void EnterStepping();     // 不再发踏步切换码。切档后那条码会停步或再踏一步。
 
   void SetGait(Gait gait);
   void SetBodyHeight(HeightGear gear);

@@ -474,14 +474,13 @@ check('两条链路共用一份姿态，切档不走散',
       /app\.basicState = basic/.test(appJs) &&
       /app\.emergencyLocked = locked/.test(appJs) &&
       /STATE_TORQUE_STANDING/.test(appJs));
-// 正确顺序：起立后摇杆空着，力控调姿态，起步才走。RL 起立后遥测仍报 0，
-// 不能单凭「记得起立」就放行，否则起立后推杆就走。
-check('起立后不发轴，力控/起步才发',
+// 起立后推杆就走。RL 起立后遥测仍报 0，以本端记得站着放行。力控只改姿态。
+check('起立后就能发轴',
       /private boolean axesApply\(\)/.test(radioJava) &&
       /if \(axesApply\(\)\) sendAxes/.test(radioJava) &&
-      /if \(!\(torqued \|\| stepping\)\) return false/.test(radioJava) &&
+      /return standing \|\| torqued \|\| stepping/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
-      /axes_unlocked_ \|\| torqued_ \|\| stepping_/.test(motionCpp));
+      /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
 check('坐下遥测不清掉刚点的力控起步',
       /更不能清力控\/起步/.test(radioJava) &&
@@ -595,6 +594,11 @@ check('菜单收起时显示「菜单名|当前档 ›」',
 check('踏面那颗显示的是踏面材质',
       /\{ val: 'acc-val-stair', sel: '\[data-stair\]\.active' \}/.test(appJs) &&
       /class="btn sm active" data-stair="solid"/.test(html));
+check('点踏面会下发楼梯步态和踏面类型',
+      /el\.dataset\.stair/.test(appJs) &&
+      /name: 'gait'/.test(appJs) &&
+      /stair_style: b\.dataset\.stair/.test(appJs) &&
+      /value: gait/.test(appJs));
 // 刚开机或刚切过来时我们什么都没点过，档位只能问狗。身高是单独一条报文，
 // 不解它就只能显示「我点过的」，那在切档之后必然是错的。
 check('2.4G 的档位也听狗自己报',
@@ -615,39 +619,24 @@ check('两条链路都不再自动补力控/起步',
       !/axesPushed/.test(radioJava) &&
       !/torqueByUser/.test(radioJava) &&
       !/torqueByUser/.test(appJs));
-// 漏了那两下的表现是「推杆完全没反应」—— 界面上什么都不会变，现场最难猜。
-// 所以推杆而狗还没进踏步时要出声说清该按什么。
-check('推杆但没起步时出声提醒',
-      /请先按力控、起步之后才能行走/.test(appJs) &&
-      /function checkNeedArm/.test(appJs) &&
-      /checkNeedArm\(c\)/.test(appJs) &&
-      // 遥测说踏步才算真能走；没遥测时退回本端记的起步。
-      /app\.basicState === STATE_STEPPING/.test(appJs) &&
-      /app\.walkMode === 'step'/.test(appJs) &&
-      /speak\(ARM_HINT\)/.test(appJs) &&
-      /ARM_HINT_GAP/.test(appJs));
-// 起步是「进入踏步」，不是切换：已经踏步再发一次等于停步。没力控就先补力控。
-check('起步是进入踏步，不是切换',
+// 踏步是切换码，切档后一发就拧反。起步不再下发，推杆也不再喊先按那两下。
+check('起步不再发踏步切换码',
       /void EnterStepping/.test(motionHpp) &&
       /EnterStepping\(\)/.test(serviceCpp) &&
-      /if \(already\)/.test(motionCpp) &&
-      /ARM_GAP_MS/.test(radioJava) &&
-      /onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava) &&
-      /telemState == ST_STEPPING/.test(radioJava));
-// 切档后不能带着上一条链路的「在踏步」去发切换指令，否则力控变起步、起步变停步。
-check('切档后力控起步重新点，起趴不翻转',
+      /不再发踏步切换码/.test(motionCpp) &&
+      /不再发踏步切换码/.test(radioJava) &&
+      !/onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava) &&
+      !/请先按力控、起步之后才能行走/.test(appJs) &&
+      !/speak\(ARM_HINT\)/.test(appJs));
+// 切档后起趴仍按站没站发明确指令，不翻转。
+check('切档后起趴不翻转',
       /app\.walkMode = null/.test(appJs) &&
       /return isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(appJs) &&
-      /name: app\.isStandingUi && app\.isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(read('gamepad.js')) &&
-      /stop_step = s\.telemetry_alive && s\.basic_state == BasicState::kStepping/.test(motionCpp) &&
-      /telemFresh\(\) && telemState == ST_STEPPING/.test(radioJava));
-// 力控站立唯一的用处是用摇杆调身高/俯仰，所以那个状态下摇杆走姿态通道。
-// 起立后（还没力控/起步）摇杆必须空着，以前 rlStanding 直接走速度，MESH 上
-// 没点起步也能推，和 2.4G 两套手感。
-check('力控调姿态、起步才走、起立后摇杆空着',
-      /walkMode === 'step' \|\| app\.basicState === STATE_STEPPING/.test(appJs) &&
-      /walkMode === 'torque' \|\| app\.basicState === STATE_TORQUE_STANDING/.test(appJs) &&
-      !/if \(app\.rlStanding &&\s*\n\s*app\.basicState !== STATE_SIT_TO_STAND/.test(appJs));
+      /name: app\.isStandingUi && app\.isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(read('gamepad.js')));
+// 力控站立才走姿态通道。起立后（没点力控）推杆走速度。
+check('力控调姿态，起立后推杆就走',
+      /isStandingUi\(\) \|\| app\.walkMode === 'step'/.test(appJs) &&
+      /walkMode === 'torque' \|\| app\.basicState === STATE_TORQUE_STANDING/.test(appJs));
 // B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
 check('B1/B2 一次按键、屏幕跟着亮',
       /function noteWalkCmd/.test(appJs) &&
@@ -724,9 +713,10 @@ var mismatch = gaitNums.filter(function (n) { return cppGaits[n] !== jsGaits[n];
 check('两条链路对步态编码的理解一致',
       gaitNums.length >= 9 && mismatch.length === 0,
       gaitNums.length + ' 个，不一致: ' + mismatch.join(', '));
-check('轴放行看力控起步，不看记得起立',
-      /bool AxisCommandsApply\(BasicState s, bool armed/.test(protoHpp) &&
-      /return armed;/.test(protoHpp));
+check('轴放行看记得起立，过渡和急停仍挡',
+      /bool AxisCommandsApply\(BasicState s, bool standing/.test(protoHpp) &&
+      /return standing;/.test(protoHpp) &&
+      /if \(IsStandSitTransient\(s\)\) return false/.test(protoHpp));
 check('屏幕摇杆在 2.4G 下也能推',
       /void setScreenAxes\(float fwd, float lat, float turn\)/.test(radioJava) &&
       /scrAt = System\.currentTimeMillis\(\)/.test(radioJava) &&

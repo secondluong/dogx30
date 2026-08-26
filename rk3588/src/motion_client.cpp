@@ -13,8 +13,6 @@ using Clock = std::chrono::steady_clock;
 // 起立/趴下之后停发轴多久。够盖住遥测把过渡态报上来的滞后（实测几十毫秒），
 // 又远短于起身本身的两秒，所以不影响「站起来就能推杆走」。
 constexpr int kAxisHoldMs = 300;
-// 力控和踏步之间要留时间：主机还在过渡里，紧跟着的踏步会被丢掉。
-constexpr int kArmGapMs = 500;
 
 // 从原始报文里安全地取出一个结构体。长度不足就返回 false，避免越界读。
 template <typename T>
@@ -109,20 +107,6 @@ void MotionClient::TxLoop() {
     }
 
     // 心跳必须先于一切。丢心跳的后果比丢一帧轴指令严重得多。
-    {
-      // 起步在没力控时会先发力控，到点再补踏步。必须在 TX 线程发，别另开定时器。
-      bool due = false;
-      {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        if (step_at_ != Clock::time_point{} && Clock::now() >= step_at_) {
-          step_at_ = {};
-          stepping_ = true;
-          due = true;
-        }
-      }
-      if (due) SendSimple(cmd::kSteppingToggle);
-    }
-
     if (tick % heartbeat_every == 0) {
       SendSimple(cmd::kHeartbeat);
       // 协议要求在心跳开始后补发一次连接确认。
@@ -145,7 +129,8 @@ void MotionClient::TxLoop() {
       if (state_.telemetry_alive) {
         send_axes = AxisCommandsApply(
             state_.basic_state,
-            axes_unlocked_ || torqued_ || stepping_);
+            last_stand_sit_ == LastStandSit::kStood || axes_unlocked_ ||
+                torqued_ || stepping_);
       }
     }
 
@@ -520,20 +505,15 @@ void MotionClient::UnloadForce() {
 }
 
 void MotionClient::EnterTorqueStand() {
-  const RobotState s = Snapshot();
-  bool stop_step = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     step_at_ = {};
-    // 踏步指令是切换。本地 stepping_ 切档后会撒谎，只能信主机报的踏步。
-    stop_step = s.telemetry_alive && s.basic_state == BasicState::kStepping;
     stepping_ = false;
     torqued_ = true;
     axes_unlocked_ = true;
   }
-  // 已经在踏步时再发力控，主机会忽略，狗继续原地踏。先切一次踏步停下来。
-  if (stop_step) SendSimple(cmd::kSteppingToggle);
-  else SendSimple(cmd::kTorqueStand);
+  // 只发力控，不再先切踏步：踏步是切换指令，切档后记忆错了会把力控发成起步。
+  SendSimple(cmd::kTorqueStand);
 }
 
 void MotionClient::ToggleStepping() {
@@ -544,36 +524,12 @@ void MotionClient::ToggleStepping() {
 }
 
 void MotionClient::EnterStepping() {
-  const RobotState s = Snapshot();
-  bool already = false;
-  bool need_torque = false;
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    already = s.telemetry_alive && s.basic_state == BasicState::kStepping;
-    if (already) {
-      stepping_ = true;
-      axes_unlocked_ = true;
-      return;
-    }
-    if (step_at_ != Clock::time_point{}) {
-      axes_unlocked_ = true;
-      return;
-    }
-    const bool in_torque =
-        s.telemetry_alive && s.basic_state == BasicState::kTorqueStanding;
-    need_torque = !in_torque;
-    torqued_ = true;
-    axes_unlocked_ = true;
-    if (need_torque) {
-      // 先力控，到点再踏步。立刻跟一条会被丢掉，表现为点了起步却只在原地力控。
-      step_at_ = Clock::now() + std::chrono::milliseconds(kArmGapMs);
-    } else {
-      stepping_ = true;
-      step_at_ = {};
-    }
-  }
-  if (need_torque) SendSimple(cmd::kTorqueStand);
-  else SendSimple(cmd::kSteppingToggle);
+  // 起立后推杆就能走，不再发踏步切换码。切档后那条码会把狗停住或再踏一步。
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  step_at_ = {};
+  torqued_ = true;
+  stepping_ = true;
+  axes_unlocked_ = true;
 }
 
 void MotionClient::SetGait(Gait gait) {
@@ -621,10 +577,6 @@ int32_t MotionClient::Normalize(float v) {
   return std::max(-kAxisMax, std::min(kAxisMax, raw));
 }
 
-// 曾经在这里替操作员把「力控站立」「踏步」这两级台阶踩掉（推杆就走）。撤了：
-// 踏步是**切换**指令，程序补的那一条会和操作员自己按的那一条抵消，狗刚起步又停
-// 下，而人完全看不出是谁发的。现在仍然要人按这两下，漏了由 App 出声提醒
-// （web/app.js 的 checkNeedArm）。
 void MotionClient::SetVelocity(float vx, float vy, float wz) {
   std::lock_guard<std::mutex> lock(axis_mutex_);
   // 协议里 Y 向线速度与偏航角速度的映射带一个负号：轴为正表示向右平移 /
