@@ -205,15 +205,14 @@ inline bool IsStandSitTransient(BasicState s) {
 // 50 Hz 发 0 等于一直在喊「把身子按到最低」。
 //
 // 正确顺序：起立后摇杆空着；点了力控才发姿态；点了起步才发速度。
-// RL 起立后主机仍报 basic_state=0（坐下），有时停在初始站立。这两种谎报
-// 不能单凭「记得起立」就放行，否则起立后推杆就走，和现场要求相反。
-// 以操作员点过力控/起步（armed）为准。起立中 / 坐下中 / 急停仍然不发。
+// RL 起立后主机常停在 0/1/2（坐下 / 起立中 / 初始站立）且不再改口。
+// 不能单凭「记得起立」就放行，否则起立后推杆就走；但点过力控/起步之后
+// 再按遥测挡，摇杆就被吞掉。急停除外。起身那一小段由 TxLoop 的
+// axis_hold_until_ 硬停，不靠这条。
 inline bool AxisCommandsApply(BasicState s, bool armed = false) {
+  if (s == BasicState::kEmergencyOrFall) return false;
   if (s == BasicState::kTorqueStanding || s == BasicState::kStepping) {
     return true;
-  }
-  if (IsStandSitTransient(s) || s == BasicState::kEmergencyOrFall) {
-    return false;
   }
   return armed;
 }

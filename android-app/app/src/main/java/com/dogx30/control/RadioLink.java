@@ -85,7 +85,7 @@ final class RadioLink {
             java.util.Arrays.asList("stand", "stand_up", "sit", "sit_down",
                                     "unload", "estop"));
 
-    /** 没有遥测时，起立后等这么久才发轴，免得把柔和的起身掐硬。 */
+    /** 起立刚发出去的这一小段不发轴，免得把柔和的起身掐硬。点过力控也等。 */
     private static final long AXIS_AFTER_STAND_MS = 1500;
     /** 屏幕摇杆多久没更新就当松手。掉帧或页面卡住时不能让狗一直走。 */
     private static final long SCREEN_AXIS_HOLD_MS = 400;
@@ -333,6 +333,20 @@ final class RadioLink {
         scrAt = System.currentTimeMillis();
     }
 
+    /**
+     * 网页记的力控/起步。B1/B2 和屏幕按钮都先写 walkMode，本机指令若被
+     * 遥测冲掉，这里再对上，否则实体摇杆已经推了轴却发不出去。
+     */
+    synchronized void adoptWalkMode(String mode) {
+        if ("step".equals(mode)) {
+            torqued = true;
+            stepping = true;
+        } else if ("torque".equals(mode)) {
+            torqued = true;
+            stepping = false;
+        }
+    }
+
     private void clearWalk() {
         torqued = false;
         stepping = false;
@@ -360,20 +374,15 @@ final class RadioLink {
      */
     private boolean axesApply() {
         if (emergency) return false;
+        if (telemFresh() && telemState == ST_EMERGENCY) return false;
+        // 起立后摇杆空着。点过力控/起步就发：遥测常停在 0/1/2 不再改口，
+        // 再按遥测挡，两条链路推杆都没反应。
+        if (!(torqued || stepping)) return false;
         if (lastStandAt != 0
-                && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS
-                && !torqued && !stepping) {
+                && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS) {
             return false;
         }
-        if (telemFresh()) {
-            if (telemState == ST_TORQUE_STANDING || telemState == ST_STEPPING) return true;
-            if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT
-                    || telemState == ST_EMERGENCY) {
-                return false;
-            }
-            return torqued || stepping;
-        }
-        return torqued || stepping;
+        return true;
     }
 
     /**

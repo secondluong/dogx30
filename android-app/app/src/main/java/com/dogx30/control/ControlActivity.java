@@ -282,6 +282,11 @@ public class ControlActivity extends AppCompatActivity {
             RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz);
         }
 
+        @JavascriptInterface
+        public void radioWalk(String mode) {
+            RadioLink.get().adoptWalkMode(mode);
+        }
+
         /** 切到 2.4G 时把 MESH 那侧知道的姿态交接过来，见 RadioLink.adoptPosture。 */
         @JavascriptInterface
         public void radioAdoptPose(boolean standing) {

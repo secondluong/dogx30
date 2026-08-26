@@ -479,7 +479,7 @@ check('两条链路共用一份姿态，切档不走散',
 check('起立后不发轴，力控/起步才发',
       /private boolean axesApply\(\)/.test(radioJava) &&
       /if \(axesApply\(\)\) sendAxes/.test(radioJava) &&
-      /return torqued \|\| stepping/.test(radioJava) &&
+      /if \(!\(torqued \|\| stepping\)\) return false/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
       /axes_unlocked_ \|\| torqued_ \|\| stepping_/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
@@ -725,7 +725,10 @@ check('屏幕摇杆在 2.4G 下也能推',
       /scrAt = System\.currentTimeMillis\(\)/.test(radioJava) &&
       /SCREEN_AXIS_HOLD_MS/.test(radioJava) &&
       /radioVel/.test(radioBridge) &&
-      /radioVel\(/.test(appJs));
+      /radioVel\(/.test(appJs) &&
+      /void adoptWalkMode/.test(radioJava) &&
+      /radioWalk/.test(radioBridge) &&
+      /n.radioWalk/.test(appJs));
 // 版本从顶栏挪进设置面板：遥控时顶栏要盯别的东西。但不能不印 ——
 // 装包漏拷 assets/web 时页面是旧的，除了对版本戳没有别的办法看出来。
 check('版本不占顶栏，但在设置里查得到',

@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826h';
+const WEB_BUILD = '0826i';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -1281,7 +1281,11 @@ function paintStickChip() {
 // 云台在网关那侧，2.4G 够不到，所以摇杆指向云台时什么都不发。
 function sendRadioVel(c) {
   const n = window.X30Native;
-  if (!n || typeof n.radioVel !== 'function') return;
+  if (!n) return;
+  // 实体摇杆不走 radioVel，但力控/起步是网页记的，必须每拍交给本机，
+  // 否则 RadioLink 被遥测冲掉之后推杆发不出去。
+  if (typeof n.radioWalk === 'function') n.radioWalk(app.walkMode || '');
+  if (typeof n.radioVel !== 'function') return;
   if (g20Live() || stickTarget() === 'ptz') return;
   n.radioVel(c.fwd || 0, c.lat || 0, c.turn || 0);
 }
