@@ -33,8 +33,8 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 `standing` 是**可选**的姿态交接。为什么需要它：2.4G 直连时起立/趴下由遥控器
 直接打给运动主机，不经过网关；而运动主机在 RL 起立后遥测仍报 `basic_state=0`
 （坐下），网关从遥测里也认不出来。于是遥控端从 2.4G 切回 MESH 后，网关记的还是
-「坐着」—— 界面左下角显示「起立」，而且轴指令会被 `AxisCommandsApply` 吞掉，
-狗明明站着却推不动。带上这个键，网关就把那份记忆对上，**不会向狗发任何指令**。
+「坐着」—— 界面左下角显示「起立」。带上这个键，网关就把那份记忆对上，
+**不会向狗发任何指令**。轴仍然要等力控/起步，起立后摇杆必须空着。
 
 只在自己确实知道姿态时才带：遥控端发过起立/趴下，或者收到了狗的姿态遥测。
 不知道就不要带 —— 猜错的表现是按「趴下」时狗反而站起来。不带这个键的 `claim`
@@ -42,7 +42,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 
 采纳成功的标志是随后 `state` 里的 `rl_standing` 跟着变了，遥控端据此确认交接完成。
 **旧网关会静默忽略这个键**，`rl_standing` 不会变；这时遥控端按自己知道的姿态显示
-按钮（否则界面就在说谎），但轴仍会被网关吞掉，所以要提示操作员更新网关。
+按钮（否则界面就在说谎）。轴仍然要等力控/起步。
 
 ### 离散指令
 
@@ -50,7 +50,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 {"t":"cmd","name":"stand"}                  // 坐 <-> 站 切换
 {"t":"cmd","name":"unload"}                 // 卸力：急停后解除关节自锁
 {"t":"cmd","name":"torque"}                 // 进入力控站立
-{"t":"cmd","name":"step"}                   // 起步 <-> 停步 切换
+{"t":"cmd","name":"step"}                   // 进入踏步（已踏步不再切回去）
 {"t":"cmd","name":"height","value":"normal"} // normal|crawl
 {"t":"cmd","name":"mode","value":"manual"}   // manual|auto
 {"t":"cmd","name":"estop"}                   // 软急停，无需控制权
@@ -212,7 +212,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 连上立即下发一次。
 
 ```json
-{"t":"hello","version":"0.2.3","client_id":3,"control":false,"lease_ms":2000,
+{"t":"hello","version":"0.2.4","client_id":3,"control":false,"lease_ms":2000,
  "config":true,"pose_adopt":true}
 ```
 

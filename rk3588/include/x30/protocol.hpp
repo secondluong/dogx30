@@ -195,23 +195,27 @@ enum class BasicState : uint8_t {
   kEmergencyOrFall = 6,
 };
 
+// 坐↔站过渡。再发一次切换会打断正在走的轨迹，甚至当场反转。
+inline bool IsStandSitTransient(BasicState s) {
+  return s == BasicState::kSitToStand || s == BasicState::kStandToSit;
+}
+
 // 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。其余状态里发轴，
 // 实测会把原厂柔和的起身/趴下掐成猛起猛趴——力控站立的左摇杆 Y 是身高，
 // 50 Hz 发 0 等于一直在喊「把身子按到最低」。
 //
-// 例外：RL 起立后运动主机仍报 basic_state=0（坐下），但原厂手柄此时就能走。
-// 我们自己记得已经起立时，按可走处理，否则遥控台推杆网关直接把轴吞掉。
-// 起立中 / 坐下中 / 急停仍然不发。
-inline bool AxisCommandsApply(BasicState s, bool rl_standing = false) {
+// 正确顺序：起立后摇杆空着；点了力控才发姿态；点了起步才发速度。
+// RL 起立后主机仍报 basic_state=0（坐下），有时停在初始站立。这两种谎报
+// 不能单凭「记得起立」就放行，否则起立后推杆就走，和现场要求相反。
+// 以操作员点过力控/起步（armed）为准。起立中 / 坐下中 / 急停仍然不发。
+inline bool AxisCommandsApply(BasicState s, bool armed = false) {
   if (s == BasicState::kTorqueStanding || s == BasicState::kStepping) {
     return true;
   }
-  return rl_standing && s == BasicState::kSitting;
-}
-
-// 坐↔站过渡。再发一次切换会打断正在走的轨迹，甚至当场反转。
-inline bool IsStandSitTransient(BasicState s) {
-  return s == BasicState::kSitToStand || s == BasicState::kStandToSit;
+  if (IsStandSitTransient(s) || s == BasicState::kEmergencyOrFall) {
+    return false;
+  }
+  return armed;
 }
 
 // 运动主机自己报的站立态。不含「我们记得 RL 已起立、遥测仍报坐下」。

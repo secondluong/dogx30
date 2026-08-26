@@ -342,7 +342,7 @@ final class RadioLink {
     private final Runnable stepTask = new Runnable() {
         @Override
         public void run() {
-            if (!standing || emergency || stepping) return;
+            if (emergency || stepping) return;
             sendSimple(STEP);
             stepping = true;
         }
@@ -351,23 +351,29 @@ final class RadioLink {
     /**
      * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
      *
-     * 关键的那条是最后一句：我们起立发的是 0x21010223（RL 起立，原厂手柄同一条），
-     * 而运动主机在这之后**仍然报 basic_state=0**，可原厂手柄此时就能走。
-     * 以前这里只认 torqued || stepping，所以 2.4G 下非要先点「力控」「起步」才能走，
-     * 而 MESH 下不用 —— 同一只狗两套手感，是这一侧漏了这条规则。
+     * 正确顺序：起立后摇杆空着；点了力控才发姿态；点了起步才发速度。
+     * RL 起立后主机仍报 basic_state=0，有时停在初始站立。这两种谎报不能单凭
+     * 「记得起立」就放行。以本端点过力控/起步为准。
      *
      * 起立中 / 坐下中 / 急停一律不发：那几个状态里轴没有文档定义，实测会把原厂柔和的
      * 起身趴下掐成猛起猛趴（力控站立的左摇杆 Y 是身高，50 Hz 发 0 等于一直喊「压到最低」）。
      */
     private boolean axesApply() {
-        if (telemFresh()) {
-            if (telemState == ST_TORQUE_STANDING || telemState == ST_STEPPING) return true;
-            if (telemState == ST_SITTING) return standing;
+        if (emergency) return false;
+        if (lastStandAt != 0
+                && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS
+                && !torqued && !stepping) {
             return false;
         }
-        // 没遥测时退回本地那份。起立后要等身子稳住，否则同样会掐硬。
-        if (torqued || stepping) return true;
-        return standing && System.currentTimeMillis() - lastStandAt > AXIS_AFTER_STAND_MS;
+        if (telemFresh()) {
+            if (telemState == ST_TORQUE_STANDING || telemState == ST_STEPPING) return true;
+            if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT
+                    || telemState == ST_EMERGENCY) {
+                return false;
+            }
+            return torqued || stepping;
+        }
+        return torqued || stepping;
     }
 
     /**
@@ -455,7 +461,9 @@ final class RadioLink {
                 torqued = true;
                 break;
             case "step":
-                if (!standing) break;
+                if (emergency) break;
+                // RL 起立后遥测仍报趴着，standing 可能还是 false。起步意味着我们认为站着。
+                standing = true;
                 if (stepping) break; // 已经踏步就别再切，切一次等于停步
                 if (!torqued) {
                     sendSimple(TORQUE);
@@ -1086,7 +1094,7 @@ final class RadioLink {
         float lx = 0f;
         float rx = 0f;
         // 通道要先确认是活的。上电时通道常是全 0，按 axis() 的换算 (0-1500)/500
-        // 会被读成满量程后退 —— 起立后就能发轴之后，这一脚会直接踹出去。
+        // 会被读成满量程后退。力控/起步之后才发轴，这一脚会直接踹出去。
         if (ch != null && ch.length > 0 && rcLive(ch)) {
             ly = axis(ch, 2, false);
             lx = -axis(ch, 3, true);
@@ -1200,17 +1208,23 @@ final class RadioLink {
         if (telemUpright()) {
             standing = true;
             emergency = false;
-            // 力控站立 / 踏步是主机说的，比本地这两个标志准。切换指令是「按当前状态
-            // 取反」，标志错了会把力控点成位控、把起步点成停步。
-            torqued = telemState != ST_INITIAL_STANDING;
-            stepping = telemState == ST_STEPPING;
+            // 力控站立 / 踏步是主机说的，比本地这两个标志准。但初始站立不要
+            // 把刚点的力控/起步清掉：RL 起立后常停在 2，清了再按起步等于停步。
+            if (telemState == ST_STEPPING) {
+                torqued = true;
+                stepping = true;
+            } else if (telemState == ST_TORQUE_STANDING && !stepping) {
+                torqued = true;
+            }
         } else if (telemState == ST_EMERGENCY) {
             emergency = true;
             standing = false;
             clearWalk();
         } else if (telemState == ST_SITTING) {
-            // RL 起立后主机仍报坐下，这里分不清真趴着还是那种情况，不动 standing。
+            // RL 起立后主机仍报坐下。分不清真趴着还是那种谎报，不动 standing，
+            // 更不能清力控/起步：清了按钮灭掉，人再按一次起步就等于停步。
             emergency = false;
+        } else if (telemState == ST_STAND_TO_SIT) {
             clearWalk();
         }
     }

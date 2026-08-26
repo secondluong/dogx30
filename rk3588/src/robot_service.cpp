@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.2.3";
+constexpr const char* kVersion = "0.2.4";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。

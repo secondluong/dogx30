@@ -229,7 +229,7 @@ def pose_handoff_scenario(host, port):
 
     2.4G 直连时起立不经过网关，而运动主机 RL 起立后遥测仍报 basic_state=0，
     网关从遥测里也认不出来。不交接的现场表现是：切回 MESH 后左下角还是「起立」，
-    再推摇杆狗也不动 —— 轴被 AxisCommandsApply 当成「趴着」吞掉了。
+    左下角还是「起立」。轴仍然要等力控/起步，起立后摇杆必须空着。
     """
     print("\n== 姿态交接 ==")
     a = WsClient(host, port)
@@ -241,8 +241,7 @@ def pose_handoff_scenario(host, port):
     a.wait_for("control", predicate=lambda m: m.get("granted") is True)
     st = a.wait_for("state", timeout=5,
                     predicate=lambda m: m.get("rl_standing") is True)
-    # rl_standing 为真同时也是「轴会被转发」的判据（见 motion_client 的
-    # AxisCommandsApply 调用），所以这一条也就是「交接完不必再点力控/起步」。
+    # rl_standing 只表示「记得站着」，用来画按钮和放行步态。轴还要等力控/起步。
     check("claim 带 standing 后网关认为狗站着", st.get("rl_standing") is True)
     check("遥测仍报坐下也不改口", st.get("basic_state") == 0, st.get("basic_state"))
 

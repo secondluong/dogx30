@@ -120,7 +120,7 @@ class MotionClient {
   // 为什么本机会不知道：2.4G 直连时起立/趴下由遥控器直接打给运动主机，不经过这里；
   // 而运动主机在 RL 起立后仍报 basic_state=0（见 protocol.hpp），遥测也认不出来。
   // 于是遥控端从 2.4G 切回 MESH 时，本机记的是「坐着」，按钮显示「起立」，
-  // 而且轴会被 AxisCommandsApply 吞掉 —— 狗明明站着却推不动。
+  // 按钮会显示「起立」。轴仍然要等力控/起步，起立后摇杆必须空着。
   // 这条就是让那份记忆对上。只有拿到控制权的客户端能调。
   void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
@@ -191,7 +191,7 @@ class MotionClient {
   int32_t axis_right_y_ = 0;
   std::chrono::steady_clock::time_point axis_deadline_{};
   // 发过起立/趴下之后到这个时刻之前一律不发轴。遥测有几十毫秒滞后，那段时间里
-  // basic_state 还报坐下，AxisCommandsApply 按「RL 已起立」放行，50 Hz 的身高=0
+  // basic_state 还报坐下，若此时已点力控，50 Hz 的身高=0
   // 正好打在起身轨迹的头上，把原厂柔和的起身掐成猛起。
   std::chrono::steady_clock::time_point axis_hold_until_{};
 
@@ -210,8 +210,8 @@ class MotionClient {
   enum class LastStandSit { kUnknown, kStood, kSat };
   LastStandSit last_stand_sit_{LastStandSit::kUnknown};
 
-  // 操作员点了力控/起步。RL 起立后遥测仍报 0，AxisCommandsApply 会把轴吞掉；
-  // 网关重启也会丢掉 last_stand_sit_。这条记下「按可走发轴」。趴下/急停清掉。
+  // 操作员点了力控/起步。RL 起立后遥测仍报 0，单凭遥测会把轴吞掉；
+  // 这条记下「可以发轴」。起立本身不置位。趴下/急停清掉。
   bool axes_unlocked_ = false;
 
   // 没遥测时记力控/踏步踩到哪了。踏步是切换指令，重发会停步。

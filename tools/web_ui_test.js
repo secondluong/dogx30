@@ -474,23 +474,27 @@ check('两条链路共用一份姿态，切档不走散',
       /app\.basicState = basic/.test(appJs) &&
       /app\.emergencyLocked = locked/.test(appJs) &&
       /STATE_TORQUE_STANDING/.test(appJs));
-// 我们起立发的是 0x21010223（RL 起立，原厂手柄同一条），运动主机在这之后仍报
-// basic_state=0，而原厂手柄此时就能走 —— 网关那侧的 AxisCommandsApply 早有这条，
-// 2.4G 这侧漏了，于是非要先点力控、起步。两侧规则必须一致。
-check('起立后就能走，不用先点力控起步',
+// 正确顺序：起立后摇杆空着，力控调姿态，起步才走。RL 起立后遥测仍报 0，
+// 不能单凭「记得起立」就放行，否则起立后推杆就走。
+check('起立后不发轴，力控/起步才发',
       /private boolean axesApply\(\)/.test(radioJava) &&
       /if \(axesApply\(\)\) sendAxes/.test(radioJava) &&
-      /ST_TORQUE_STANDING \|\| telemState == ST_STEPPING/.test(radioJava) &&
+      /return torqued \|\| stepping/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
-      !/if \(torqued \|\| stepping\) \{/.test(radioJava));
+      /axes_unlocked_ \|\| torqued_ \|\| stepping_/.test(motionCpp));
+// 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
+check('坐下遥测不清掉刚点的力控起步',
+      /更不能清力控\/起步/.test(radioJava) &&
+      /本端刚点的力控\/起步不要灭/.test(appJs) &&
+      /刚点的起步不要被还没改口的「力控站立」灭掉/.test(appJs));
 // 起立中 / 坐下中 / 急停仍然不发轴：那几个状态下轴没有文档定义，
 // 实测会把原厂柔和的起身趴下掐成猛起猛趴。
 check('过渡和急停期间不发轴',
       /ST_SIT_TO_STAND/.test(radioJava) &&
       /ST_STAND_TO_SIT/.test(radioJava) &&
       /ST_EMERGENCY/.test(radioJava));
-// 上电时通道常是全 0，(0-1500)/500 会被读成满量程后退。以前要先点起步才发轴，
-// 现在起立后就发，这一脚会直接踹出去。
+// 上电时通道常是全 0，(0-1500)/500 会被读成满量程后退。力控/起步之后才发轴，
+// 这一脚会直接踹出去。
 check('通道没活起来之前不当摇杆量用',
       /ch\.length > 0 && rcLive\(ch\)/.test(radioJava));
 // 桥接方法一直在，实现却是个空壳：2.4G 下推屏幕摇杆没有任何反应。
@@ -713,6 +717,9 @@ var mismatch = gaitNums.filter(function (n) { return cppGaits[n] !== jsGaits[n];
 check('两条链路对步态编码的理解一致',
       gaitNums.length >= 9 && mismatch.length === 0,
       gaitNums.length + ' 个，不一致: ' + mismatch.join(', '));
+check('轴放行看力控起步，不看记得起立',
+      /bool AxisCommandsApply\(BasicState s, bool armed/.test(protoHpp) &&
+      /return armed;/.test(protoHpp));
 check('屏幕摇杆在 2.4G 下也能推',
       /void setScreenAxes\(float fwd, float lat, float turn\)/.test(radioJava) &&
       /scrAt = System\.currentTimeMillis\(\)/.test(radioJava) &&

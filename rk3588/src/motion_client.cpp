@@ -145,7 +145,7 @@ void MotionClient::TxLoop() {
       if (state_.telemetry_alive) {
         send_axes = AxisCommandsApply(
             state_.basic_state,
-            last_stand_sit_ == LastStandSit::kStood || axes_unlocked_);
+            axes_unlocked_ || torqued_ || stepping_);
       }
     }
 
@@ -491,7 +491,7 @@ void MotionClient::AdoptPosture(bool standing) {
   if (last_stand_sit_ == next) return;
   last_stand_sit_ = next;
   state_.rl_standing = standing;
-  // 站立不在这里解锁轴：rl_standing 一为真，AxisCommandsApply 本身就放行。
+  // 站立不在这里解锁轴：起立后摇杆必须空着，力控/起步才 armed。
   // 反过来趴下必须锁回去，否则上一次力控留下的解锁会让趴着的狗也收轴。
   if (!standing) {
     axes_unlocked_ = false;
@@ -524,8 +524,9 @@ void MotionClient::EnterTorqueStand() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     step_at_ = {};
-    stop_step = s.telemetry_alive ? s.basic_state == BasicState::kStepping
-                                  : stepping_;
+    // 遥测常停在坐下。本端刚起步也要能停步，单看遥测会把力控发成空指令。
+    stop_step = stepping_ ||
+                (s.telemetry_alive && s.basic_state == BasicState::kStepping);
     stepping_ = false;
     torqued_ = true;
     axes_unlocked_ = true;
@@ -548,16 +549,17 @@ void MotionClient::EnterStepping() {
   bool need_torque = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    already = s.telemetry_alive ? s.basic_state == BasicState::kStepping
-                                : stepping_;
+    // 遥测常停在坐下。本端已踏步或正在补力控，再按一次等于停步。
+    already = stepping_ || step_at_ != Clock::time_point{} ||
+              (s.telemetry_alive && s.basic_state == BasicState::kStepping);
     if (already) {
       stepping_ = true;
       axes_unlocked_ = true;
       return;
     }
-    const bool in_torque = s.telemetry_alive
-                               ? s.basic_state == BasicState::kTorqueStanding
-                               : torqued_;
+    const bool in_torque =
+        torqued_ ||
+        (s.telemetry_alive && s.basic_state == BasicState::kTorqueStanding);
     need_torque = !in_torque;
     torqued_ = true;
     axes_unlocked_ = true;

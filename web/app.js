@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826g';
+const WEB_BUILD = '0826h';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -479,8 +479,14 @@ function syncRadioStanding(st0) {
   if (basic >= 0 && basic !== app.basicState) {
     app.basicState = basic;
     if (basic === STATE_STEPPING) app.walkMode = 'step';
-    else if (basic === STATE_TORQUE_STANDING) app.walkMode = 'torque';
-    else app.walkMode = null;   // 其余状态都不在力控/踏步里，别留着旧的亮着
+    else if (basic === STATE_TORQUE_STANDING && app.walkMode !== 'step') {
+      // 刚点的起步不要被还没改口的「力控站立」灭掉。
+      app.walkMode = 'torque';
+    } else if (basic === STATE_EMERGENCY || basic === STATE_STAND_TO_SIT) {
+      app.walkMode = null;
+    }
+    // 坐下 / 初始站立：RL 起立后常停在这里。本端刚点的力控/起步不要灭，
+    // 灭了按钮暗掉，人再按一次起步就等于停步，摇杆也跟着没了。
     changed = true;
   }
   if (basic < 0 && app.basicState !== 0) {
@@ -1143,7 +1149,7 @@ function updateStickAvailability() {
   const usable = ptz
     ? true
     : radioDirect()
-      ? (isStandingUi() && !app.emergencyLocked)
+      ? (isStandingUi() && !app.emergencyLocked && controlChannel() !== null)
       : (app.hasControl && app.alive && controlChannel() !== null &&
          !app.lioAligning);
   document.querySelectorAll('.stick').forEach((s) => {
