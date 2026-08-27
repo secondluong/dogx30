@@ -556,10 +556,10 @@
           }
         } else if (key === 'torque' || key === 'step') {
           if (key === 'step') {
-            if (app.noteWalkCmd) app.noteWalkCmd('step');
-            var scmd = app.walkMode === 'step' ? 'step_on' : 'step_off';
+            var moving = app.motionState === 'walking' || app.motionState === 'starting';
+            var scmd = moving ? 'step_off' : 'step_on';
             if (app.nativeRadioCmd) app.nativeRadioCmd(scmd);
-            say(app.walkMode === 'step' ? '起步' : '停步');
+            say(moving ? '停步' : '起步');
             return;
           }
           if (radioPose(key)) {
@@ -614,14 +614,14 @@
           say('LIO 对准中');
           return;
         }
-        if (app.noteWalkCmd) app.noteWalkCmd(key);
         if (key === 'step') {
-          send({ t: 'cmd', name: 'step', value: app.walkMode === 'step' ? 'on' : 'off' });
+          var walking = app.motionState === 'walking' || app.motionState === 'starting';
+          send({ t: 'cmd', name: 'step', value: walking ? 'off' : 'on' });
         } else {
           send({ t: 'cmd', name: key });
         }
         say(key === 'torque' ? '力控'
-          : (app.walkMode === 'step' ? '起步' : '停步'));
+          : (walking ? '停步' : '起步'));
         return;
       }
       if (key === 'gait_up' || key === 'gait_dn') {
@@ -633,7 +633,8 @@
         // 和高亮规则一样：先按切的显示，网关回结果再确认或退回。
         if (app.markGait) app.markGait(target);
         send({ t: 'cmd', name: 'gait', value: target,
-               stepping: app.walkMode === 'step' });
+               stepping: app.motionState === 'walking' ||
+                         app.motionState === 'starting' });
         say(gaitName(target));
       }
     }

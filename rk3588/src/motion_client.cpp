@@ -160,7 +160,6 @@ void MotionClient::TxLoop() {
     if (fire_step) {
       SendSimple(cmd::kSteppingToggle);
       std::printf("[运动] 踏步切换 → 起步 0x21010201（力控之后）\n");
-      FlushQueuedGait();
     }
     if (fire_sit) {
       SendSimple(cmd::kRlSitDown);
@@ -191,6 +190,36 @@ void MotionClient::TxLoop() {
     if (fire_torque) {
       SendSimple(cmd::kTorqueStand);
       std::printf("[运动] 力控补发 0x2101020A\n");
+    }
+
+    // 用户可以在力控/停步时先选配置，但只有狗主机确认进入踏步态后才执行。
+    // 不能紧跟踏步切换码发送：主机还在过渡时会静默丢掉步态。
+    bool flush_profile = false;
+    bool flush_height = false;
+    HeightGear queued_height = HeightGear::kNormal;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      flush_profile = step_sent_ &&
+                      state_.basic_state == BasicState::kStepping;
+      const bool gait_ready =
+          !height_waits_for_gait_ || state_.gait == height_after_gait_;
+      if (flush_profile && queued_height_set_ && gait_ready) {
+        flush_height = true;
+        queued_height = queued_height_;
+        queued_height_set_ = false;
+        height_waits_for_gait_ = false;
+      }
+    }
+    if (flush_profile) {
+      // 先切步态再切身高；匍匐档下主机会拒绝越野等步态码。
+      FlushQueuedGait();
+      if (flush_height) {
+        SendSimple(cmd::kBodyHeight, static_cast<uint32_t>(queued_height));
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        height_cmd_ = queued_height;
+        state_.body_height_gear =
+            queued_height == HeightGear::kCrawl ? -1 : 0;
+      }
     }
 
     if (send_axes) {
@@ -542,7 +571,10 @@ void MotionClient::StandUp() {
     axes_unlocked_ = false;
     torqued_ = false;
     stepping_ = false;
+    motion_phase_ = MotionPhase::kStopped;
     queued_gait_set_ = false;
+    queued_height_set_ = false;
+    height_waits_for_gait_ = false;
     step_sent_ = false;
     step_at_ = {};
     sit_at_ = {};
@@ -600,7 +632,10 @@ void MotionClient::SitDown() {
     axes_unlocked_ = false;
     torqued_ = false;
     stepping_ = false;
+    motion_phase_ = MotionPhase::kUnavailable;
     queued_gait_set_ = false;
+    queued_height_set_ = false;
+    height_waits_for_gait_ = false;
     step_sent_ = false;
     step_at_ = {};
     if (leave_step) {
@@ -631,7 +666,10 @@ void MotionClient::AdoptPosture(bool standing) {
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;
+  motion_phase_ = standing ? MotionPhase::kStopped : MotionPhase::kUnavailable;
   queued_gait_set_ = false;
+  queued_height_set_ = false;
+  height_waits_for_gait_ = false;
   step_sent_ = false;
   step_at_ = {};
   sit_at_ = {};
@@ -652,7 +690,10 @@ void MotionClient::UnloadForce() {
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;
+  motion_phase_ = MotionPhase::kUnavailable;
   queued_gait_set_ = false;
+  queued_height_set_ = false;
+  height_waits_for_gait_ = false;
   step_sent_ = false;
   step_at_ = {};
   sit_at_ = {};
@@ -660,6 +701,11 @@ void MotionClient::UnloadForce() {
 }
 
 void MotionClient::EnterTorqueStand() {
+  const MotionView view = View();
+  if (std::strcmp(view.posture, "standing") != 0) {
+    std::printf("[运动] 忽略力控：当前姿态为 %s\n", view.posture);
+    return;
+  }
   bool leave_step = false;
   bool need_stand = false;
   {
@@ -677,6 +723,7 @@ void MotionClient::EnterTorqueStand() {
     step_sent_ = false;
     stepping_ = false;
     torqued_ = true;
+    motion_phase_ = MotionPhase::kTorque;
     axes_unlocked_ = true;
     sit_at_ = {};
     torque_retries_ = need_stand ? 8 : 4;
@@ -700,6 +747,12 @@ void MotionClient::EnterTorqueStand() {
 }
 
 void MotionClient::StartStepping() {
+  const MotionView view = View();
+  if (view.phase != MotionPhase::kStopped &&
+      view.phase != MotionPhase::kTorque) {
+    std::printf("[运动] 忽略起步：当前规范状态为 %s\n", view.motion);
+    return;
+  }
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (stepping_ && (step_sent_ || step_at_ != Clock::time_point{})) {
@@ -710,6 +763,7 @@ void MotionClient::StartStepping() {
     torqued_ = true;
     axes_unlocked_ = true;
     step_sent_ = false;
+    motion_phase_ = MotionPhase::kStarting;
     step_at_ = Clock::now() + std::chrono::milliseconds(500);
   }
   SendSimple(cmd::kTorqueStand);
@@ -721,9 +775,11 @@ void MotionClient::StopStepping() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     const bool pending = step_at_ != Clock::time_point{} && !step_sent_;
-    send_step = step_sent_ && !pending;
+    send_step = (step_sent_ || state_.basic_state == BasicState::kStepping) &&
+                !pending;
     stepping_ = false;
     torqued_ = true;
+    motion_phase_ = send_step ? MotionPhase::kStopping : MotionPhase::kStopped;
     axes_unlocked_ = true;
     step_at_ = {};
     step_sent_ = false;
@@ -785,15 +841,97 @@ void MotionClient::StopUnwantedMarch() {
 
 bool MotionClient::UserStepping() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  return stepping_;
+  return stepping_ || state_.basic_state == BasicState::kStepping;
+}
+
+MotionView MotionClient::View() const {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  MotionView out;
+  out.state_valid = state_.telemetry_alive;
+  const bool locked = JointsLocked(state_.basic_state, state_.emergency_source);
+  const bool remembered_up = last_stand_sit_ == LastStandSit::kStood;
+  const bool upright = TelemUpright(state_.basic_state) ||
+                       (remembered_up &&
+                        state_.basic_state == BasicState::kSitting);
+
+  if (locked) out.posture = "locked";
+  else if (state_.basic_state == BasicState::kSitToStand) out.posture = "rising";
+  else if (state_.basic_state == BasicState::kStandToSit) out.posture = "falling";
+  else out.posture = upright ? "standing" : "prone";
+
+  if (locked || !upright || IsStandSitTransient(state_.basic_state)) {
+    out.phase = MotionPhase::kUnavailable;
+    out.motion = "unavailable";
+    return out;
+  }
+
+  if (motion_phase_ == MotionPhase::kStopping &&
+      state_.basic_state == BasicState::kStepping) {
+    out.phase = MotionPhase::kStopping;
+    out.motion = "stopping";
+  } else if (state_.basic_state == BasicState::kStepping) {
+    out.phase = MotionPhase::kWalking;
+    out.motion = "walking";
+  } else if (motion_phase_ == MotionPhase::kStarting) {
+    out.phase = MotionPhase::kStarting;
+    out.motion = "starting";
+  } else if (motion_phase_ == MotionPhase::kTorque) {
+    out.phase = MotionPhase::kTorque;
+    out.motion = "torque";
+  } else {
+    out.phase = MotionPhase::kStopped;
+    out.motion = "stopped";
+  }
+
+  if (out.state_valid && state_.basic_state == BasicState::kStepping &&
+      out.phase == MotionPhase::kWalking) {
+    out.axis_mode = "vel";
+  } else if (out.state_valid &&
+             state_.basic_state == BasicState::kTorqueStanding &&
+             out.phase == MotionPhase::kTorque) {
+    out.axis_mode = "pose";
+  }
+  return out;
 }
 
 void MotionClient::SetBodyHeight(HeightGear gear) {
+  const MotionView view = View();
+  if (view.phase != MotionPhase::kWalking) {
+    QueueBodyHeight(gear);
+    return;
+  }
   SendSimple(cmd::kBodyHeight, static_cast<uint32_t>(gear));
   std::lock_guard<std::mutex> lock(state_mutex_);
   height_cmd_ = gear;
   // 遥测身高只在变化时报。发过就先改记忆，免得控制台下一帧又把打钩顶回去。
   state_.body_height_gear = (gear == HeightGear::kCrawl) ? -1 : 0;
+}
+
+void MotionClient::QueueBodyHeight(HeightGear gear) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  queued_height_ = gear;
+  queued_height_set_ = true;
+  std::printf("[运动] 身高记下 %s（起步后发给主机）\n",
+              gear == HeightGear::kCrawl ? "匍匐" : "正常");
+}
+
+void MotionClient::ExpectGaitBeforeHeight(Gait gait) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  height_waits_for_gait_ = true;
+  height_after_gait_ = gait;
+}
+
+void MotionClient::ApplyQueuedNormalHeightBeforeGait() {
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!queued_height_set_ || queued_height_ != HeightGear::kNormal) return;
+    queued_height_set_ = false;
+    height_waits_for_gait_ = false;
+    height_cmd_ = HeightGear::kNormal;
+    state_.body_height_gear = 0;
+  }
+  SendSimple(cmd::kBodyHeight, static_cast<uint32_t>(HeightGear::kNormal));
+  std::printf("[运动] 步态切换前先恢复正常身高\n");
 }
 
 void MotionClient::SetControlMode(ControlMode mode) {
@@ -820,7 +958,10 @@ void MotionClient::SoftEmergencyStop() {
   axes_unlocked_ = false;
   torqued_ = false;
   stepping_ = false;
+  motion_phase_ = MotionPhase::kUnavailable;
   queued_gait_set_ = false;
+  queued_height_set_ = false;
+  height_waits_for_gait_ = false;
   step_sent_ = false;
   step_at_ = {};
   sit_at_ = {};
@@ -890,6 +1031,10 @@ void MotionClient::SetCommanding(bool on) {
     axes_unlocked_ = false;
     torqued_ = false;
     stepping_ = false;
+    motion_phase_ = MotionPhase::kUnavailable;
+    queued_gait_set_ = false;
+    queued_height_set_ = false;
+    height_waits_for_gait_ = false;
     step_sent_ = false;
     step_at_ = {};
     std::printf("[运动] 本端松开：停止向运动主机发心跳，原厂手柄可单独接管\n");

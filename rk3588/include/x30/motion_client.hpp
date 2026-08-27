@@ -92,6 +92,25 @@ struct RobotState {
   bool rl_standing = false;
 };
 
+// 面向遥控端的规范化运动状态。BasicState 是狗主机的原始遥测；这里把
+// RL 起立谎报坐下和踏步切换的在途阶段收口在控制层，UI 不再自行猜测。
+enum class MotionPhase {
+  kUnavailable,
+  kStopped,
+  kTorque,
+  kStarting,
+  kWalking,
+  kStopping,
+};
+
+struct MotionView {
+  const char* posture = "unknown";  // unknown|prone|rising|standing|falling|locked
+  MotionPhase phase = MotionPhase::kUnavailable;
+  const char* motion = "unavailable";
+  const char* axis_mode = "none";   // none|pose|vel
+  bool state_valid = false;
+};
+
 // 把 error_state 位域翻译成人可读的告警列表，无告警时返回空串。
 std::string DescribeErrors(uint32_t error_state);
 
@@ -137,7 +156,11 @@ class MotionClient {
   // 不是人按的起步：发力控把踏步停掉。遥测常把踏步报成坐下，不能只看 basic_state。
   void StopUnwantedMarch();
   bool UserStepping() const;
+  MotionView View() const;
   void SetBodyHeight(HeightGear gear);
+  void QueueBodyHeight(HeightGear gear);
+  void ExpectGaitBeforeHeight(Gait gait);
+  void ApplyQueuedNormalHeightBeforeGait();
   void SetControlMode(ControlMode mode);
   void SoftEmergencyStop();
   void SaveData(bool legacy_firmware = false);
@@ -231,7 +254,12 @@ class MotionClient {
   bool stepping_{false};
   bool queued_gait_set_{false};
   Gait queued_gait_{Gait::kWalk};
+  bool queued_height_set_{false};
+  HeightGear queued_height_{HeightGear::kNormal};
+  bool height_waits_for_gait_{false};
+  Gait height_after_gait_{Gait::kWalk};
   bool step_sent_{false};
+  MotionPhase motion_phase_{MotionPhase::kUnavailable};
   // 力控刚发就跟一条踏步，主机还在过渡里会丢掉。TxLoop 到点再发。
   std::chrono::steady_clock::time_point step_at_{};
   // 踏步里趴下会被主机丢掉。先停步，到点再发 RL 趴下。

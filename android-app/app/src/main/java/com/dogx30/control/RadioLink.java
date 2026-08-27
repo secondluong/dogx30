@@ -52,6 +52,8 @@ final class RadioLink {
     private static final String TAG = "RadioLink";
     private static final String ROBOT_IP = "192.168.1.103";
     private static final int ROBOT_PORT = 43893;
+    private static final String PERCEPTION_IP = "192.168.1.105";
+    private static final int PERCEPTION_PORT = 43899;
     private static final int LOCAL_PORT = 43897;
     private static final int TICK_MS = 20;
     private static final int HB_EVERY = 10;
@@ -106,6 +108,8 @@ final class RadioLink {
     private static final int MODE_MANUAL = 0x21010C02;
     private static final int MODE_AUTO = 0x21010C03;
     private static final int HEIGHT = 0x21010406;
+    private static final int HEIGHT_MAP_MODE = 0x3101EE01;
+    private static final int STEP_Z_MAX = 0x3100EE04;
     private static final int AXIS_LY = 0x21010130;
     private static final int AXIS_LX = 0x21010131;
     private static final int AXIS_RX = 0x21010135;
@@ -145,8 +149,14 @@ final class RadioLink {
     private boolean poseKnown;
     private boolean torqued;
     private boolean stepping;
+    /** 停步与力控在主机上都可能落到状态3；控制层保留二者的操作语义。 */
+    private boolean stopped;
     private boolean stepPending;
     private boolean stepSent;
+    @Nullable private Integer pendingHeight;
+    private int pendingStairStyle = 3;
+    private boolean gaitApplying;
+    private int gaitExpected = -1;
     /** effAxes 的返回缓冲。每 tick 都要算一次，没必要每次新建。 */
     private final float[] axBuf = new float[4];
     private boolean emergency;
@@ -168,6 +178,7 @@ final class RadioLink {
     @Nullable private Context appCtx;
     @Nullable private DatagramSocket udp;
     @Nullable private InetAddress robotAddr;
+    @Nullable private InetAddress perceptionAddr;
     @Nullable private InetAddress boundLocal;
     @Nullable private Network airNet;
     @Nullable private Pipeline udpPipe;
@@ -306,6 +317,11 @@ final class RadioLink {
             o.put("rx", rxOk);
             o.put("cmd", lastCmd);
             o.put("standing", isStanding());
+            o.put("stateSource", "radio");
+            o.put("stateValid", telemFresh());
+            o.put("posture", postureState());
+            o.put("motion", motionState());
+            o.put("axisMode", axisMode());
             // 狗自己报的姿态与步态。没有遥测时给 -1，网页那侧就不会拿它盖掉
             // 网关的读数（两条链路共用 app.basicState）。
             o.put("basic", telemFresh() && telemState >= 0 ? telemState : -1);
@@ -340,6 +356,7 @@ final class RadioLink {
         lastStandAt = 0;
         // 力控/踏步没人告知，先按最保守的算；有遥测时下一帧就纠回来。
         clearWalk();
+        stopped = up;
     }
 
     /** 姿态到底是知道的还是猜的。猜的就别去改网关那份记忆。 */
@@ -371,16 +388,53 @@ final class RadioLink {
         if ("step".equals(mode)) {
             torqued = true;
             stepping = true;
+            stopped = false;
         } else if ("torque".equals(mode)) {
             torqued = true;
             stepping = false;
+            stopped = false;
+        } else if ("stopped".equals(mode)) {
+            torqued = true;
+            stepping = false;
+            stopped = true;
         }
     }
 
     private void clearWalk() {
         torqued = false;
         stepping = false;
+        stopped = false;
+        pendingGait = "";
+        pendingHeight = null;
+        gaitApplying = false;
+        gaitExpected = -1;
         cancelPendingStep();
+    }
+
+    private String postureState() {
+        if (telemLocked()) return "locked";
+        if (telemFresh() && telemState == ST_SIT_TO_STAND) return "rising";
+        if (telemFresh() && telemState == ST_STAND_TO_SIT) return "falling";
+        return isStanding() ? "standing" : "prone";
+    }
+
+    private String motionState() {
+        if (!"standing".equals(postureState())) return "unavailable";
+        if (stepPending) return "starting";
+        if (telemFresh() && telemState == ST_STEPPING) {
+            return stepping ? "walking" : "stopping";
+        }
+        if (stepping && stepSent) return "starting";
+        if (torqued && !stopped) return "torque";
+        return "stopped";
+    }
+
+    private String axisMode() {
+        if (!telemFresh()) return "none";
+        String motion = motionState();
+        if ("walking".equals(motion) && telemState == ST_STEPPING) return "vel";
+        if ("torque".equals(motion) && telemState == ST_TORQUE_STANDING) return "pose";
+        return "none";
     }
 
     private void cancelPendingStep() {
@@ -394,15 +448,17 @@ final class RadioLink {
         stepPending = false;
         stepSent = true;
         sendSimple(STEP);
-        flushPendingGait();
     }
 
     private void startStepping() {
         if (emergency) return;
+        String motion = motionState();
+        if (!"stopped".equals(motion) && !"torque".equals(motion)) return;
         if (stepping && (stepSent || stepPending)) return;
         sendSimple(TORQUE);
         torqued = true;
         stepping = true;
+        stopped = false;
         standing = true;
         stepSent = false;
         stepPending = true;
@@ -412,10 +468,11 @@ final class RadioLink {
     private void stopStepping() {
         if (emergency) return;
         boolean cancelOnly = stepPending && !stepSent;
-        boolean sent = stepSent;
+        boolean sent = stepSent || (telemFresh() && telemState == ST_STEPPING);
         cancelPendingStep();
         stepping = false;
         torqued = true;
+        stopped = true;
         standing = true;
         lastStandAt = System.currentTimeMillis();
         sendAxes(new float[]{0f, 0f, 0f, 0f});
@@ -461,6 +518,7 @@ final class RadioLink {
             onRadioDelayed(standTask, STAND_AFTER_UNLOAD_MS);
             return;
         }
+        if (!"prone".equals(postureState())) return;
         standNow();
     }
 
@@ -476,6 +534,7 @@ final class RadioLink {
         standing = true;
         lastStandAt = System.currentTimeMillis();
         clearWalk();
+        stopped = true;
     }
 
     private void onRadioDelayed(Runnable r, long delayMs) {
@@ -504,6 +563,7 @@ final class RadioLink {
                 break;
             case "sit":
             case "sit_down":
+                if (!"standing".equals(postureState())) break;
                 cancelPendingStand();
                 pendingGait = "";
                 if (telemNavMode == 1) sendSimple(MODE_MANUAL);
@@ -524,6 +584,7 @@ final class RadioLink {
                 standUp();
                 break;
             case "unload":
+                if (!"locked".equals(postureState())) break;
                 cancelPendingStand();
                 sendSimple(UNLOAD);
                 emergency = false;
@@ -531,17 +592,14 @@ final class RadioLink {
                 clearWalk();
                 break;
             case "torque":
-                if (telemFresh() && telemState == ST_SITTING && !standing) {
-                    sendSimple(STAND);
-                    sendSimple(STAND);
-                    standing = true;
-                }
+                if (!"standing".equals(postureState())) break;
                 if (stepping && stepSent) sendSimple(STEP);
                 cancelPendingStep();
                 sendSimple(TORQUE);
                 sendSimple(TORQUE);
                 torqued = true;
                 stepping = false;
+                stopped = false;
                 lastStandAt = System.currentTimeMillis();
                 break;
             case "step_on":
@@ -569,14 +627,19 @@ final class RadioLink {
                 sendSimple(MODE_AUTO);
                 break;
             case "height_low":
-                sendSimple(HEIGHT, 0);
-                telemHeight = -1;
-                telemHeightSeen = true;
+                setOrQueueHeight(0);
                 break;
             case "height_normal":
-                sendSimple(HEIGHT, 2);
-                telemHeight = 0;
-                telemHeightSeen = true;
+                setOrQueueHeight(2);
+                break;
+            case "surface_solid":
+                pendingStairStyle = 3;
+                break;
+            case "surface_grating":
+                pendingStairStyle = 4;
+                break;
+            case "surface_noriser":
+                pendingStairStyle = 5;
                 break;
             default:
                 if (name.startsWith("gait_")) {
@@ -599,21 +662,73 @@ final class RadioLink {
         }
         // 没在人按的起步里就只记下。不要等遥测报踏步：RL 起立后常年报 0，
         // 等它等于静音、低姿永远发不出去。
-        if (!isStairGait(gait) && !stepping) {
+        if (!"walking".equals(motionState())) {
             pendingGait = gait;
             lastGaitSent = gait;
             return;
         }
-        sendSimple(code, 0);
+        applyGait(gait, code);
         pendingGait = "";
         lastGaitSent = gait;
     }
 
     private void flushPendingGait() {
-        if (pendingGait.isEmpty() || isStairGait(pendingGait)) return;
+        if (pendingGait.isEmpty() || !"walking".equals(motionState())) return;
+        String gait = pendingGait;
         int code = gaitCode(pendingGait);
-        if (code != 0) sendSimple(code, 0);
         pendingGait = "";
+        if (code != 0) {
+            if (pendingHeight != null && pendingHeight.intValue() == 2) {
+                pendingHeight = null;
+                sendSimple(HEIGHT, 2);
+                telemHeight = 0;
+                telemHeightSeen = true;
+            }
+            applyGait(gait, code);
+        }
+    }
+
+    private void applyGait(String gait, int code) {
+        gaitApplying = true;
+        gaitExpected = gaitValue(gait);
+        if (!isStairGait(gait)) {
+            sendSimple(code, 0);
+            return;
+        }
+        sendSimple(MODE_AUTO);
+        sendTerrain(STEP_Z_MAX, 2);
+        if ("stair".equals(gait)) {
+            sendTerrain(HEIGHT_MAP_MODE, pendingStairStyle);
+            onRadioDelayed(() -> sendSimple(code, 0), 200);
+            return;
+        }
+        sendTerrain(HEIGHT_MAP_MODE, 18);
+        onRadioDelayed(() -> {
+            sendTerrain(HEIGHT_MAP_MODE, 20);
+            onRadioDelayed(() -> sendSimple(code, 0), 200);
+        }, 300);
+    }
+
+    private void setOrQueueHeight(int value) {
+        String motion = motionState();
+        if ("unavailable".equals(motion)) return;
+        if (!"walking".equals(motion)) {
+            pendingHeight = Integer.valueOf(value);
+            return;
+        }
+        sendSimple(HEIGHT, value);
+        telemHeight = value == 0 ? -1 : 0;
+        telemHeightSeen = true;
+    }
+
+    private void flushPendingHeight() {
+        if (pendingHeight == null || gaitApplying ||
+                !"walking".equals(motionState())) return;
+        int value = pendingHeight.intValue();
+        pendingHeight = null;
+        sendSimple(HEIGHT, value);
+        telemHeight = value == 0 ? -1 : 0;
+        telemHeightSeen = true;
     }
 
     private static boolean isStairGait(String gait) {
@@ -633,6 +748,21 @@ final class RadioLink {
             case "mountain": return 0x21010421;
             case "silent": return 0x21010422;
             default: return 0;
+        }
+    }
+
+    private int gaitValue(String gait) {
+        switch (gait) {
+            case "walk": return 0;
+            case "slope": return 1;
+            case "offroad": return 2;
+            case "run": return 3;
+            case "slow": return 4;
+            case "sand": return 5;
+            case "stair": return 6;
+            case "stairmulti": return 7;
+            case "stair45": return 8;
+            default: return -1;
         }
     }
 
@@ -683,6 +813,8 @@ final class RadioLink {
             ifaceName = name;
             ifacePrefix = air != null ? air.prefix : 0;
             robotAddr = net != null ? resolve(net, ROBOT_IP) : InetAddress.getByName(ROBOT_IP);
+            perceptionAddr = net != null
+                    ? resolve(net, PERCEPTION_IP) : InetAddress.getByName(PERCEPTION_IP);
             udp = new DatagramSocket((java.net.SocketAddress) null);
             udp.setReuseAddress(true);
             // 运动主机 network.toml 登记的是 43897；随机端口发出去也不回遥测。
@@ -908,15 +1040,25 @@ final class RadioLink {
         try {
             Network[] all = cm.getAllNetworks();
             if (all == null) return null;
+            Network fallback = null;
             for (Network n : all) {
                 NetworkCapabilities c = cm.getNetworkCapabilities(n);
-                // WiFi Direct / Aware 那几张也是 TRANSPORT_WIFI，但没有 INTERNET。
-                if (c != null
-                        && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                        && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                if (c == null || !c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue;
+                LinkProperties lp = cm.getLinkProperties(n);
+                if (lp == null || firstV4(lp).isEmpty()) continue;
+                String iface = lp.getInterfaceName();
+                // MESH 是隔离局域网，通常故意没有 INTERNET capability。优先真正的
+                // wlan 客户端口；不能再用 INTERNET 过滤，否则切回 MESH 会解绑到
+                // Android 默认的 ar_net0，WebSocket/控制权随即全部失效。
+                if (iface != null && (iface.startsWith("wlan") || iface.startsWith("wifi"))) {
                     return n;
                 }
+                if (fallback == null
+                        && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    fallback = n;
+                }
             }
+            return fallback;
         } catch (Exception e) {
             Log.w(TAG, "findWifi", e);
         }
@@ -1087,6 +1229,7 @@ final class RadioLink {
         airNet = null;
         boundLocal = null;
         robotAddr = null;
+        perceptionAddr = null;
         ifaceName = "";
         ifacePrefix = 0;
         udpBound = false;
@@ -1271,11 +1414,19 @@ final class RadioLink {
         buf.putInt(0);
         byte[] pkt = buf.array();
         // 只走一条成功路径。起步/力控是切换指令，多路齐发会互相抵消。
-        if (udp != null && sendUdp(pkt, robotAddr)) {
+        if (udp != null && sendUdp(pkt, robotAddr, ROBOT_PORT)) {
             sentOk++;
             return;
         }
         sentFail++;
+    }
+
+    private synchronized void sendTerrain(int code, int value) {
+        ByteBuffer buf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN);
+        buf.putInt(code);
+        buf.putInt(value);
+        buf.putInt(0);
+        sendUdp(buf.array(), perceptionAddr, PERCEPTION_PORT);
     }
 
     private static boolean writePipe(Pipeline pipe, byte[] pkt) {
@@ -1333,6 +1484,10 @@ final class RadioLink {
         if (code != TELEM_MOTION || len < HEAD_LEN + 2) return;
         telemState = b[HEAD_LEN] & 0xff;
         telemGait = b[HEAD_LEN + 1] & 0xff;
+        if (gaitApplying && telemGait == gaitExpected) {
+            gaitApplying = false;
+            gaitExpected = -1;
+        }
         telemAt = System.currentTimeMillis();
         if (telemUpright() && telemEmergSrc == 0) {
             standing = true;
@@ -1341,7 +1496,11 @@ final class RadioLink {
             // 把刚点的力控/起步清掉：RL 起立后常停在 2，清了再按起步等于停步。
             if (telemState == ST_STEPPING) {
                 torqued = true;
-                // 主机自己踏步不要当成「人按了起步」，否则停踏步会直接 return。
+                // 配置只在狗主机确认踏步后执行。
+                if (stepping && stepSent) {
+                    flushPendingGait();
+                    flushPendingHeight();
+                }
             } else if (telemState == ST_TORQUE_STANDING && !stepping) {
                 torqued = true;
             }
@@ -1367,13 +1526,13 @@ final class RadioLink {
         clearWalk();
     }
 
-    private boolean sendUdp(byte[] pkt, @Nullable InetAddress dest) {
+    private boolean sendUdp(byte[] pkt, @Nullable InetAddress dest, int port) {
         if (dest == null || udp == null) {
             if (dest == null) lastErr = "no-dest";
             return false;
         }
         try {
-            udp.send(new DatagramPacket(pkt, pkt.length, dest, ROBOT_PORT));
+            udp.send(new DatagramPacket(pkt, pkt.length, dest, port));
             if (!lastErr.isEmpty()) lastErr = "";
             return true;
         } catch (Exception e) {

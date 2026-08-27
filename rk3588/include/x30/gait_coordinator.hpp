@@ -69,6 +69,9 @@ class GaitCoordinator {
   // 已有切换在途时返回 false，不排队 —— 操作员连点两下不应该叠加执行。
   bool Request(Gait target, HeightMapMode stair_style, ResultHandler on_done,
                bool stepping_hint = false);
+  // 力控/停步时选中的配置只记下；起步请求后调用，工作线程会等狗主机确认踏步再执行。
+  void ApplyQueuedWhenWalking();
+  void ClearQueued();
 
   bool busy() const { return busy_.load(); }
 
@@ -80,6 +83,7 @@ class GaitCoordinator {
   bool WaitStandstill();
   // 等待遥测里的步态变成 target。
   bool WaitGaitConfirmed(Gait target);
+  bool WaitWalking();
 
   MotionClient& motion_;
   TerrainClient& terrain_;
@@ -96,6 +100,11 @@ class GaitCoordinator {
   HeightMapMode pending_style_ = HeightMapMode::kSolid;
   bool pending_step_hint_ = false;
   ResultHandler pending_handler_;
+  bool queued_ = false;
+  bool apply_queued_requested_ = false;
+  Gait queued_target_ = Gait::kWalk;
+  HeightMapMode queued_style_ = HeightMapMode::kSolid;
+  ResultHandler queued_handler_;
 };
 
 }  // namespace x30

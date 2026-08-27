@@ -790,18 +790,30 @@ def main():
     a.send({"t": "cmd", "name": "gait", "value": "stair", "stair_style": "solid"})
     res = a.wait_for("gait_result", timeout=5)
     check("坐姿下切楼梯被拒绝",
-          res.get("ok") is False and res.get("code") == "not_stepping",
+          res.get("ok") is False and res.get("code") == "not_standing",
           res.get("msg", ""))
 
     print("\n== 状态机 ==")
     a.send({"t": "cmd", "name": "stand"})
     st = a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 2)
     check("坐 -> 初始站立", st["basic_state"] == 2, st["basic_state_text"])
+    check("规范状态为停步",
+          st.get("posture") == "standing" and st.get("motion") == "stopped",
+          f"{st.get('posture')}/{st.get('motion')}")
 
     print("\n== 步态与速度 ==")
+    # 力控/停步时只记配置，不应提前发给狗主机。
     a.send({"t": "cmd", "name": "gait", "value": "offroad"})
-    st = a.wait_for("state", timeout=5, predicate=lambda m: m["gait_key"] == "offroad")
-    check("切换到越野步态", st["gait_key"] == "offroad",
+    res = a.wait_for("gait_result", timeout=5)
+    check("停步时记下越野步态",
+          res.get("ok") is True and res.get("code") == "queued", res.get("msg", ""))
+    a.send({"t": "cmd", "name": "height", "value": "crawl"})
+    a.send({"t": "cmd", "name": "step", "value": "on"})
+    st = a.wait_for("state", timeout=6,
+                    predicate=lambda m: m["gait_key"] == "offroad"
+                    and m.get("height_gear") == -1
+                    and m.get("motion") == "walking")
+    check("起步确认后执行越野与身高", st["gait_key"] == "offroad",
           f"{st['gait_text']}，速度上限 {st['limits']['forward']} m/s")
 
     # 平板会以 20 Hz 持续喂，这里如实模拟；只发一次是喂不动看门狗的。
@@ -823,14 +835,17 @@ def main():
     st = a.wait_for("state")
     check("停发后速度归零", abs(st["vel"]["x"]) < 0.05, f"vx={st['vel']['x']} m/s")
 
+    a.send({"t": "cmd", "name": "step", "value": "off"})
+    st = a.wait_for("state", timeout=5, predicate=lambda m: m.get("motion") == "stopped")
+    check("行走状态可回到停步", st.get("motion") == "stopped", st.get("motion"))
+
     a.send({"t": "cmd", "name": "torque"})
     st = a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 3)
     check("初始站立 -> 力控站立", st["basic_state"] == 3, st["basic_state_text"])
 
     a.send({"t": "cmd", "name": "step"})
-    time.sleep(0.4)
-    st = a.wait_for("state", timeout=3)
-    check("起步不再切进踏步", st["basic_state"] == 3, st["basic_state_text"])
+    err = a.wait_for("error", timeout=3)
+    check("起停必须明确指定 on/off", err.get("code") == "bad_request", err.get("msg", ""))
 
     print("\n== 上下楼 ==")
     # 单帧楼梯：编排器要先把地形图设成实心踏面，再切步态。
@@ -838,8 +853,12 @@ def main():
     # 所以这一项通过就说明两条 UDP 通道的配合是对的。
     a.send({"t": "cmd", "name": "gait", "value": "stair", "stair_style": "solid"})
     res = a.wait_for("gait_result", timeout=8)
-    check("切换到楼梯步态（单帧）", res.get("ok") is True, res.get("msg", ""))
-    a.drain()
+    check("力控时记下楼梯步态", res.get("code") == "queued", res.get("msg", ""))
+    a.send({"t": "cmd", "name": "height", "value": "normal"})
+    a.send({"t": "cmd", "name": "step", "value": "on"})
+    applied = a.wait_for("gait_result", timeout=8,
+                         predicate=lambda m: m.get("code") != "queued")
+    check("起步后执行楼梯配置", applied.get("ok") is True, applied.get("msg", ""))
     st = a.wait_for("state", timeout=5, predicate=lambda m: m["gait_key"] == "stair")
     check("遥测确认步态已生效", st["gait_key"] == "stair", st["gait_text"])
 

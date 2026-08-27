@@ -50,15 +50,18 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 {"t":"cmd","name":"stand"}                  // 坐 <-> 站 切换
 {"t":"cmd","name":"unload"}                 // 卸力：急停后解除关节自锁
 {"t":"cmd","name":"torque"}                 // 进入力控站立
-{"t":"cmd","name":"step"}                   // 起步/停步：一条踏步切换码
+{"t":"cmd","name":"step","value":"on"}      // 起步，必须明确 on
+{"t":"cmd","name":"step","value":"off"}     // 停步，必须明确 off
 {"t":"cmd","name":"height","value":"normal"} // normal|crawl
 {"t":"cmd","name":"mode","value":"manual"}   // manual|auto
 {"t":"cmd","name":"estop"}                   // 软急停，无需控制权
 {"t":"cmd","name":"savedata"}
 ```
 
-注意机器人自身的控制逻辑优先：趴着的时候发 `step` 会被运动主机直接忽略。
-所以遥控端的按钮状态应当跟着 `state` 推送走，而不是自己假设发了就生效。
+状态规则由控制层检查：只有 `stopped|torque` 能起步；任意行走状态都能停步；
+只有站立状态能进入力控。步态、踏面和身高在 `stopped|torque|walking` 都能选择，
+但停步/力控时只记下，狗主机确认起步后才执行。遥控端必须跟随 `state` 的
+`posture/motion/axis_mode`，不能按按钮历史猜状态。
 
 ### 步态切换（异步）
 
@@ -248,7 +251,9 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 | --- | --- |
 | `""` | 成功 |
 | `no_telemetry` | 与运动主机失联，无法确认结果 |
-| `not_stepping` | 真趴着（遥测坐下且网关不记得 RL 起立）。站着即可切 |
+| `not_standing` | 当前趴下，不能选择行走配置 |
+| `not_stepping` | 起步没有被狗主机确认，配置未执行 |
+| `queued` | 已记下配置，等狗主机确认起步后执行 |
 | `not_standstill` | 多帧楼梯要求静止，机器狗还在动 |
 | `gait_not_applied` | 指令发了但遥测没确认。楼梯多半是地形图没配合上 |
 
@@ -265,6 +270,11 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 {
   "t": "state",
   "alive": true,
+  "state_source": "mesh",
+  "state_valid": true,
+  "posture": "standing",
+  "motion": "walking",
+  "axis_mode": "vel",
   "basic_state": 4,
   "basic_state_text": "踏步",
   "gait": 0,
@@ -283,6 +293,12 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
   "emergency_source": 0
 }
 ```
+
+`posture` 取 `unknown|prone|rising|standing|falling|locked`；`motion` 取
+`unavailable|stopped|torque|starting|walking|stopping`；`axis_mode` 取
+`none|pose|vel`。MESH 使用网关生成的这组字段，2.4G 使用 Android 控制层生成的
+同构字段；两条链路没有永久主从关系。切换链路时状态先失效，接手链路收到狗主机
+遥测并重新生成状态后，摇杆才开放。
 
 姿态角 `att` 单位是度，里程计 `odom.yaw` 单位是弧度（直接来自运动主机，不做转换）。
 

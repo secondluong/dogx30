@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.2.21";
+constexpr const char* kVersion = "0.3.0";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。
@@ -418,9 +418,19 @@ void RobotService::HandleConfigSet(WsServer::ClientId id, const Json& msg) {
 
 void RobotService::OnConnect(WsServer::ClientId id) {
   WsServer::ClientId holder;
+  bool expired = false;
   {
     std::lock_guard<std::mutex> lock(control_mutex_);
+    if (controller_ != 0 && Clock::now() > lease_expiry_) {
+      controller_ = 0;
+      lease_expiry_ = Clock::time_point{};
+      expired = true;
+    }
     holder = controller_;
+  }
+  if (expired) {
+    client_.ReleaseAxes();
+    client_.SetCommanding(false);
   }
   JsonWriter w;
   w.BeginObject()
@@ -584,6 +594,7 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
 
     // 急停不检查控制权。安全动作绝不能因为权限判断而延迟或被拒。
     if (name == "estop") {
+      gaits_.ClearQueued();
       client_.SoftEmergencyStop();
       std::printf("[ws] 客户端 %llu 触发软急停\n",
                   static_cast<unsigned long long>(id));
@@ -596,14 +607,38 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     }
 
     if (name == "stand") {
+      gaits_.ClearQueued();
       client_.StandOrSit();
     } else if (name == "stand_up") {
+      const MotionView view = client_.View();
+      if (std::strcmp(view.posture, "prone") != 0) {
+        SendError(id, "invalid_state", "只有趴下状态可以起立");
+        return;
+      }
+      gaits_.ClearQueued();
       client_.StandUp();
     } else if (name == "sit_down" || name == "sit") {
+      const MotionView view = client_.View();
+      if (std::strcmp(view.posture, "standing") != 0) {
+        SendError(id, "invalid_state", "只有站立状态可以趴下");
+        return;
+      }
+      gaits_.ClearQueued();
       client_.SitDown();
     } else if (name == "unload") {
+      const MotionView view = client_.View();
+      if (std::strcmp(view.posture, "locked") != 0) {
+        SendError(id, "invalid_state", "只有关节锁定状态需要卸力");
+        return;
+      }
+      gaits_.ClearQueued();
       client_.UnloadForce();
     } else if (name == "torque") {
+      const MotionView view = client_.View();
+      if (std::strcmp(view.posture, "standing") != 0) {
+        SendError(id, "invalid_state", "趴下、起趴过渡或锁定状态不能进入力控");
+        return;
+      }
       client_.EnterTorqueStand();
     } else if (name == "step") {
       if (WalkHold()) {
@@ -611,13 +646,25 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
         return;
       }
       const std::string v = msg.String("value");
-      if (v == "off" || v == "stop") client_.StopStepping();
-      else if (v == "on" || v == "start") client_.StartStepping();
-      else client_.ToggleStepping();
+      const MotionView view = client_.View();
+      if (v == "off" || v == "stop") {
+        client_.StopStepping();
+      } else if (v == "on" || v == "start") {
+        if (view.phase != MotionPhase::kStopped &&
+            view.phase != MotionPhase::kTorque) {
+          SendError(id, "invalid_state", "只有力控或停步状态可以起步");
+          return;
+        }
+        client_.StartStepping();
+        gaits_.ApplyQueuedWhenWalking();
+      } else {
+        SendError(id, "bad_request", "起步/停步必须明确指定 on 或 off");
+        return;
+      }
     } else if (name == "savedata") {
       client_.SaveData();
     } else if (name == "gait") {
-      Gait gait;
+      Gait gait = Gait::kWalk;
       if (!ParseGaitName(msg.String("value"), &gait)) {
         SendError(id, "bad_request", "未知步态");
         return;
@@ -639,7 +686,16 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
         SendError(id, "gait_busy", "上一次步态切换尚未完成");
         return;
       }
+      const MotionView view = client_.View();
+      if (view.phase != MotionPhase::kWalking) {
+        client_.ExpectGaitBeforeHeight(gait);
+      }
     } else if (name == "height") {
+      const MotionView view = client_.View();
+      if (view.phase == MotionPhase::kUnavailable) {
+        SendError(id, "invalid_state", "只有力控、停步或行走状态可以设置身高");
+        return;
+      }
       const std::string v = msg.String("value");
       if (v == "crawl") {
         client_.SetBodyHeight(HeightGear::kCrawl);
@@ -1067,6 +1123,7 @@ bool RobotService::WalkHold() const {
 
 std::string RobotService::BuildStateJson() const {
   const RobotState s = client_.Snapshot();
+  const MotionView view = client_.View();
   const GaitLimits limits = LimitsOf(s.gait);
 
   bool lio_ready = false, lio_got = false, lio_fresh = false;
@@ -1092,6 +1149,12 @@ std::string RobotService::BuildStateJson() const {
   w.BeginObject()
       .Key("t", "state")
       .Key("alive", s.telemetry_alive)
+      // 规范化状态由当前控制层生成。网页只消费这组字段，不再按按钮历史猜状态。
+      .Key("state_source", "mesh")
+      .Key("state_valid", view.state_valid)
+      .Key("posture", view.posture)
+      .Key("motion", view.motion)
+      .Key("axis_mode", view.axis_mode)
       .Key("basic_state", static_cast<int>(s.basic_state))
       .Key("basic_state_text", state_text)
       .Key("rl_standing", s.rl_standing)

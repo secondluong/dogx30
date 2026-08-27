@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 
 namespace x30 {
 namespace {
@@ -45,6 +46,33 @@ bool GaitCoordinator::Request(Gait target, HeightMapMode stair_style,
   return true;
 }
 
+void GaitCoordinator::ApplyQueuedWhenWalking() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!queued_) {
+    if (busy_.load()) apply_queued_requested_ = true;
+    return;
+  }
+  if (pending_ || busy_.load()) {
+    apply_queued_requested_ = true;
+    return;
+  }
+  pending_ = true;
+  pending_target_ = queued_target_;
+  pending_style_ = queued_style_;
+  pending_step_hint_ = true;
+  pending_handler_ = std::move(queued_handler_);
+  queued_ = false;
+  apply_queued_requested_ = false;
+  cv_.notify_one();
+}
+
+void GaitCoordinator::ClearQueued() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  queued_ = false;
+  apply_queued_requested_ = false;
+  queued_handler_ = {};
+}
+
 void GaitCoordinator::WorkerLoop() {
   while (running_.load()) {
     Gait target;
@@ -68,6 +96,20 @@ void GaitCoordinator::WorkerLoop() {
     Result result = Execute(target, style, step_hint);
     busy_.store(false);
 
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (result.code == "queued") queued_handler_ = handler;
+      if (apply_queued_requested_ && queued_ && !pending_) {
+        pending_ = true;
+        pending_target_ = queued_target_;
+        pending_style_ = queued_style_;
+        pending_step_hint_ = true;
+        pending_handler_ = std::move(queued_handler_);
+        queued_ = false;
+        apply_queued_requested_ = false;
+        cv_.notify_one();
+      }
+    }
     if (handler) handler(result);
   }
 }
@@ -90,19 +132,36 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
   const bool multiframe = RequiresMultiFrame(target);
   const bool already = snapshot.telemetry_alive && snapshot.gait == target;
 
+  // 力控或停步时允许先选整套配置，但不碰主机；起步后由
+  // ApplyQueuedWhenWalking 重新排入，并等待狗主机确认踏步。
+  if (!user_step) {
+    if (!standing && snapshot.telemetry_alive) {
+      return {false, "not_standing",
+              std::string("当前不能设置步态，姿态为") +
+                  ToString(snapshot.basic_state)};
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      queued_ = true;
+      queued_target_ = target;
+      queued_style_ = stair_style;
+    }
+    return {true, "queued",
+            std::string("已记下") + ToString(target) + "，起步后切换"};
+  }
+
+  if (!WaitWalking()) {
+    return {false, "not_stepping", "起步未被狗主机确认，步态设置没有执行"};
+  }
+  // 从匍匐切到越野/楼梯时，主机会先拒绝步态码；正常身高必须先恢复。
+  // 反向（目标匍匐）仍是先切步态再降身高，由 MotionClient 的步态屏障保证。
+  motion_.ApplyQueuedNormalHeightBeforeGait();
+
   if (needs_map) {
     // 楼梯要地形图确认，没遥测等于瞎切。
     if (!snapshot.telemetry_alive) {
       return {false, "no_telemetry",
               "与机器狗失联，无法确认切换结果。请检查网线与运动主机登记。"};
-    }
-    if (!standing && !user_step) {
-      return {false, "not_stepping",
-              std::string("趴着切不了步态，当前为") + ToString(snapshot.basic_state)};
-    }
-    if (!user_step) {
-      return {false, "not_stepping",
-              "请先点起步，再切楼梯。楼梯是步态，要在踏步态下切。"};
     }
     // 多帧模式只能在静止时切换，这是文档的硬性约束。
     if (multiframe) {
@@ -135,17 +194,8 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
     }
     // 非楼梯：踏步里立刻发。遥测常年报 0 / 收不到，不能拿它当「已经是这档」
     // 或「还没踏步」——静音、低姿就是这样点了像没反应。
-    if (user_step || snapshot.basic_state == BasicState::kStepping) {
-      motion_.SetGait(target);
-      return {true, "", std::string("已切换到") + ToString(target)};
-    }
-    if (!standing && snapshot.telemetry_alive) {
-      return {false, "not_stepping",
-              std::string("趴着切不了步态，当前为") + ToString(snapshot.basic_state)};
-    }
-    motion_.QueueGait(target);
-    return {true, "queued",
-            std::string("已记下") + ToString(target) + "，起步后切换"};
+    motion_.SetGait(target);
+    return {true, "", std::string("已切换到") + ToString(target)};
   }
 
   if (already) {
@@ -187,6 +237,17 @@ bool GaitCoordinator::WaitGaitConfirmed(Gait target) {
       Clock::now() + std::chrono::milliseconds(cfg_.gait_confirm_timeout_ms);
   while (Clock::now() < deadline) {
     if (motion_.Snapshot().gait == target) return true;
+    SleepMs(50);
+  }
+  return false;
+}
+
+bool GaitCoordinator::WaitWalking() {
+  const auto deadline =
+      Clock::now() + std::chrono::milliseconds(cfg_.standstill_timeout_ms);
+  while (Clock::now() < deadline) {
+    const RobotState s = motion_.Snapshot();
+    if (s.telemetry_alive && s.basic_state == BasicState::kStepping) return true;
     SleepMs(50);
   }
   return false;

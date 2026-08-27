@@ -577,7 +577,7 @@ check('急停后左下角变卸力，实体红键也算',
       /TELEM_RUNNING = 0x1008/.test(radioJava) &&
       /function jointsLocked/.test(appJs) &&
       /n >= 4 && n <= 6/.test(appJs) &&
-      /if \(app\.emergencyLocked\) return false/.test(appJs) &&
+      /app\.posture === 'locked'/.test(appJs) &&
       /btn\.textContent = '卸力'/.test(appJs));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
 // 收起来的样子是「步态|常规 ›」：菜单名要留着（只显示「常规」认不出这颗管什么），
@@ -631,7 +631,7 @@ check('起步先力控再延后发一条踏步码',
       /void StartStepping/.test(motionHpp) &&
       /void StopStepping/.test(motionHpp) &&
       /StartStepping\(\)/.test(serviceCpp) &&
-      /walkMode === 'step' \? 'on' : 'off'/.test(appJs) &&
+      /app\.motionState === 'walking'/.test(appJs) &&
       /先力控/.test(motionCpp) &&
       /step_at_/.test(motionCpp) &&
       /STEP_AFTER_TORQUE_MS/.test(radioJava) &&
@@ -650,10 +650,10 @@ check('G20 起立键不改发趴下',
       /: key;/.test(read('gamepad.js')));
 // 力控调姿态，起步才走。起立后先不发速度。
 check('力控调姿态，起步才走',
-      /walkMode === 'step'/.test(appJs) &&
-      /walkMode === 'torque'/.test(appJs) &&
-      /textContent = walk === 'step' \? '停步' : '起步'/.test(appJs) &&
-      /app\.walkMode === 'step' \? 'torque' : 'step'/.test(appJs) &&
+      /app\.axisMode === 'vel'/.test(appJs) &&
+      /app\.axisMode === 'pose'/.test(appJs) &&
+      /b\.textContent = walk === 'step'/.test(appJs) &&
+      /app\.motionState === 'stopping'/.test(appJs) &&
       !/basicState === STATE_STEPPING\) return 'vel'/.test(appJs) &&
       !/basic === STATE_STEPPING && app\.walkMode !== 'torque'/.test(appJs) &&
       /tilt: right\.y/.test(read('gamepad.js')) &&
@@ -664,8 +664,8 @@ check('力控调姿态，起步才走',
       /basic_state == BasicState::kStepping/.test(motionCpp));
 // B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
 check('B1/B2 一次按键、屏幕跟着亮',
-      /function noteWalkCmd/.test(appJs) &&
-      /app\.noteWalkCmd/.test(read('gamepad.js')) &&
+      /motionState/.test(appJs) &&
+      /app\.motionState/.test(read('gamepad.js')) &&
       /if \(window\.X30Native && window\.X30Native\.pollRc\) return/.test(read('gamepad.js')) &&
       /s\.basic_state !== meshWalkSeen/.test(appJs));
 // 上下楼那一排里必须有「平地」：少了它，选过楼梯就再没法从这个菜单回到平地走。
@@ -675,23 +675,23 @@ check('离开楼梯后回到手动模式',
       /RequiresHeightMap\(snapshot\.gait\)/.test(gaitCpp) &&
       /SetControlMode\(ControlMode::kManual\)/.test(gaitCpp) &&
       /楼梯没切成立刻拉回手动/.test(gaitCpp) &&
-      /QueueGait/.test(gaitCpp) &&
-      /void QueueGait/.test(motionHpp) &&
+      /queued_target_/.test(gaitCpp) &&
+      /ApplyQueuedWhenWalking/.test(gaitCpp) &&
       /pendingGait/.test(radioJava) &&
       !/restoreManualIfNeeded/.test(radioJava) &&
       !/SitDown[\s\S]{0,500}emergency_source = 5/.test(motionCpp));
 // 站着点爬坡不能把步态码或力控发给主机。力控会把摇杆从走路拧成调姿，
 // 再点常规也回不去。
 check('站着点步态不发给主机，也不发力控',
-      /QueueGait\(target\)/.test(gaitCpp) &&
+      /queued_target_ = target/.test(gaitCpp) &&
       /起步后切换/.test(gaitCpp) &&
       !/StopUnwantedMarch/.test(gaitCpp) &&
       /不要在这里冲记下的步态/.test(motionCpp) &&
       !/SetVelocity[\s\S]{0,250}FlushQueuedGait/.test(motionCpp) &&
       !/noteWalkCmd\('torque'\)/.test(appJs) &&
-      /walkMode === 'torque'/.test(appJs) &&
+      /app\.motionState === 'torque'/.test(appJs) &&
       !/stopUnwantedMarch/.test(radioJava) &&
-      /!isStairGait\(gait\) && !stepping/.test(radioJava) &&
+      /!"walking"\.equals\(motionState\(\)\)/.test(radioJava) &&
       !/sendAxes[\s\S]{0,80}flushPendingGait/.test(radioJava));
 check('楼梯多帧45度在步态菜单，踏面只有材质',
       /data-gait="stair" data-short="楼梯"/.test(html) &&
@@ -785,9 +785,9 @@ check('屏幕摇杆在 2.4G 下也能推',
       /SCREEN_AXIS_HOLD_MS/.test(radioJava) &&
       /radioVel/.test(radioBridge) &&
       /radioVel\(/.test(appJs) &&
-      /void adoptWalkMode/.test(radioJava) &&
-      /radioWalk/.test(radioBridge) &&
-      /n.radioWalk/.test(appJs));
+      /o\.put\("axisMode"/.test(radioJava) &&
+      /app\.axisMode/.test(appJs) &&
+      !/n\.radioWalk/.test(appJs));
 // 版本从顶栏挪进设置面板：遥控时顶栏要盯别的东西。但不能不印 ——
 // 装包漏拷 assets/web 时页面是旧的，除了对版本戳没有别的办法看出来。
 check('版本不占顶栏，但在设置里查得到',
