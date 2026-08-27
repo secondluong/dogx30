@@ -576,7 +576,9 @@ check('急停后左下角变卸力，实体红键也算',
       /o\.put\("emergSrc", telemEmergSrc\)/.test(radioJava) &&
       /TELEM_RUNNING = 0x1008/.test(radioJava) &&
       /function jointsLocked/.test(appJs) &&
+      /n === 1/.test(appJs) &&
       /n >= 4 && n <= 6/.test(appJs) &&
+      /telemEmergSrc == 1/.test(radioJava) &&
       /app\.posture === 'locked'/.test(appJs) &&
       /btn\.textContent = '卸力'/.test(appJs));
 // 步态/踏面/身高收起来之后看不出选了哪一档，展开一次才知道 —— 遥控时是负担。
@@ -660,8 +662,10 @@ check('力控调姿态，起步才走',
       /AXIS_RY/.test(radioJava) &&
       /if \(!stepping_ \|\| !step_sent_\) return/.test(motionCpp) &&
       /if \(!torqued_ \|\| stepping_\) return/.test(motionCpp) &&
-      /basic_state == BasicState::kTorqueStanding/.test(motionCpp) &&
-      /basic_state == BasicState::kStepping/.test(motionCpp));
+      /const bool safe_upright/.test(motionCpp) &&
+      /stepping_ && step_sent_/.test(motionCpp) &&
+      /torqued_ && !stepping_/.test(motionCpp) &&
+      /RL 起立后主机可能一直谎报坐下/.test(radioJava));
 // B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
 check('B1/B2 一次按键、屏幕跟着亮',
       /motionState/.test(appJs) &&
@@ -775,6 +779,7 @@ check('两条链路对步态编码的理解一致',
 check('轴只在力控站立或踏步发',
       /bool AxisCommandsApply\(BasicState s, bool standing/.test(protoHpp) &&
       /inline bool JointsLocked/.test(protoHpp) &&
+      /emergency_source == 1/.test(protoHpp) &&
       /emergency_source >= 4 && emergency_source <= 6/.test(protoHpp) &&
       /s == BasicState::kTorqueStanding \|\| s == BasicState::kStepping/.test(protoHpp) &&
       !/return standing;/.test(protoHpp) &&

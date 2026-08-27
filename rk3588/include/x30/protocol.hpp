@@ -202,13 +202,14 @@ inline bool IsStandSitTransient(BasicState s) {
 
 // 关节自锁。急停后 basic_state 常改回报坐下，原厂还看 0x1008 的来源字节。
 //
-// 只认明确的锁：状态 6，或充电/客户端/RAS（4–6）。
-// 1 和 is_nav_mode 只差一字节，切楼梯会误读。2/3 是运动/导航里的自主来源，
+// 只认明确的锁：状态 6，尾部硬件/软急停（1），或充电/客户端/RAS（4–6）。
+// 1 和 is_nav_mode 只差一字节，必须按正确偏移解析。2/3 是运动/导航里的自主来源，
 // 切步态、进非手动时主机常带上，不是急停；当成锁就会把趴下改成卸力，
 // 狗还在踏步却趴不下。真急停会同时报 basic_state=6。
 inline bool JointsLocked(BasicState s, uint8_t emergency_source = 0) {
   if (s == BasicState::kEmergencyOrFall) return true;
-  return emergency_source >= 4 && emergency_source <= 6;
+  return emergency_source == 1 ||
+         (emergency_source >= 4 && emergency_source <= 6);
 }
 
 // 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。

@@ -125,19 +125,19 @@ void MotionClient::TxLoop() {
     }
     if (send_axes) {
       std::lock_guard<std::mutex> lock(state_mutex_);
+      const bool safe_upright =
+          state_.telemetry_alive &&
+          !JointsLocked(state_.basic_state, state_.emergency_source) &&
+          !IsStandSitTransient(state_.basic_state) &&
+          (TelemUpright(state_.basic_state) || state_.rl_standing);
       // 力控只发姿态，起步只发速度。主机在初始站立里把同一组轴当速度，
-      // 力控左杆就会走路、俯仰轴被丢掉。
+      // 力控左杆就会走路、俯仰轴被丢掉。RL 主机又可能在已站立后继续报
+      // basic_state=0，所以不能要求它必须报 3/4；控制层已发出的模式指令才
+      // 决定轴含义，主机遥测只负责失联、急停、起趴过渡和姿态安全门。
       if (stepping_ && step_sent_) {
-        send_axes = state_.telemetry_alive &&
-                    state_.basic_state == BasicState::kStepping &&
-                    AxisCommandsApply(state_.basic_state, true,
-                                      state_.emergency_source);
+        send_axes = safe_upright;
       } else if (torqued_ && !stepping_) {
-        // 没有遥测宁可不发：主机若还在初始站立，身高轴就是前进。
-        send_axes = state_.telemetry_alive &&
-                    state_.basic_state == BasicState::kTorqueStanding &&
-                    AxisCommandsApply(state_.basic_state, true,
-                                      state_.emergency_source);
+        send_axes = safe_upright;
       } else {
         send_axes = false;
       }
@@ -150,6 +150,7 @@ void MotionClient::TxLoop() {
       if (step_at_ != Clock::time_point{} && Clock::now() >= step_at_) {
         step_at_ = {};
         step_sent_ = true;
+        motion_phase_ = MotionPhase::kWalking;
         fire_step = true;
       }
       if (sit_at_ != Clock::time_point{} && Clock::now() >= sit_at_) {
@@ -869,7 +870,8 @@ MotionView MotionClient::View() const {
       state_.basic_state == BasicState::kStepping) {
     out.phase = MotionPhase::kStopping;
     out.motion = "stopping";
-  } else if (state_.basic_state == BasicState::kStepping) {
+  } else if (state_.basic_state == BasicState::kStepping ||
+             motion_phase_ == MotionPhase::kWalking) {
     out.phase = MotionPhase::kWalking;
     out.motion = "walking";
   } else if (motion_phase_ == MotionPhase::kStarting) {
@@ -883,12 +885,9 @@ MotionView MotionClient::View() const {
     out.motion = "stopped";
   }
 
-  if (out.state_valid && state_.basic_state == BasicState::kStepping &&
-      out.phase == MotionPhase::kWalking) {
+  if (out.state_valid && out.phase == MotionPhase::kWalking) {
     out.axis_mode = "vel";
-  } else if (out.state_valid &&
-             state_.basic_state == BasicState::kTorqueStanding &&
-             out.phase == MotionPhase::kTorque) {
+  } else if (out.state_valid && out.phase == MotionPhase::kTorque) {
     out.axis_mode = "pose";
   }
   return out;

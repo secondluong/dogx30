@@ -297,6 +297,7 @@ def arm_steps_scenario(host, port):
     st = a.wait_for("state", timeout=3,
                     predicate=lambda m: m.get("basic_state") == 3)
     check("力控后进力控站立", st.get("basic_state") == 3, st.get("basic_state"))
+    check("力控开放姿态摇杆", st.get("axis_mode") == "pose", st.get("axis_mode"))
 
     deadline = time.time() + 2
     vx = 0.0
@@ -313,6 +314,7 @@ def arm_steps_scenario(host, port):
     st = a.wait_for("state", timeout=4,
                     predicate=lambda m: m.get("basic_state") == 4)
     check("起步后进踏步", st.get("basic_state") == 4, st.get("basic_state"))
+    check("起步开放速度摇杆", st.get("axis_mode") == "vel", st.get("axis_mode"))
 
     deadline = time.time() + 5
     vx = 0.0

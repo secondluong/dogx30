@@ -129,7 +129,7 @@ const STATE_EMERGENCY = 6;
 function jointsLocked(basic, src) {
   if (basic === STATE_EMERGENCY) return true;
   const n = Number(src) || 0;
-  return n >= 4 && n <= 6;
+  return n === 1 || (n >= 4 && n <= 6);
 }
 
 // 趴下只露起立；站立（含 RL 起立后遥测仍报 0）才出步态/身高和力控起步。

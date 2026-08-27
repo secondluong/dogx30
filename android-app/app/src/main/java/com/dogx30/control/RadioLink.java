@@ -258,6 +258,7 @@ final class RadioLink {
     /** 关节自锁。急停后主机常回报坐下，原厂看 0x1008 的来源字节。 */
     private boolean telemLocked() {
         if (telemFresh() && (telemState == ST_EMERGENCY
+                || telemEmergSrc == 1
                 || (telemEmergSrc >= 4 && telemEmergSrc <= 6))) {
             return true;
         }
@@ -424,16 +425,19 @@ final class RadioLink {
         if (telemFresh() && telemState == ST_STEPPING) {
             return stepping ? "walking" : "stopping";
         }
-        if (stepping && stepSent) return "starting";
+        if (stepping && stepSent) return "walking";
         if (torqued && !stopped) return "torque";
         return "stopped";
     }
 
     private String axisMode() {
-        if (!telemFresh()) return "none";
+        if (!telemFresh() || telemLocked()) return "none";
+        if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
+            return "none";
+        }
         String motion = motionState();
-        if ("walking".equals(motion) && telemState == ST_STEPPING) return "vel";
-        if ("torque".equals(motion) && telemState == ST_TORQUE_STANDING) return "pose";
+        if ("walking".equals(motion)) return "vel";
+        if ("torque".equals(motion)) return "pose";
         return "none";
     }
 
@@ -496,10 +500,10 @@ final class RadioLink {
             if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
                 return false;
             }
-            // 主机在初始站立里把同一组轴当速度。力控必须真的进了力控站立
-            // 才发姿态，否则左杆会走、俯仰没了。
-            if (stepping && stepSent) return telemState == ST_STEPPING;
-            if (torqued && !stepping) return telemState == ST_TORQUE_STANDING;
+            // RL 起立后主机可能一直谎报坐下。模式以本控制层已经实际发出的
+            // 力控/起步指令为准；遥测只做失联、急停与起趴过渡安全门。
+            if (stepping && stepSent) return isStanding();
+            if (torqued && !stepping) return isStanding();
             return false;
         }
         // 没有遥测宁可不发。否则力控身高轴会被主机读成前进，俯仰也没了。
@@ -1504,7 +1508,7 @@ final class RadioLink {
             } else if (telemState == ST_TORQUE_STANDING && !stepping) {
                 torqued = true;
             }
-        } else if (telemState == ST_EMERGENCY
+        } else if (telemState == ST_EMERGENCY || telemEmergSrc == 1
                 || (telemEmergSrc >= 4 && telemEmergSrc <= 6)) {
             applyTelemLock();
         } else if (telemState == ST_SITTING) {
