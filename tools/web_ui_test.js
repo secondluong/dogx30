@@ -479,8 +479,9 @@ check('力控起步之后才发轴',
       /private boolean axesApply\(\)/.test(radioJava) &&
       /if \(axesApply\(\)\)/.test(radioJava) &&
       /sendAxes\(ax\)/.test(radioJava) &&
-      /if \(stepping && stepSent\) return true/.test(radioJava) &&
-      /if \(torqued && !stepping\) return true/.test(radioJava) &&
+      /telemState == ST_STEPPING/.test(radioJava) &&
+      /telemState == ST_TORQUE_STANDING/.test(radioJava) &&
+      /没有遥测宁可不发/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
       /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
@@ -529,7 +530,9 @@ check('切档时把姿态交接给接手的一侧',
 // 交接不能发一次就算完：那条 claim 可能没被授权，网关也可能是旧版不认这个键。
 // 认下来之前界面按自己知道的显示，否则切回 MESH 左下角又变成「起立」。
 check('网关认下来之前按自己知道的显示',
-      /app\.rlStanding = app\.poseHandoff !== null \? app\.poseHandoff/.test(appJs) &&
+      /if \(app\.poseHandoff !== null\)/.test(appJs) &&
+      /app\.rlStanding = app\.poseHandoff/.test(appJs) &&
+      /else if \(!app\.poseCmdOurs\)/.test(appJs) &&
       /if \(obj\.t === 'cmd' && POSE_CMDS\[obj\.name\]\) app\.poseHandoff = null/.test(appJs) &&
       !/app\.poseHandoff = null;\s*\n\s*poseHintVal/.test(appJs));
 // 交接的是 App 记住的那份姿态，不是「当前这侧此刻知不知道」：切档那一刻正好没遥测
@@ -706,6 +709,13 @@ check('步态高亮跟着人点的走，不被遥测每帧顶回去',
       /function adoptGaitTelem/.test(appJs) &&
       /meshGaitSeen = adoptGaitTelem\(s\.gait_key, meshGaitSeen\)/.test(appJs) &&
       /radioGaitSeen = adoptGaitTelem\(key, radioGaitSeen\)/.test(appJs) &&
+      /function adoptHeightTelem/.test(appJs) &&
+      /function heightKeyFromGear/.test(appJs) &&
+      /meshHeightSeen = adoptHeightTelem/.test(appJs) &&
+      /markHeight\(b\.dataset\.height\)/.test(appJs) &&
+      /poseCmdOurs/.test(appJs) &&
+      /height_cmd_ == HeightGear::kCrawl/.test(motionCpp) &&
+      /now - last_stand_cmd_at_ < std::chrono::seconds\(8\)/.test(motionCpp) &&
       !/markGait\(s\.gait_key\)/.test(appJs) &&
       // 点的时候先乐观标上，网关说切不成再退回去。
       /gaitBefore = app\.gait/.test(appJs) &&

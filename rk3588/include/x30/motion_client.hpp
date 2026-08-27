@@ -219,6 +219,8 @@ class MotionClient {
   // 只能靠这个决定下一次该发哪条，不能信 basic_state。
   enum class LastStandSit { kUnknown, kStood, kSat };
   LastStandSit last_stand_sit_{LastStandSit::kUnknown};
+  std::chrono::steady_clock::time_point last_stand_cmd_at_{};
+  HeightGear height_cmd_{HeightGear::kNormal};
 
   // 操作员点了力控/起步。RL 起立后遥测仍报 0，单凭遥测会把轴吞掉；
   // 这条记下「可以发轴」。起立本身不置位。趴下/急停清掉。
@@ -234,6 +236,9 @@ class MotionClient {
   std::chrono::steady_clock::time_point step_at_{};
   // 踏步里趴下会被主机丢掉。先停步，到点再发 RL 趴下。
   std::chrono::steady_clock::time_point sit_at_{};
+  // 力控刚发时主机还在初始站立，指令会被丢掉。TxLoop 再补几次。
+  std::chrono::steady_clock::time_point torque_retry_at_{};
+  int torque_retries_{0};
 };
 
 }  // namespace x30

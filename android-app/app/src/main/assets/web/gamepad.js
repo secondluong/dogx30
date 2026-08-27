@@ -216,7 +216,7 @@
       fwd: left.y,
       lat: left.x,
       turn: right.x,
-      tilt: 0,
+      tilt: right.y,
       look: right.y,
     };
   }
@@ -544,25 +544,26 @@
               say('卸力');
               return;
             }
-          } else if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) {
-            // 什么都没发出去。不念的话人听不出是「按到了但没必要」还是「没按上」。
-            say('已经站着');
-            return;
-          } else if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) {
-            say('已经趴着');
-            return;
           } else {
             var want = key === 'stand'
               ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up')
               : key;
+            if (app.notePoseCmd) app.notePoseCmd(want === 'stand_up');
             if (radioPose(want)) {
               say(want === 'sit_down' ? '趴下' : '起立');
               return;
             }
           }
         } else if (key === 'torque' || key === 'step') {
+          if (key === 'step') {
+            if (app.noteWalkCmd) app.noteWalkCmd('step');
+            var scmd = app.walkMode === 'step' ? 'step_on' : 'step_off';
+            if (app.nativeRadioCmd) app.nativeRadioCmd(scmd);
+            say(app.walkMode === 'step' ? '起步' : '停步');
+            return;
+          }
           if (radioPose(key)) {
-            say(key === 'torque' ? '力控' : '起步');
+            say('力控');
             return;
           }
         } else if (key === 'gait_up' || key === 'gait_dn') {
@@ -597,16 +598,14 @@
           say('卸力');
           return;
         }
-        if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) {
-          say('已经站着');
-          return;
-        }
-        if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) {
-          say('已经趴着');
-          return;
-        }
-        send({ t: 'cmd', name: 'stand' });
-        say(app.isStandingUi && app.isStandingUi() ? '趴下' : '起立');
+        // G20 起立/趴下是两颗键，按哪颗发哪条。不能按「界面以为站着」把起立
+        // 改成趴下 —— 遥测常报坐下，站着按起立就会把狗按趴。
+        var poseCmd = key === 'stand'
+          ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up')
+          : key;
+        if (app.notePoseCmd) app.notePoseCmd(poseCmd === 'stand_up');
+        send({ t: 'cmd', name: poseCmd });
+        say(poseCmd === 'sit_down' ? '趴下' : '起立');
         return;
       }
       if (key === 'torque' || key === 'step') {
@@ -615,8 +614,14 @@
           say('LIO 对准中');
           return;
         }
-        send({ t: 'cmd', name: key });
-        say(key === 'torque' ? '力控' : '起步');
+        if (app.noteWalkCmd) app.noteWalkCmd(key);
+        if (key === 'step') {
+          send({ t: 'cmd', name: 'step', value: app.walkMode === 'step' ? 'on' : 'off' });
+        } else {
+          send({ t: 'cmd', name: key });
+        }
+        say(key === 'torque' ? '力控'
+          : (app.walkMode === 'step' ? '起步' : '停步'));
         return;
       }
       if (key === 'gait_up' || key === 'gait_dn') {
@@ -625,7 +630,10 @@
           return;
         }
         var target = nextGait(app.gait, key === 'gait_up' ? 1 : -1);
-        send({ t: 'cmd', name: 'gait', value: target });
+        // 和高亮规则一样：先按切的显示，网关回结果再确认或退回。
+        if (app.markGait) app.markGait(target);
+        send({ t: 'cmd', name: 'gait', value: target,
+               stepping: app.walkMode === 'step' });
         say(gaitName(target));
       }
     }
@@ -709,6 +717,9 @@
     }
 
     api._onRcChannels = function (ev) {
+      // 安卓壳里 poll() 已经在读 pollRc。这里再 apply 一次，同一颗 B1/B2 会
+      // 上升沿走两遍：踏步是切换指令，一按就等于起步又立刻停步，表现为「要点两次」。
+      if (window.X30Native && window.X30Native.pollRc) return;
       applyG20(ev);
     };
 

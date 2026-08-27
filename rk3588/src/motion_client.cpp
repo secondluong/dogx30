@@ -128,21 +128,16 @@ void MotionClient::TxLoop() {
       // 力控只发姿态，起步只发速度。主机在初始站立里把同一组轴当速度，
       // 力控左杆就会走路、俯仰轴被丢掉。
       if (stepping_ && step_sent_) {
-        if (state_.telemetry_alive) {
-          send_axes = state_.basic_state == BasicState::kStepping &&
-                      AxisCommandsApply(state_.basic_state, true,
-                                        state_.emergency_source);
-        } else {
-          send_axes = true;
-        }
+        send_axes = state_.telemetry_alive &&
+                    state_.basic_state == BasicState::kStepping &&
+                    AxisCommandsApply(state_.basic_state, true,
+                                      state_.emergency_source);
       } else if (torqued_ && !stepping_) {
-        if (state_.telemetry_alive) {
-          send_axes = state_.basic_state == BasicState::kTorqueStanding &&
-                      AxisCommandsApply(state_.basic_state, true,
-                                        state_.emergency_source);
-        } else {
-          send_axes = true;
-        }
+        // 没有遥测宁可不发：主机若还在初始站立，身高轴就是前进。
+        send_axes = state_.telemetry_alive &&
+                    state_.basic_state == BasicState::kTorqueStanding &&
+                    AxisCommandsApply(state_.basic_state, true,
+                                      state_.emergency_source);
       } else {
         send_axes = false;
       }
@@ -169,7 +164,33 @@ void MotionClient::TxLoop() {
     }
     if (fire_sit) {
       SendSimple(cmd::kRlSitDown);
+      SendSimple(cmd::kRlSitDown);
       std::printf("[运动] 停步之后 RL 趴下 0x21010222\n");
+    }
+
+    bool fire_torque = false;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (torqued_ && !stepping_ && torque_retries_ > 0 &&
+          torque_retry_at_ != Clock::time_point{} &&
+          Clock::now() >= torque_retry_at_) {
+        const bool need = !state_.telemetry_alive ||
+                          state_.basic_state == BasicState::kInitialStanding ||
+                          (state_.basic_state == BasicState::kSitting &&
+                           state_.rl_standing);
+        if (need) {
+          fire_torque = true;
+          torque_retries_--;
+          torque_retry_at_ = Clock::now() + std::chrono::milliseconds(400);
+        } else {
+          torque_retries_ = 0;
+          torque_retry_at_ = {};
+        }
+      }
+    }
+    if (fire_torque) {
+      SendSimple(cmd::kTorqueStand);
+      std::printf("[运动] 力控补发 0x2101020A\n");
     }
 
     if (send_axes) {
@@ -392,9 +413,20 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
     }
     case telem::kBodyHeightState: {
       // 简单报文，档位直接放在 paramters_size 里，按有符号解释。
+      // 指令 0=匍匐 2=正常；遥测文档 −1=匍匐 0=正常。0 有歧义：刚发过匍匐
+      // 就不要用 0 把控制台打钩顶回「正常」。
       int32_t gear;
       std::memcpy(&gear, &head.paramters_size, sizeof(gear));
-      state_.body_height_gear = gear;
+      if (gear == 0 && height_cmd_ == HeightGear::kCrawl) {
+        break;
+      }
+      if (gear < 0) {
+        state_.body_height_gear = -1;
+      } else if (gear == 2) {
+        state_.body_height_gear = 0;
+      } else {
+        state_.body_height_gear = 0;
+      }
       break;
     }
     default: {
@@ -434,29 +466,32 @@ void MotionClient::StandOrSit() {
   }
   ReleaseAxes();
 
-  // 遥测在 RL 站着时仍报 basic_state=0。现场 10:45 起了一次之后连点四次「坐」，
-  // 运动主机收到的全是 0x21010223（再起立），一条趴下都没有。
-  // 原厂手柄自己记得现在是站着，发 0x21010222。我们也得自己记。
+  // 旧平板会把 G20 起立/趴下都发成 name=stand（一条翻转）。上一轮若记下
+  // 「站着」，遥测又报坐下，下一次起立就会走趴下 —— 现场「起立变成趴下」。
+  // 遥测说趴着就起立；只有刚起过、遥测还在撒谎的那几秒，再按一次才是趴下。
   bool sitting;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     const bool telem_upright =
-        s.telemetry_alive &&
-        (s.basic_state == BasicState::kInitialStanding ||
-         s.basic_state == BasicState::kTorqueStanding ||
-         s.basic_state == BasicState::kStepping);
+        s.telemetry_alive && TelemUpright(s.basic_state);
+    const auto now = Clock::now();
+    const bool just_stood =
+        last_stand_sit_ == LastStandSit::kStood &&
+        last_stand_cmd_at_ != Clock::time_point{} &&
+        now - last_stand_cmd_at_ < std::chrono::seconds(8);
     if (telem_upright) {
       sitting = false;
     } else if (s.telemetry_alive &&
                s.basic_state == BasicState::kEmergencyOrFall) {
       sitting = true;
       last_stand_sit_ = LastStandSit::kSat;
-    } else if (last_stand_sit_ == LastStandSit::kStood) {
+    } else if (just_stood) {
       sitting = false;
     } else {
       sitting = true;
     }
     last_stand_sit_ = sitting ? LastStandSit::kStood : LastStandSit::kSat;
+    last_stand_cmd_at_ = now;
     state_.rl_standing = (last_stand_sit_ == LastStandSit::kStood);
     if (sitting) {
       axes_unlocked_ = false;
@@ -470,6 +505,7 @@ void MotionClient::StandOrSit() {
 
   if (sitting) {
     std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n", ToString(s.basic_state));
+    SendSimple(cmd::kRlStandUp);
     SendSimple(cmd::kRlStandUp);
   } else {
     SitDown();
@@ -490,8 +526,9 @@ void MotionClient::StandUp() {
   }
   {
     std::lock_guard<std::mutex> lock(axis_mutex_);
-    if (Clock::now() < stand_sit_hold_until_) {
-      std::printf("[运动] 忽略起立：刚发过起/趴\n");
+    if (Clock::now() < stand_sit_hold_until_ &&
+        last_stand_sit_ == LastStandSit::kStood) {
+      std::printf("[运动] 忽略起立：刚发过起立\n");
       return;
     }
     stand_sit_hold_until_ = Clock::now() + std::chrono::milliseconds(kAxisHoldMs);
@@ -500,6 +537,7 @@ void MotionClient::StandUp() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     last_stand_sit_ = LastStandSit::kStood;
+    last_stand_cmd_at_ = Clock::now();
     state_.rl_standing = true;
     axes_unlocked_ = false;
     torqued_ = false;
@@ -508,9 +546,12 @@ void MotionClient::StandUp() {
     step_sent_ = false;
     step_at_ = {};
     sit_at_ = {};
+    torque_retries_ = 0;
+    torque_retry_at_ = {};
   }
   std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n",
               ToString(Snapshot().basic_state));
+  SendSimple(cmd::kRlStandUp);
   SendSimple(cmd::kRlStandUp);
 }
 
@@ -528,8 +569,9 @@ void MotionClient::SitDown() {
   }
   {
     std::lock_guard<std::mutex> lock(axis_mutex_);
-    if (Clock::now() < stand_sit_hold_until_) {
-      std::printf("[运动] 忽略趴下：刚发过起/趴\n");
+    if (Clock::now() < stand_sit_hold_until_ &&
+        last_stand_sit_ == LastStandSit::kSat) {
+      std::printf("[运动] 忽略趴下：刚发过趴下\n");
       return;
     }
     stand_sit_hold_until_ = Clock::now() + std::chrono::milliseconds(kAxisHoldMs);
@@ -553,6 +595,7 @@ void MotionClient::SitDown() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     last_stand_sit_ = LastStandSit::kSat;
+    last_stand_cmd_at_ = {};
     state_.rl_standing = false;
     axes_unlocked_ = false;
     torqued_ = false;
@@ -565,6 +608,8 @@ void MotionClient::SitDown() {
     } else {
       sit_at_ = {};
     }
+    torque_retries_ = 0;
+    torque_retry_at_ = {};
   }
   if (leave_step) {
     std::printf("[运动] 停步后再发 RL 趴下 0x21010222（遥测=%s）\n",
@@ -574,11 +619,13 @@ void MotionClient::SitDown() {
   std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
               ToString(Snapshot().basic_state));
   SendSimple(cmd::kRlSitDown);
+  SendSimple(cmd::kRlSitDown);
 }
 
 void MotionClient::AdoptPosture(bool standing) {
   std::lock_guard<std::mutex> lock(state_mutex_);
   last_stand_sit_ = standing ? LastStandSit::kStood : LastStandSit::kSat;
+  last_stand_cmd_at_ = standing ? Clock::now() : Clock::time_point{};
   state_.rl_standing = standing;
   // 切档只交接站没站。力控/起步是切换指令，带着上一条链路的记忆会发反。
   axes_unlocked_ = false;
@@ -599,6 +646,7 @@ void MotionClient::UnloadForce() {
   ReleaseAxes();
   std::lock_guard<std::mutex> lock(state_mutex_);
   last_stand_sit_ = LastStandSit::kSat;
+  last_stand_cmd_at_ = {};
   state_.rl_standing = false;
   state_.emergency_source = 0;
   axes_unlocked_ = false;
@@ -613,8 +661,17 @@ void MotionClient::UnloadForce() {
 
 void MotionClient::EnterTorqueStand() {
   bool leave_step = false;
+  bool need_stand = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    need_stand = state_.telemetry_alive &&
+                 state_.basic_state == BasicState::kSitting &&
+                 last_stand_sit_ != LastStandSit::kStood;
+    if (need_stand) {
+      last_stand_sit_ = LastStandSit::kStood;
+      last_stand_cmd_at_ = Clock::now();
+      state_.rl_standing = true;
+    }
     leave_step = stepping_ && step_sent_;
     step_at_ = {};
     step_sent_ = false;
@@ -622,6 +679,14 @@ void MotionClient::EnterTorqueStand() {
     torqued_ = true;
     axes_unlocked_ = true;
     sit_at_ = {};
+    torque_retries_ = need_stand ? 8 : 4;
+    torque_retry_at_ = Clock::now() + std::chrono::milliseconds(400);
+  }
+  // 趴着发力控主机会丢掉。先起立，再靠补发进力控站立（3），否则左杆是走路、
+  // 俯仰轴没定义。
+  if (need_stand) {
+    SendSimple(cmd::kRlStandUp);
+    SendSimple(cmd::kRlStandUp);
   }
   // 还在踏步里俯仰轴无定义，速度轴也还在。先停步，再力控，轴停发一小会，
   // 免得 50 Hz 的「身高」在过渡里被主机读成前进。
@@ -629,7 +694,8 @@ void MotionClient::EnterTorqueStand() {
   ReleaseAxes();
   SendSimple(cmd::kTorqueStand);
   SendSimple(cmd::kTorqueStand);
-  std::printf("[运动] 力控站立 0x2101020A%s\n",
+  std::printf("[运动] 力控站立 0x2101020A%s%s\n",
+              need_stand ? "（先起立）" : "",
               leave_step ? "（先停步）" : "");
 }
 
@@ -724,6 +790,10 @@ bool MotionClient::UserStepping() const {
 
 void MotionClient::SetBodyHeight(HeightGear gear) {
   SendSimple(cmd::kBodyHeight, static_cast<uint32_t>(gear));
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  height_cmd_ = gear;
+  // 遥测身高只在变化时报。发过就先改记忆，免得控制台下一帧又把打钩顶回去。
+  state_.body_height_gear = (gear == HeightGear::kCrawl) ? -1 : 0;
 }
 
 void MotionClient::SetControlMode(ControlMode mode) {
@@ -744,6 +814,7 @@ void MotionClient::SoftEmergencyStop() {
   ReleaseAxes();
   std::lock_guard<std::mutex> lock(state_mutex_);
   last_stand_sit_ = LastStandSit::kSat;
+  last_stand_cmd_at_ = {};
   state_.rl_standing = false;
   state_.emergency_source = 5;
   axes_unlocked_ = false;

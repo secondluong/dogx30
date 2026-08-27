@@ -548,6 +548,7 @@
             var want = key === 'stand'
               ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up')
               : key;
+            if (app.notePoseCmd) app.notePoseCmd(want === 'stand_up');
             if (radioPose(want)) {
               say(want === 'sit_down' ? '趴下' : '起立');
               return;
@@ -602,6 +603,7 @@
         var poseCmd = key === 'stand'
           ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up')
           : key;
+        if (app.notePoseCmd) app.notePoseCmd(poseCmd === 'stand_up');
         send({ t: 'cmd', name: poseCmd });
         say(poseCmd === 'sit_down' ? '趴下' : '起立');
         return;

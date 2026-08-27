@@ -445,24 +445,23 @@ final class RadioLink {
             if (torqued && !stepping) return telemState == ST_TORQUE_STANDING;
             return false;
         }
-        if (stepping && stepSent) return true;
-        if (torqued && !stepping) return true;
+        // 没有遥测宁可不发。否则力控身高轴会被主机读成前进，俯仰也没了。
         return false;
     }
 
     /**
-     * 起立总是先卸力再站。
-     *
-     * 运动主机可能在我们连上之前就被急停锁住（开机抖一下就会），本机的 emergency
-     * 标志看不到这种情况，只发 0x21010223 会被静默忽略 —— 现场表现就是「按了没反应」。
-     * 狗趴着时卸力没有副作用，所以无条件先发一发。
+     * 只有关节锁着才先卸力。站着再卸力，狗会先软下去，看起来像「起立变成趴下」。
      */
     private void standUp() {
-        sendSimple(UNLOAD);
-        emergency = false;
-        standing = false;
-        clearWalk();
-        onRadioDelayed(standTask, STAND_AFTER_UNLOAD_MS);
+        if (telemLocked() || emergency) {
+            sendSimple(UNLOAD);
+            emergency = false;
+            standing = false;
+            clearWalk();
+            onRadioDelayed(standTask, STAND_AFTER_UNLOAD_MS);
+            return;
+        }
+        standNow();
     }
 
     /** 卸力后那一发起立还没到，用户又按了趴下/急停，就别再站起来了。 */
@@ -472,6 +471,7 @@ final class RadioLink {
 
     private synchronized void standNow() {
         if (!enabled) return;
+        sendSimple(STAND);
         sendSimple(STAND);
         standing = true;
         lastStandAt = System.currentTimeMillis();
@@ -514,19 +514,14 @@ final class RadioLink {
                 clearWalk();
                 lastStandAt = System.currentTimeMillis();
                 if (sitAfterStep) {
-                    onRadioDelayed(() -> sendSimple(SIT), 300);
+                    onRadioDelayed(() -> { sendSimple(SIT); sendSimple(SIT); }, 300);
                 } else {
+                    sendSimple(SIT);
                     sendSimple(SIT);
                 }
                 break;
             case "stand":
-                if (standing && !emergency) {
-                    sendSimple(SIT);
-                    standing = false;
-                    clearWalk();
-                } else {
-                    standUp();
-                }
+                standUp();
                 break;
             case "unload":
                 cancelPendingStand();
@@ -536,6 +531,11 @@ final class RadioLink {
                 clearWalk();
                 break;
             case "torque":
+                if (telemFresh() && telemState == ST_SITTING && !standing) {
+                    sendSimple(STAND);
+                    sendSimple(STAND);
+                    standing = true;
+                }
                 if (stepping && stepSent) sendSimple(STEP);
                 cancelPendingStep();
                 sendSimple(TORQUE);
@@ -570,9 +570,13 @@ final class RadioLink {
                 break;
             case "height_low":
                 sendSimple(HEIGHT, 0);
+                telemHeight = -1;
+                telemHeightSeen = true;
                 break;
             case "height_normal":
                 sendSimple(HEIGHT, 2);
+                telemHeight = 0;
+                telemHeightSeen = true;
                 break;
             default:
                 if (name.startsWith("gait_")) {
@@ -1314,8 +1318,7 @@ final class RadioLink {
                 | ((b[2] & 0xff) << 16) | ((b[3] & 0xff) << 24);
         // 身高档位这条是简单报文，只有 12 字节的头，档位就在头里，不带 data。
         if (code == TELEM_HEIGHT) {
-            telemHeight = (b[4] & 0xff) | ((b[5] & 0xff) << 8)
-                    | ((b[6] & 0xff) << 16) | ((b[7] & 0xff) << 24);
+            telemHeight = ByteBuffer.wrap(b, 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
             telemHeightSeen = true;
             return;
         }
