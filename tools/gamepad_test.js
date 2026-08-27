@@ -68,6 +68,10 @@ var turnCh = [1000, 1500, 1500, 1500];
 var turn = G.g20Channels(turnCh, 0.12, 0.4);
 check('CH1 到 1000 是左转', turn.turn > 0.9 && turn.tilt === 0,
       JSON.stringify(turn));
+var pitchCh = [1500, 2000, 1500, 1500];
+var pitch = G.g20Channels(pitchCh, 0.12, 0.4);
+check('CH2 推到 2000 是俯仰', pitch.tilt > 0.9 && Math.abs(pitch.turn) < 0.05,
+      JSON.stringify(pitch));
 check('CH5 低位是布控球', G.ch5Toggle(1050) === 'ptz');
 check('CH5 中位不动作', G.ch5Toggle(1500) === '');
 check('CH5 高位是控狗', G.ch5Toggle(1950) === 'dog');
@@ -618,8 +622,8 @@ pads = [makePad([0, 0, 0, 0], [])];
 pump(1);
 pads = [makePad([0, 0, 0, 0], [0])];
 pump(1);
-check('有控制权时按键下发 stand',
-      sent.length === 1 && sent[0].t === 'cmd' && sent[0].name === 'stand',
+check('有控制权时按键下发 stand_up',
+      sent.length === 1 && sent[0].t === 'cmd' && sent[0].name === 'stand_up',
       JSON.stringify(sent));
 // 这个键在狗身上是翻转的，念的必须是这一下的方向，不是键的名字。
 check('坐站键念的是这一下要做的动作',

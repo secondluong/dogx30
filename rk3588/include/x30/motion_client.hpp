@@ -125,7 +125,7 @@ class MotionClient {
   void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
   void EnterTorqueStand();  // 进力控站立，只发力控码，不切踏步。
-  void ToggleStepping();    // 起步/停步：发一条踏步切换码 0x21010201。
+  void ToggleStepping();    // 起步/停步。起步先力控再延后发踏步码。
 
   void SetGait(Gait gait);
   // 站着点步态不要发给主机：文档写仅踏步态可切，RL 站着发会自己踏步。
@@ -225,6 +225,7 @@ class MotionClient {
   bool stepping_{false};
   bool queued_gait_set_{false};
   Gait queued_gait_{Gait::kWalk};
+  bool step_sent_{false};
   // 力控刚发就跟一条踏步，主机还在过渡里会丢掉。TxLoop 到点再发。
   std::chrono::steady_clock::time_point step_at_{};
 };

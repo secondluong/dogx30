@@ -109,6 +109,8 @@ final class RadioLink {
     private static final int AXIS_LY = 0x21010130;
     private static final int AXIS_LX = 0x21010131;
     private static final int AXIS_RX = 0x21010135;
+    private static final int AXIS_RY = 0x21010102;
+    private static final long STEP_AFTER_TORQUE_MS = 400;
 
     private static final RadioLink INST = new RadioLink();
 
@@ -137,13 +139,16 @@ final class RadioLink {
     private float scrFwd;
     private float scrLat;
     private float scrTurn;
+    private float scrTilt;
     private long scrAt;
     /** 这一档里确实发出去过起立/趴下，或者 MESH 那侧交接过来 —— 否则姿态就是瞎猜。 */
     private boolean poseKnown;
     private boolean torqued;
     private boolean stepping;
+    private boolean stepPending;
+    private boolean stepSent;
     /** effAxes 的返回缓冲。每 tick 都要算一次，没必要每次新建。 */
-    private final float[] axBuf = new float[3];
+    private final float[] axBuf = new float[4];
     private boolean emergency;
     private boolean prevStand;
     private boolean prevSit;
@@ -175,6 +180,7 @@ final class RadioLink {
 
     private final Runnable loop = this::onTick;
     private final Runnable standTask = this::standNow;
+    private final Runnable stepTask = this::firePendingStep;
 
     synchronized void attach(Context ctx) {
         if (ctx != null) appCtx = ctx.getApplicationContext();
@@ -346,9 +352,14 @@ final class RadioLink {
      * 到协议轴的取反在 sendAxes 里做，和实体摇杆走同一条出口。
      */
     synchronized void setScreenAxes(float fwd, float lat, float turn) {
+        setScreenAxes(fwd, lat, turn, 0f);
+    }
+
+    synchronized void setScreenAxes(float fwd, float lat, float turn, float tilt) {
         scrFwd = fwd;
         scrLat = lat;
         scrTurn = turn;
+        scrTilt = tilt;
         scrAt = System.currentTimeMillis();
     }
 
@@ -369,13 +380,27 @@ final class RadioLink {
     private void clearWalk() {
         torqued = false;
         stepping = false;
+        cancelPendingStep();
+    }
+
+    private void cancelPendingStep() {
+        stepPending = false;
+        stepSent = false;
+        if (handler != null) handler.removeCallbacks(stepTask);
+    }
+
+    private synchronized void firePendingStep() {
+        if (!enabled || !stepPending) return;
+        stepPending = false;
+        stepSent = true;
+        sendSimple(STEP);
+        flushPendingGait();
     }
 
     /**
      * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
      *
-     * 起立后就能走，与网关 AxisCommandsApply 一致。RL 起立后遥测常停在 0/2，
-     * 原厂此时推杆即走。力控只改姿态，不再当走路门槛。
+     * 力控才发姿态轴，起步才发速度轴。起立本身不发，否则没踏步也在喂速度。
      *
      * 起立中 / 坐下中 / 急停一律不发，免得把柔和起身掐硬。
      */
@@ -385,16 +410,13 @@ final class RadioLink {
                 && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS) {
             return false;
         }
+        if (!torqued && !stepping) return false;
         if (telemFresh()) {
-            if (telemState == ST_TORQUE_STANDING || telemState == ST_STEPPING) {
-                return true;
-            }
             if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
                 return false;
             }
-            return standing;
         }
-        return standing || torqued || stepping;
+        return true;
     }
 
     /**
@@ -475,18 +497,30 @@ final class RadioLink {
                 clearWalk();
                 break;
             case "torque":
+                cancelPendingStep();
                 sendSimple(TORQUE);
                 torqued = true;
                 stepping = false;
                 break;
             case "step":
-                // 原厂起步：一条切换码。点一下踏步，再点停步。不要连发。
+                // 踏步只在力控站立里切。站着直接发会被丢掉，看起来像没踏、再按就停步。
                 if (emergency) break;
-                sendSimple(STEP);
-                stepping = !stepping;
+                if (stepping) {
+                    boolean cancelOnly = stepPending && !stepSent;
+                    cancelPendingStep();
+                    stepping = false;
+                    torqued = true;
+                    standing = true;
+                    if (!cancelOnly) sendSimple(STEP);
+                    break;
+                }
+                sendSimple(TORQUE);
                 torqued = true;
+                stepping = true;
                 standing = true;
-                if (stepping) flushPendingGait();
+                stepSent = false;
+                stepPending = true;
+                onRadioDelayed(stepTask, STEP_AFTER_TORQUE_MS);
                 break;
             case "estop":
                 cancelPendingStand();
@@ -527,9 +561,9 @@ final class RadioLink {
             sendSimple(MODE_MANUAL);
             telemNavMode = 0;
         }
-        // 没在人按的踏步里就只记下。不要发力控：一点步态摇杆就变成调姿。
-        if (!isStairGait(gait)
-                && !(stepping && telemFresh() && telemState == ST_STEPPING)) {
+        // 没在人按的起步里就只记下。不要等遥测报踏步：RL 起立后常年报 0，
+        // 等它等于静音、低姿永远发不出去。
+        if (!isStairGait(gait) && !stepping) {
             pendingGait = gait;
             lastGaitSent = gait;
             return;
@@ -1140,22 +1174,26 @@ final class RadioLink {
         float ly = 0f;
         float lx = 0f;
         float rx = 0f;
+        float ry = 0f;
         // 通道要先确认是活的。上电时通道常是全 0，按 axis() 的换算 (0-1500)/500
         // 会被读成满量程后退。力控/起步之后才发轴，这一脚会直接踹出去。
         if (ch != null && ch.length > 0 && rcLive(ch)) {
             ly = axis(ch, 2, false);
             lx = -axis(ch, 3, true);
             rx = -axis(ch, 0, true);
+            ry = axis(ch, 1, false);
         }
-        if (ly == 0f && lx == 0f && rx == 0f
+        if (ly == 0f && lx == 0f && rx == 0f && ry == 0f
                 && System.currentTimeMillis() - scrAt < SCREEN_AXIS_HOLD_MS) {
             ly = scrFwd;
             lx = -scrLat;
             rx = -scrTurn;
+            ry = scrTilt;
         }
         axBuf[0] = ly;
         axBuf[1] = lx;
         axBuf[2] = rx;
+        axBuf[3] = stepping ? 0f : ry;
         return axBuf;
     }
 
@@ -1163,6 +1201,7 @@ final class RadioLink {
         sendSimple(AXIS_LY, bits(a[0]));
         sendSimple(AXIS_LX, bits(a[1]));
         sendSimple(AXIS_RX, bits(a[2]));
+        if (!stepping) sendSimple(AXIS_RY, bits(a.length > 3 ? a[3] : 0f));
     }
 
     private static float axis(int[] ch, int index, boolean invert) {

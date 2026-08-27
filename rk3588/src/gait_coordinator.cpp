@@ -72,27 +72,31 @@ void GaitCoordinator::WorkerLoop() {
 GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
                                                  HeightMapMode stair_style) {
   const RobotState snapshot = motion_.Snapshot();
+  const bool user_step = motion_.UserStepping();
+  const bool standing = GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing,
+                                        snapshot.emergency_source);
 
-  if (!snapshot.telemetry_alive) {
-    return {false, "no_telemetry",
-            "与机器狗失联，无法确认切换结果。请检查网线与运动主机登记。"};
-  }
-  if (!GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing,
-                       snapshot.emergency_source)) {
-    const char* now =
-        snapshot.rl_standing && snapshot.basic_state == BasicState::kSitting
-            ? "RL 站立（遥测仍报坐下）"
-            : ToString(snapshot.basic_state);
+  if (JointsLocked(snapshot.basic_state, snapshot.emergency_source) ||
+      IsStandSitTransient(snapshot.basic_state)) {
     return {false, "not_stepping",
-            std::string("趴着切不了步态，当前为") + now};
+            std::string("当前不能切步态，") + ToString(snapshot.basic_state)};
   }
 
   const bool needs_map = RequiresHeightMap(target);
   const bool multiframe = RequiresMultiFrame(target);
-  const bool already = snapshot.gait == target;
+  const bool already = snapshot.telemetry_alive && snapshot.gait == target;
 
   if (needs_map) {
-    if (!motion_.UserStepping()) {
+    // 楼梯要地形图确认，没遥测等于瞎切。
+    if (!snapshot.telemetry_alive) {
+      return {false, "no_telemetry",
+              "与机器狗失联，无法确认切换结果。请检查网线与运动主机登记。"};
+    }
+    if (!standing && !user_step) {
+      return {false, "not_stepping",
+              std::string("趴着切不了步态，当前为") + ToString(snapshot.basic_state)};
+    }
+    if (!user_step) {
       return {false, "not_stepping",
               "请先点起步，再切楼梯。楼梯是步态，要在踏步态下切。"};
     }
@@ -125,12 +129,19 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
         RequiresHeightMap(snapshot.gait)) {
       motion_.SetControlMode(ControlMode::kManual);
     }
-    if (motion_.UserStepping()) {
-      if (!already) motion_.SetGait(target);
-      return {true, "", ""};
+    // 非楼梯：踏步里立刻发。遥测常年报 0 / 收不到，不能拿它当「已经是这档」
+    // 或「还没踏步」——静音、低姿就是这样点了像没反应。
+    if (user_step || snapshot.basic_state == BasicState::kStepping) {
+      motion_.SetGait(target);
+      return {true, "", std::string("已切换到") + ToString(target)};
+    }
+    if (!standing && snapshot.telemetry_alive) {
+      return {false, "not_stepping",
+              std::string("趴着切不了步态，当前为") + ToString(snapshot.basic_state)};
     }
     motion_.QueueGait(target);
-    return {true, "", ""};
+    return {true, "queued",
+            std::string("已记下") + ToString(target) + "，起步后切换"};
   }
 
   if (already) {

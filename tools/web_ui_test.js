@@ -475,18 +475,18 @@ check('两条链路共用一份姿态，切档不走散',
       /app\.emergencyLocked = locked/.test(appJs) &&
       /STATE_TORQUE_STANDING/.test(appJs));
 // 起立后推杆就走。RL 起立后遥测仍报 0，以本端记得站着放行。力控只改姿态。
-check('起立后就能发轴',
+check('力控起步之后才发轴',
       /private boolean axesApply\(\)/.test(radioJava) &&
       /if \(axesApply\(\)\)/.test(radioJava) &&
       /sendAxes\(ax\)/.test(radioJava) &&
-      /return standing \|\| torqued \|\| stepping/.test(radioJava) &&
+      /if \(!torqued && !stepping\) return false/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
       /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
 check('坐下遥测不清掉刚点的力控起步',
       /RL 起立后主机仍报坐下/.test(radioJava) &&
       /本端刚点的力控\/起步不要灭/.test(appJs) &&
-      /刚点的起步不要被还没改口的「力控站立」灭掉/.test(appJs));
+      /walkMode 只跟人点的走/.test(appJs));
 // 起立中 / 坐下中 / 急停仍然不发轴：那几个状态下轴没有文档定义，
 // 实测会把原厂柔和的起身趴下掐成猛起猛趴。
 check('过渡和急停期间不发轴',
@@ -623,12 +623,13 @@ check('两条链路都不再自动补力控/起步',
       !/torqueByUser/.test(radioJava) &&
       !/torqueByUser/.test(appJs));
 // 起步跟原厂：人点一下发一条 0x21010201。程序不得自动补，补了就等于停步。
-check('起步发一条踏步切换码，程序不连发',
+check('起步先力控再延后发一条踏步码',
       /void ToggleStepping/.test(motionHpp) &&
       /ToggleStepping\(\)/.test(serviceCpp) &&
-      /踏步切换 →/.test(motionCpp) &&
-      /sendSimple\(STEP\)/.test(radioJava) &&
-      !/onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava) &&
+      /先力控/.test(motionCpp) &&
+      /step_at_/.test(motionCpp) &&
+      /STEP_AFTER_TORQUE_MS/.test(radioJava) &&
+      /onRadioDelayed\(stepTask, STEP_AFTER_TORQUE_MS\)/.test(radioJava) &&
       !/ArmForWalk/.test(motionCpp) &&
       !/speak\(ARM_HINT\)/.test(appJs));
 // 切档后起趴仍按站没站发明确指令，不翻转。
@@ -641,7 +642,11 @@ check('力控调姿态，起步才走',
       /walkMode === 'step'/.test(appJs) &&
       /walkMode === 'torque'/.test(appJs) &&
       /textContent = walk === 'step' \? '停步' : '起步'/.test(appJs) &&
-      /app\.walkMode === 'step' \? 'torque' : 'step'/.test(appJs));
+      /app\.walkMode === 'step' \? 'torque' : 'step'/.test(appJs) &&
+      !/basicState === STATE_STEPPING\) return 'vel'/.test(appJs) &&
+      !/basic === STATE_STEPPING && app\.walkMode !== 'torque'/.test(appJs) &&
+      /tilt: right\.y/.test(read('gamepad.js')) &&
+      /AXIS_RY/.test(radioJava));
 // B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
 check('B1/B2 一次按键、屏幕跟着亮',
       /function noteWalkCmd/.test(appJs) &&
@@ -664,12 +669,14 @@ check('离开楼梯后回到手动模式',
 // 再点常规也回不去。
 check('站着点步态不发给主机，也不发力控',
       /QueueGait\(target\)/.test(gaitCpp) &&
+      /起步后切换/.test(gaitCpp) &&
       !/StopUnwantedMarch/.test(gaitCpp) &&
       /不要在这里冲记下的步态/.test(motionCpp) &&
       !/SetVelocity[\s\S]{0,250}FlushQueuedGait/.test(motionCpp) &&
       !/noteWalkCmd\('torque'\)/.test(appJs) &&
       /walkMode === 'torque'/.test(appJs) &&
       !/stopUnwantedMarch/.test(radioJava) &&
+      /!isStairGait\(gait\) && !stepping/.test(radioJava) &&
       !/sendAxes[\s\S]{0,80}flushPendingGait/.test(radioJava));
 check('楼梯多帧45度在步态菜单，踏面只有材质',
       /data-gait="stair" data-short="楼梯"/.test(html) &&

@@ -216,7 +216,7 @@
       fwd: left.y,
       lat: left.x,
       turn: right.x,
-      tilt: 0,
+      tilt: right.y,
       look: right.y,
     };
   }
@@ -562,7 +562,7 @@
           }
         } else if (key === 'torque' || key === 'step') {
           if (radioPose(key)) {
-            if (app.noteWalkCmd) app.noteWalkCmd(key);
+            // applyRadioPose 已经记过 walkMode，这里再记一次起步会立刻变成停步。
             say(key === 'torque' ? '力控'
               : (app.walkMode === 'step' ? '起步' : '停步'));
             return;

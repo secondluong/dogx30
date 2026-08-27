@@ -279,7 +279,13 @@ public class ControlActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public void radioVel(double vx, double vy, double wz) {
-            RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz);
+            RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz, 0f);
+        }
+
+        @JavascriptInterface
+        public void radioVel(double vx, double vy, double wz, double tilt) {
+            RadioLink.get().setScreenAxes((float) vx, (float) vy, (float) wz,
+                    (float) tilt);
         }
 
         @JavascriptInterface

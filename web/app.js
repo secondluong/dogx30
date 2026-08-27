@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826s';
+const WEB_BUILD = '0826u';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -94,7 +94,7 @@ const app = {
   gait: 'walk',
   gaitPending: false,
   lioAligning: false,
-  walkMode: null,         // 由遥测推断：'torque' | 'step'
+  walkMode: null,         // 只跟人点的力控/起步：'torque' | 'step'
   poseHandoff: null,      // 待交接给网关的姿态（切档时记下，网关认了才算完）
   poseHintWarned: false,  // 旧网关的提示只说一次，别在遥控时反复弹
   gwVersion: '',          // hello.version，设置里能对上板子装的是哪一版
@@ -145,8 +145,6 @@ function controlChannel() {
   }
   if (app.walkMode === 'step') return 'vel';
   if (app.walkMode === 'torque') return 'pose';
-  if (app.basicState === STATE_STEPPING) return 'vel';
-  if (app.basicState === STATE_TORQUE_STANDING) return 'pose';
   return null;
 }
 
@@ -333,8 +331,8 @@ function onGaitResult(msg) {
   if (msg.ok) {
     // 网关回的是它真设上的那一档，以它为准（点的时候是先乐观标上的）。
     if (msg.gait_key) markGait(msg.gait_key);
-    // 站着点爬坡只是记下，msg 为空，不要再横幅刷「已处于」。
     if (msg.msg) showBanner(msg.msg);
+    if (msg.code === 'queued') speak('已记下，起步后切换');
     return;
   }
   // 切不成就把高亮退回原来那一档：亮着新档位而狗还在旧步态是最坏的一种显示。
@@ -464,11 +462,7 @@ function syncRadioStanding(st0) {
   let changed = false;
   if (basic >= 0 && basic !== app.basicState) {
     app.basicState = basic;
-    if (basic === STATE_STEPPING && app.walkMode !== 'torque') app.walkMode = 'step';
-    else if (basic === STATE_TORQUE_STANDING && app.walkMode !== 'step') {
-      // 刚点的起步不要被还没改口的「力控站立」灭掉。
-      app.walkMode = 'torque';
-    } else if (basic === STATE_EMERGENCY || basic === STATE_STAND_TO_SIT) {
+    if (basic === STATE_EMERGENCY || basic === STATE_STAND_TO_SIT) {
       app.walkMode = null;
     }
     // 坐下 / 初始站立：RL 起立后常停在这里。本端刚点的力控/起步不要灭，
@@ -611,7 +605,13 @@ function applyRadioPose(name) {
   }
   const gaits = ['walk', 'slope', 'offroad', 'lwalk', 'mountain', 'silent',
                  'stair', 'stairmulti', 'stair45'];
-  if (gaits.indexOf(name) >= 0) markGait(name);
+  if (gaits.indexOf(name) >= 0) {
+    markGait(name);
+    if (app.walkMode !== 'step') {
+      showBanner('已记下，起步后切换');
+      speak('已记下，起步后切换');
+    }
+  }
 }
 
 // 标「现在是哪个步态」。两个菜单里都有 [data-gait]（平地和常规是同一个步态，
@@ -1051,16 +1051,11 @@ function renderState(s) {
   wrap.classList.toggle('dog-prone', !standing);
   paintStandButton();
   if (!radioDirect()) {
-    // 只在读数变了时跟遥测：每帧盖的话，刚点的起步会被还没改口的「力控站立」灭掉，
-    // B1/B2 和屏幕按钮都像没选上。
+    // walkMode 只跟人点的走。遥测报踏步就写成 step，B2 一按就变成停步，
+    // 而狗其实还在站着。坐下遥测也不要灭刚点的力控/起步。
     if (s.basic_state !== meshWalkSeen) {
       meshWalkSeen = s.basic_state;
-      if (s.basic_state === STATE_STEPPING && app.walkMode !== 'torque') {
-        app.walkMode = 'step';
-      } else if (s.basic_state === STATE_TORQUE_STANDING && app.walkMode !== 'step') {
-        // 刚点的起步不要被还没改口的「力控站立」灭掉。
-        app.walkMode = 'torque';
-      } else if (!standing) app.walkMode = null;
+      if (!standing) app.walkMode = null;
     } else if (!standing) {
       app.walkMode = null;
     }
@@ -1283,7 +1278,7 @@ function sendRadioVel(c) {
   if (typeof n.radioWalk === 'function') n.radioWalk(app.walkMode || '');
   if (typeof n.radioVel !== 'function') return;
   if (g20Live() || stickTarget() === 'ptz') return;
-  n.radioVel(c.fwd || 0, c.lat || 0, c.turn || 0);
+  n.radioVel(c.fwd || 0, c.lat || 0, c.turn || 0, c.tilt || 0);
 }
 
 let ptzNeedControlAt = 0;

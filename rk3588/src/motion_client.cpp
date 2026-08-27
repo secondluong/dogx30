@@ -135,6 +135,21 @@ void MotionClient::TxLoop() {
       }
     }
 
+    bool fire_step = false;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (step_at_ != Clock::time_point{} && Clock::now() >= step_at_) {
+        step_at_ = {};
+        step_sent_ = true;
+        fire_step = true;
+      }
+    }
+    if (fire_step) {
+      SendSimple(cmd::kSteppingToggle);
+      std::printf("[运动] 踏步切换 → 起步 0x21010201（力控之后）\n");
+      FlushQueuedGait();
+    }
+
     if (send_axes) {
       int32_t ly, lx, rx, ry;
       {
@@ -425,6 +440,7 @@ void MotionClient::StandOrSit() {
       axes_unlocked_ = false;
       torqued_ = false;
       stepping_ = false;
+      step_sent_ = false;
       step_at_ = {};
     }
   }
@@ -466,6 +482,7 @@ void MotionClient::StandUp() {
     torqued_ = false;
     stepping_ = false;
     queued_gait_set_ = false;
+    step_sent_ = false;
     step_at_ = {};
   }
   std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n",
@@ -507,6 +524,7 @@ void MotionClient::SitDown() {
     torqued_ = false;
     stepping_ = false;
     queued_gait_set_ = false;
+    step_sent_ = false;
     step_at_ = {};
   }
   std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
@@ -523,6 +541,7 @@ void MotionClient::AdoptPosture(bool standing) {
   torqued_ = false;
   stepping_ = false;
   queued_gait_set_ = false;
+  step_sent_ = false;
   step_at_ = {};
   std::printf("[运动] 采纳遥控端告知的姿态：%s（遥测=%s）\n",
               standing ? "站立" : "坐下", ToString(state_.basic_state));
@@ -541,6 +560,7 @@ void MotionClient::UnloadForce() {
   torqued_ = false;
   stepping_ = false;
   queued_gait_set_ = false;
+  step_sent_ = false;
   step_at_ = {};
   std::printf("[运动] 卸力 0x21010202（遥测=%s）\n", ToString(state_.basic_state));
 }
@@ -549,6 +569,7 @@ void MotionClient::EnterTorqueStand() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     step_at_ = {};
+    step_sent_ = false;
     stepping_ = false;
     torqued_ = true;
     axes_unlocked_ = true;
@@ -558,18 +579,41 @@ void MotionClient::EnterTorqueStand() {
 }
 
 void MotionClient::ToggleStepping() {
-  // 原厂起步：点一下原地踏，再点一下停步站着。一条切换码，程序不许连发。
-  SendSimple(cmd::kSteppingToggle);
-  bool now_step = false;
+  // 原厂：踏步只在力控站立里切。站着直接发 0x21010201 会被丢掉，
+  // 看起来像「起步没踏、再按就停步」。起步先力控，TxLoop 到点再发一条。
+  bool stopping = false;
+  bool cancel_only = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    stepping_ = !stepping_;
-    now_step = stepping_;
-    torqued_ = true;
-    axes_unlocked_ = true;
+    stopping = stepping_;
+    if (stopping) {
+      stepping_ = false;
+      torqued_ = true;
+      axes_unlocked_ = true;
+      cancel_only = (step_at_ != Clock::time_point{} && !step_sent_);
+      step_at_ = {};
+      const bool sent = step_sent_;
+      step_sent_ = false;
+      if (cancel_only || !sent) {
+        // 踏步码还没发出去，停步只要留在力控，再发一条等于起步。
+        std::printf("[运动] 停步：取消待发踏步，留在力控\n");
+        return;
+      }
+    } else {
+      stepping_ = true;
+      torqued_ = true;
+      axes_unlocked_ = true;
+      step_sent_ = false;
+      step_at_ = Clock::now() + std::chrono::milliseconds(400);
+    }
   }
-  std::printf("[运动] 踏步切换 → %s 0x21010201\n", now_step ? "起步" : "停步");
-  if (now_step) FlushQueuedGait();
+  if (stopping) {
+    SendSimple(cmd::kSteppingToggle);
+    std::printf("[运动] 踏步切换 → 停步 0x21010201\n");
+    return;
+  }
+  SendSimple(cmd::kTorqueStand);
+  std::printf("[运动] 起步：先力控 0x2101020A，稍后踏步\n");
 }
 
 void MotionClient::SetGait(Gait gait) {
@@ -645,6 +689,7 @@ void MotionClient::SoftEmergencyStop() {
   torqued_ = false;
   stepping_ = false;
   queued_gait_set_ = false;
+  step_sent_ = false;
   step_at_ = {};
 }
 
@@ -703,6 +748,7 @@ void MotionClient::SetCommanding(bool on) {
     axes_unlocked_ = false;
     torqued_ = false;
     stepping_ = false;
+    step_sent_ = false;
     step_at_ = {};
     std::printf("[运动] 本端松开：停止向运动主机发心跳，原厂手柄可单独接管\n");
   }
