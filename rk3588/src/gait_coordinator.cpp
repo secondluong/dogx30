@@ -117,6 +117,7 @@ void GaitCoordinator::WorkerLoop() {
 GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
                                                  HeightMapMode stair_style,
                                                  bool stepping_hint) {
+  if (target == Gait::kLStair) stair_style = HeightMapMode::kSolid;
   const RobotState snapshot = motion_.Snapshot();
   const bool user_step = motion_.UserStepping() || stepping_hint;
   const bool standing = GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing,
@@ -174,6 +175,8 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
 
     // 地形图的修正结果只在非手动模式下参与速度链路，手动模式下白设。
     motion_.SetControlMode(ControlMode::kNonManual);
+    // 官方 V1.0.6 要求进入非手动后显式指定速度源；遥控场景仍选手柄。
+    terrain_.SetVelSource(VelSource::kHandle);
 
     terrain_.SetStepZMax(StepZMax::k28cm);
 

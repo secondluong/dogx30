@@ -413,6 +413,8 @@ var serviceCpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'src', 'robot_service.cpp'), 'utf8');
 var motionCpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'src', 'motion_client.cpp'), 'utf8');
+var bodyCpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'src', 'body_monitor.cpp'), 'utf8');
 var gaitCpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'src', 'gait_coordinator.cpp'), 'utf8');
 check('2.4G RadioLink 含起立趴下行走指令',
@@ -443,6 +445,20 @@ check('2.4G RadioLink 含起立趴下行走指令',
       /radioStanding/.test(radioBridge) &&
       /radioLinkOk/.test(radioBridge) &&
       /radioStatus/.test(radioBridge));
+check('两条链路都读取官方 Type=1002 本体状态',
+      /BODY_PORT = 30000/.test(radioJava) &&
+      /<Type>1002<\/Type>/.test(radioJava) &&
+      /bodyMotion == 6 \|\| bodyMotion == 7/.test(radioJava) &&
+      /<Type>1002<\/Type>/.test(bodyCpp) &&
+      /body == 6 \|\| body == 7/.test(motionCpp));
+check('V1.0.6 的 RL 与 L楼梯枚举已贯通双链路',
+      /kRl = 16/.test(motionHpp + fs.readFileSync(
+        path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'protocol.hpp'), 'utf8')) &&
+      /kGaitLStair = 0x21010424/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'protocol.hpp'), 'utf8')) &&
+      /case "lstair": return 0x21010424/.test(radioJava) &&
+      /data-gait="lstair"/.test(html) &&
+      /36: 'lstair'/.test(appJs));
 // 图传网卡和 WiFi 常撞在同一个网段（现场实测 ar_net0 192.168.1.11 / wlan0
 // 192.168.1.48），Android 又按以太网优先把默认路由搬到图传口上，于是 WebView 里
 // 的 WebSocket、WebRTC 全从那口出去 —— 切到 MESH 射频一关就整条链路断。

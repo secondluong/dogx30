@@ -271,12 +271,15 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
   "t": "state",
   "alive": true,
   "state_source": "mesh",
+  "state_truth": "motion_udp",
   "state_valid": true,
   "posture": "standing",
   "motion": "walking",
   "axis_mode": "vel",
   "basic_state": 4,
   "basic_state_text": "踏步",
+  "body_monitor_alive": true,
+  "body_motion_state": 4,
   "gait": 0,
   "gait_key": "walk",
   "gait_text": "Walk",
@@ -299,6 +302,12 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 `none|pose|vel`。MESH 使用网关生成的这组字段，2.4G 使用 Android 控制层生成的
 同构字段；两条链路没有永久主从关系。切换链路时状态先失效，接手链路收到狗主机
 遥测并重新生成状态后，摇杆才开放。
+
+每个控制层都可轮询智能控制器 `192.168.1.106:30000` 的官方本体监控
+`Type=1002`。运动主机 200Hz UDP 始终是控制与安全主通道；TCP 只补充
+摔倒 7、RL 16、定位/充电等字段，不能覆盖 UDP 的 `emergency_source`，也不能
+单独放开摇杆。UDP 不可用但 TCP 有效时才有 `state_truth=body_monitor`。
+官方规定 1002 的 Items 全零表示查询失败，不能解释为趴下。
 
 姿态角 `att` 单位是度，里程计 `odom.yaw` 单位是弧度（直接来自运动主机，不做转换）。
 

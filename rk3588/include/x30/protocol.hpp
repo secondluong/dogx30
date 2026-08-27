@@ -96,6 +96,7 @@ inline constexpr uint32_t kGaitStair45 = 0x2101040B;     // 地形图 = 多帧
 inline constexpr uint32_t kGaitLWalk = 0x21010420;
 inline constexpr uint32_t kGaitMountain = 0x21010421;
 inline constexpr uint32_t kGaitSilent = 0x21010422;
+inline constexpr uint32_t kGaitLStair = 0x21010424;  // V1.0.6：仅实心楼梯
 
 // 轴指令。取值 [-32767, 32767]，需 50 Hz 持续发送，超过 1 秒未收到即失效。
 // 同一组指令码在不同基础状态下语义不同：
@@ -193,6 +194,7 @@ enum class BasicState : uint8_t {
   kStepping = 4,
   kStandToSit = 5,
   kEmergencyOrFall = 6,
+  kRl = 16,
 };
 
 // 坐↔站过渡。再发一次切换会打断正在走的轨迹，甚至当场反转。
@@ -230,7 +232,7 @@ inline bool AxisCommandsApply(BasicState s, bool standing = false,
 inline bool TelemUpright(BasicState s) {
   return s == BasicState::kInitialStanding ||
          s == BasicState::kTorqueStanding ||
-         s == BasicState::kStepping;
+         s == BasicState::kStepping || s == BasicState::kRl;
 }
 
 // 原厂 LIO 要求站稳再开。RL 起立后遥测仍报坐下，要看 rl_standing。
@@ -267,6 +269,7 @@ enum class Gait : uint8_t {
   kLWalk = 32,
   kMountain = 33,
   kSilent = 34,
+  kLStair = 36,
 };
 
 enum class ControlMode : uint8_t {

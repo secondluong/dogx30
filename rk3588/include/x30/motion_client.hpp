@@ -90,6 +90,16 @@ struct RobotState {
   // RL 起立之后运动主机仍报 basic_state=0。此标志表示我们已发起立、尚未发趴下。
   // 控制台用它显示「RL 站立」，避免芯片一直写「坐下」让人连点起立。
   bool rl_standing = false;
+
+  // 官方本体监控 Type=1002。失联时保留最后值但 alive=false，状态融合回退 UDP。
+  bool body_monitor_alive = false;
+  int body_motion_state = -1;
+  int body_gait_state = -1;
+  int body_motor_state = -1;
+  int body_charge_state = -1;
+  int body_control_mode = -1;
+  int body_location_state = -1;
+  int body_on_dock_state = -1;
 };
 
 // 面向遥控端的规范化运动状态。BasicState 是狗主机的原始遥测；这里把
@@ -195,6 +205,9 @@ class MotionClient {
                  bool from_udp);
   void ApplyAtt(float roll, float pitch, float yaw, bool from_udp);
   void ApplyMileage(int32_t cm, bool from_udp);
+  void ApplyBodyMonitor(bool alive, int motion_state, int gait_state,
+                        int motor_state, int charge_state, int control_mode,
+                        int location_state, int on_dock_state);
 
  private:
   void TxLoop();

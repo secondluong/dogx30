@@ -16,6 +16,7 @@
 #include <memory>
 
 #include "x30/cloud_bridge.hpp"
+#include "x30/body_monitor.hpp"
 #include "x30/gait_coordinator.hpp"
 #include "x30/gateway_config.hpp"
 #include "x30/localizer.hpp"
@@ -127,6 +128,7 @@ class RobotService {
   RobotServiceConfig cfg_;
   WsServer server_;
   GaitCoordinator gaits_;
+  std::unique_ptr<BodyMonitor> body_monitor_;
 
   // 没配媒体源时为空，所有媒体消息一律回「未配置」。
   std::unique_ptr<MediaRegistry> media_;

@@ -40,6 +40,7 @@ const char* GaitKey(Gait g) {
     case Gait::kLWalk: return "lwalk";
     case Gait::kMountain: return "mountain";
     case Gait::kSilent: return "silent";
+    case Gait::kLStair: return "lstair";
   }
   return "unknown";
 }
@@ -54,6 +55,7 @@ bool ParseGaitName(const std::string& name, Gait* out) {
   else if (name == "lwalk") *out = Gait::kLWalk;
   else if (name == "mountain") *out = Gait::kMountain;
   else if (name == "silent") *out = Gait::kSilent;
+  else if (name == "lstair") *out = Gait::kLStair;
   else return false;
   return true;
 }
@@ -81,7 +83,20 @@ RobotService::RobotService(MotionClient& client, TerrainClient& terrain,
     : client_(client),
       terrain_(terrain),
       cfg_(std::move(config)),
-      gaits_(client, terrain, GaitCoordinatorConfig{}) {}
+      gaits_(client, terrain, GaitCoordinatorConfig{}) {
+  BodyMonitorConfig monitor_cfg;
+  // 官方拓扑：运动主机 .103，智能控制器（本体监控服务）.106。
+  const size_t dot = cfg_.settings.robot_ip.rfind('.');
+  if (dot != std::string::npos) {
+    monitor_cfg.host = cfg_.settings.robot_ip.substr(0, dot + 1) + "106";
+  }
+  body_monitor_ = std::make_unique<BodyMonitor>(std::move(monitor_cfg));
+  body_monitor_->SetHandler([this](const BodyMonitorState& s) {
+    client_.ApplyBodyMonitor(
+        s.alive, s.motion_state, s.gait_state, s.motor_state, s.charge_state,
+        s.control_mode, s.location_state, s.on_dock_state);
+  });
+}
 
 RobotService::~RobotService() { Stop(); }
 
@@ -191,6 +206,7 @@ bool RobotService::Start(std::string* error) {
   if (!server_.Start(cfg_.bind_address, cfg_.port, error)) return false;
 
   gaits_.Start();
+  body_monitor_->Start();
   if (cloud_) cloud_->Start();
   StartBatteryRos();
   running_.store(true);
@@ -203,6 +219,7 @@ void RobotService::Stop() {
   if (state_thread_.joinable()) state_thread_.join();
   if (ptz_) ptz_->Stop();
   StopBatteryRos();
+  if (body_monitor_) body_monitor_->Stop();
   if (cloud_) cloud_->Stop();
   gaits_.Stop();
   server_.Stop();
@@ -1141,6 +1158,21 @@ std::string RobotService::BuildStateJson() const {
   const char* state_text = ToString(s.basic_state);
   if (JointsLocked(s.basic_state, s.emergency_source)) {
     state_text = "急停锁定";
+  } else if (s.body_monitor_alive &&
+             (!s.telemetry_alive || s.body_motion_state == 6 ||
+              s.body_motion_state == 7 || s.body_motion_state == 16)) {
+    switch (s.body_motion_state) {
+      case 0: state_text = "趴下"; break;
+      case 1: state_text = "起立中"; break;
+      case 2: state_text = "站立"; break;
+      case 3: state_text = "力控"; break;
+      case 4: state_text = "行走"; break;
+      case 5: state_text = "趴下中"; break;
+      case 6: state_text = "软急停"; break;
+      case 7: state_text = "摔倒"; break;
+      case 16: state_text = "RL"; break;
+      default: state_text = "本体状态未知"; break;
+    }
   } else if (s.rl_standing && s.basic_state == BasicState::kSitting) {
     state_text = aligning ? "RL 站立 · 对准中" : "RL 站立 · 可走";
   }
@@ -1151,6 +1183,10 @@ std::string RobotService::BuildStateJson() const {
       .Key("alive", s.telemetry_alive)
       // 规范化状态由当前控制层生成。网页只消费这组字段，不再按按钮历史猜状态。
       .Key("state_source", "mesh")
+      .Key("state_truth", s.telemetry_alive
+                              ? "motion_udp"
+                              : (s.body_monitor_alive ? "body_monitor"
+                                                      : "unavailable"))
       .Key("state_valid", view.state_valid)
       .Key("posture", view.posture)
       .Key("motion", view.motion)
@@ -1158,6 +1194,14 @@ std::string RobotService::BuildStateJson() const {
       .Key("basic_state", static_cast<int>(s.basic_state))
       .Key("basic_state_text", state_text)
       .Key("rl_standing", s.rl_standing)
+      .Key("body_monitor_alive", s.body_monitor_alive)
+      .Key("body_motion_state", s.body_motion_state)
+      .Key("body_gait_state", s.body_gait_state)
+      .Key("body_motor_state", s.body_motor_state)
+      .Key("body_charge_state", s.body_charge_state)
+      .Key("body_control_mode", s.body_control_mode)
+      .Key("body_location_state", s.body_location_state)
+      .Key("body_on_dock_state", s.body_on_dock_state)
       .Key("gait", static_cast<int>(s.gait))
       .Key("gait_key", GaitKey(s.gait))
       .Key("gait_text", ToString(s.gait))

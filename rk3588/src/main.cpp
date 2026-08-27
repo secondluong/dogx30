@@ -168,6 +168,7 @@ bool ParseGait(const std::string& name, Gait* out) {
   else if (name == "lwalk") *out = Gait::kLWalk;
   else if (name == "mountain") *out = Gait::kMountain;
   else if (name == "silent") *out = Gait::kSilent;
+  else if (name == "lstair") *out = Gait::kLStair;
   else return false;
   return true;
 }

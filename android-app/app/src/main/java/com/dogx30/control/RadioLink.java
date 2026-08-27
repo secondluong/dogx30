@@ -34,12 +34,15 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.InterfaceAddress;
 import java.net.Socket;
+import java.io.DataInputStream;
+import java.io.OutputStream;
 import java.io.FileDescriptor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 
 /**
@@ -54,6 +57,10 @@ final class RadioLink {
     private static final int ROBOT_PORT = 43893;
     private static final String PERCEPTION_IP = "192.168.1.105";
     private static final int PERCEPTION_PORT = 43899;
+    /** 官方本体监控协议服务（智能控制器），Type=1002。 */
+    private static final String BODY_IP = "192.168.1.106";
+    private static final int BODY_PORT = 30000;
+    private static final long BODY_FRESH_MS = 1200;
     private static final int LOCAL_PORT = 43897;
     private static final int TICK_MS = 20;
     private static final int HB_EVERY = 10;
@@ -86,6 +93,7 @@ final class RadioLink {
     private static final int ST_STEPPING = 4;
     private static final int ST_STAND_TO_SIT = 5;
     private static final int ST_EMERGENCY = 6;
+    private static final int ST_RL = 16;
 
     /** 会改变姿态的那几条。发过它们，本机记的「站没站」才有依据。 */
     private static final java.util.Set<String> POSE_CMDS = new java.util.HashSet<>(
@@ -109,6 +117,7 @@ final class RadioLink {
     private static final int MODE_AUTO = 0x21010C03;
     private static final int HEIGHT = 0x21010406;
     private static final int HEIGHT_MAP_MODE = 0x3101EE01;
+    private static final int VEL_SOURCE = 0x3101EE03;
     private static final int STEP_Z_MAX = 0x3100EE04;
     private static final int AXIS_LY = 0x21010130;
     private static final int AXIS_LX = 0x21010131;
@@ -124,6 +133,8 @@ final class RadioLink {
 
     @Nullable private HandlerThread worker;
     @Nullable private Handler handler;
+    @Nullable private HandlerThread monitorWorker;
+    @Nullable private Handler monitorHandler;
     private boolean enabled;
     private boolean running;
     private boolean confirmed;
@@ -132,6 +143,16 @@ final class RadioLink {
     private int telemGait = -1;
     private int telemEmergSrc;
     private int telemNavMode;
+    private int bodyMotion = -1;
+    private int bodyGait = -1;
+    private int bodyMotor = -1;
+    private int bodyCharge = -1;
+    private int bodyControlMode = -1;
+    private int bodyLocation = -1;
+    private int bodyOnDock = -1;
+    private long bodyAt;
+    private String bodyErr = "";
+    private int bodyRequestId;
     private String lastGaitSent = "";
     private String pendingGait = "";
     private boolean telemRunSeen;
@@ -190,6 +211,7 @@ final class RadioLink {
     @Nullable private Network pinnedNet;
 
     private final Runnable loop = this::onTick;
+    private final Runnable monitorLoop = this::pollBodyMonitor;
     private final Runnable standTask = this::standNow;
     private final Runnable stepTask = this::firePendingStep;
 
@@ -255,8 +277,14 @@ final class RadioLink {
         return telemAt != 0 && System.currentTimeMillis() - telemAt < TELEM_FRESH_MS;
     }
 
+    private boolean bodyFresh() {
+        return bodyAt != 0 && System.currentTimeMillis() - bodyAt < BODY_FRESH_MS;
+    }
+
     /** 关节自锁。急停后主机常回报坐下，原厂看 0x1008 的来源字节。 */
     private boolean telemLocked() {
+        // Type=1002 明确定义软急停=6、摔倒=7，优先级高于运动 UDP。
+        if (bodyFresh() && (bodyMotion == 6 || bodyMotion == 7)) return true;
         if (telemFresh() && (telemState == ST_EMERGENCY
                 || telemEmergSrc == 1
                 || (telemEmergSrc >= 4 && telemEmergSrc <= 6))) {
@@ -268,7 +296,7 @@ final class RadioLink {
     private boolean telemUpright() {
         // 与 protocol.hpp TelemUpright 一致：初始站立 / 力控站立 / 踏步。
         return telemState == ST_INITIAL_STANDING || telemState == ST_TORQUE_STANDING
-                || telemState == ST_STEPPING;
+                || telemState == ST_STEPPING || telemState == ST_RL;
     }
 
     /**
@@ -277,6 +305,7 @@ final class RadioLink {
      */
     synchronized boolean isStanding() {
         if (telemLocked()) return false;
+        if (bodyFresh() && bodyMotion == 16) return true;
         if (telemFresh()) {
             if (telemUpright()) return true;
             // 起立中 / 坐下中按意图算，否则按钮会在过渡期来回跳。
@@ -286,6 +315,10 @@ final class RadioLink {
             // RL 起立后运动主机仍报坐下（见 protocol.hpp），这种只能按我们记的算。
             if (telemState == ST_SITTING) return standing;
             return false;
+        }
+        if (bodyFresh()) {
+            return bodyMotion == 2 || bodyMotion == 3
+                    || bodyMotion == 4 || bodyMotion == 16;
         }
         return standing;
     }
@@ -319,7 +352,9 @@ final class RadioLink {
             o.put("cmd", lastCmd);
             o.put("standing", isStanding());
             o.put("stateSource", "radio");
-            o.put("stateValid", telemFresh());
+            o.put("stateValid", bodyFresh() || telemFresh());
+            o.put("stateTruth", telemFresh() ? "motion_udp"
+                    : (bodyFresh() ? "body_monitor" : "unavailable"));
             o.put("posture", postureState());
             o.put("motion", motionState());
             o.put("axisMode", axisMode());
@@ -330,6 +365,15 @@ final class RadioLink {
             if (telemHeightSeen) o.put("height", telemHeight);
             o.put("emergency", telemLocked());
             o.put("emergSrc", telemEmergSrc);
+            o.put("bodyAlive", bodyFresh());
+            o.put("bodyMotion", bodyFresh() ? bodyMotion : -1);
+            o.put("bodyGait", bodyFresh() ? bodyGait : -1);
+            o.put("bodyMotor", bodyFresh() ? bodyMotor : -1);
+            o.put("bodyCharge", bodyFresh() ? bodyCharge : -1);
+            o.put("bodyControlMode", bodyFresh() ? bodyControlMode : -1);
+            o.put("bodyLocation", bodyFresh() ? bodyLocation : -1);
+            o.put("bodyOnDock", bodyFresh() ? bodyOnDock : -1);
+            o.put("bodyErr", bodyErr);
             o.put("axes", axesApply());
             o.put("poseKnown", poseIsKnown());
             return o.toString();
@@ -362,7 +406,7 @@ final class RadioLink {
 
     /** 姿态到底是知道的还是猜的。猜的就别去改网关那份记忆。 */
     private boolean poseIsKnown() {
-        return telemFresh() || poseKnown;
+        return bodyFresh() || telemFresh() || poseKnown;
     }
 
     /**
@@ -414,6 +458,8 @@ final class RadioLink {
 
     private String postureState() {
         if (telemLocked()) return "locked";
+        if (!telemFresh() && bodyFresh() && bodyMotion == 1) return "rising";
+        if (!telemFresh() && bodyFresh() && bodyMotion == 5) return "falling";
         if (telemFresh() && telemState == ST_SIT_TO_STAND) return "rising";
         if (telemFresh() && telemState == ST_STAND_TO_SIT) return "falling";
         return isStanding() ? "standing" : "prone";
@@ -422,11 +468,15 @@ final class RadioLink {
     private String motionState() {
         if (!"standing".equals(postureState())) return "unavailable";
         if (stepPending) return "starting";
+        if (!telemFresh() && bodyFresh() && bodyMotion == 4) {
+            return stepping ? "walking" : "stopping";
+        }
         if (telemFresh() && telemState == ST_STEPPING) {
             return stepping ? "walking" : "stopping";
         }
         if (stepping && stepSent) return "walking";
-        if (torqued && !stopped) return "torque";
+        if ((bodyFresh() && bodyMotion == 3 && !stopped)
+                || (torqued && !stopped)) return "torque";
         return "stopped";
     }
 
@@ -472,7 +522,8 @@ final class RadioLink {
     private void stopStepping() {
         if (emergency) return;
         boolean cancelOnly = stepPending && !stepSent;
-        boolean sent = stepSent || (telemFresh() && telemState == ST_STEPPING);
+        boolean sent = stepSent || (bodyFresh() && bodyMotion == 4)
+                || (telemFresh() && telemState == ST_STEPPING);
         cancelPendingStep();
         stepping = false;
         torqued = true;
@@ -497,7 +548,8 @@ final class RadioLink {
             return false;
         }
         if (telemFresh()) {
-            if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
+            if (telemState == ST_SIT_TO_STAND
+                    || telemState == ST_STAND_TO_SIT) {
                 return false;
             }
             // RL 起立后主机可能一直谎报坐下。模式以本控制层已经实际发出的
@@ -700,9 +752,11 @@ final class RadioLink {
             return;
         }
         sendSimple(MODE_AUTO);
+        sendTerrain(VEL_SOURCE, 1);
         sendTerrain(STEP_Z_MAX, 2);
-        if ("stair".equals(gait)) {
-            sendTerrain(HEIGHT_MAP_MODE, pendingStairStyle);
+        if ("stair".equals(gait) || "lstair".equals(gait)) {
+            sendTerrain(HEIGHT_MAP_MODE,
+                    "lstair".equals(gait) ? 3 : pendingStairStyle);
             onRadioDelayed(() -> sendSimple(code, 0), 200);
             return;
         }
@@ -737,7 +791,7 @@ final class RadioLink {
 
     private static boolean isStairGait(String gait) {
         return "stair".equals(gait) || "stairmulti".equals(gait)
-                || "stair45".equals(gait);
+                || "stair45".equals(gait) || "lstair".equals(gait);
     }
 
     private int gaitCode(String gait) {
@@ -751,6 +805,7 @@ final class RadioLink {
             case "lwalk": return 0x21010420;
             case "mountain": return 0x21010421;
             case "silent": return 0x21010422;
+            case "lstair": return 0x21010424;
             default: return 0;
         }
     }
@@ -766,7 +821,140 @@ final class RadioLink {
             case "stair": return 6;
             case "stairmulti": return 7;
             case "stair45": return 8;
+            case "lstair": return 36;
             default: return -1;
+        }
+    }
+
+    private synchronized void startBodyMonitor() {
+        if (monitorWorker != null) return;
+        monitorWorker = new HandlerThread("x30-body-monitor");
+        monitorWorker.start();
+        monitorHandler = new Handler(monitorWorker.getLooper());
+        monitorHandler.post(monitorLoop);
+    }
+
+    private synchronized void stopBodyMonitor() {
+        if (monitorHandler != null) monitorHandler.removeCallbacks(monitorLoop);
+        if (monitorWorker != null) monitorWorker.quitSafely();
+        monitorHandler = null;
+        monitorWorker = null;
+        bodyAt = 0;
+    }
+
+    private void pollBodyMonitor() {
+        synchronized (this) {
+            if (!enabled || !running) return;
+        }
+        Socket socket = null;
+        try {
+            socket = new Socket();
+            Network net;
+            String device;
+            synchronized (this) {
+                net = airNet;
+                device = ifaceName;
+            }
+            if (net != null) net.bindSocket(socket);
+            else if (!device.isEmpty()) bindToDevice(socket, device);
+            socket.connect(new InetSocketAddress(BODY_IP, BODY_PORT), 500);
+            socket.setSoTimeout(700);
+
+            byte[] xml = ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                    + "<PatrolDevice><Type>1002</Type><Command>1</Command>"
+                    + "<Time>0000-00-00 00:00:00</Time><Items/></PatrolDevice>")
+                    .getBytes(StandardCharsets.UTF_8);
+            byte[] head = new byte[16];
+            head[0] = (byte) 0xeb;
+            head[1] = (byte) 0x91;
+            head[2] = (byte) 0xeb;
+            head[3] = (byte) 0x90;
+            ByteBuffer.wrap(head).order(ByteOrder.LITTLE_ENDIAN)
+                    .putShort(4, (short) xml.length)
+                    .putShort(6, (short) bodyRequestId++);
+            OutputStream out = socket.getOutputStream();
+            out.write(head);
+            out.write(xml);
+            out.flush();
+
+            DataInputStream in = new DataInputStream(socket.getInputStream());
+            byte[] reply = new byte[16];
+            in.readFully(reply);
+            int size = (reply[4] & 0xff) | ((reply[5] & 0xff) << 8);
+            if ((reply[0] & 0xff) != 0xeb || (reply[1] & 0xff) != 0x91
+                    || (reply[2] & 0xff) != 0xeb || (reply[3] & 0xff) != 0x90
+                    || size <= 0) {
+                throw new java.io.IOException("bad Type=1002 frame");
+            }
+            byte[] payload = new byte[size];
+            in.readFully(payload);
+            String text = new String(payload, StandardCharsets.UTF_8);
+            final int motion = tagInt(text, "MotionState", -1);
+            if (motion < 0) throw new java.io.IOException("missing MotionState");
+            final int gait = tagInt(text, "GaitState", -1);
+            final int motor = tagInt(text, "MotorState", -1);
+            final int charge = tagInt(text, "ChargeState", -1);
+            final int control = tagInt(text, "ControlMode", -1);
+            final int location = tagInt(text, "Location", -1);
+            final int dock = tagInt(text, "OnDockState", -1);
+            final int electricity = tagInt(text, "Electricity", -1);
+            if (motion == 0 && gait == 0 && motor == 0 && charge == 0
+                    && control == 0 && location == 0 && dock == 0
+                    && electricity == 0) {
+                throw new java.io.IOException("Type=1002 all-zero failure");
+            }
+            onRadio(() -> applyBodyMonitor(motion, gait, motor, charge,
+                    control, location, dock));
+        } catch (Exception e) {
+            final String err = brief(e);
+            onRadio(() -> bodyErr = err);
+        } finally {
+            if (socket != null) {
+                try {
+                    socket.close();
+                } catch (Exception ignored) {
+                }
+            }
+            synchronized (this) {
+                if (enabled && running && monitorHandler != null) {
+                    monitorHandler.postDelayed(monitorLoop, 200);
+                }
+            }
+        }
+    }
+
+    private synchronized void applyBodyMonitor(int motion, int gait, int motor,
+                                                int charge, int control,
+                                                int location, int dock) {
+        if (!enabled) return;
+        bodyMotion = motion;
+        bodyGait = gait;
+        bodyMotor = motor;
+        bodyCharge = charge;
+        bodyControlMode = control;
+        bodyLocation = location;
+        bodyOnDock = dock;
+        bodyAt = System.currentTimeMillis();
+        bodyErr = "";
+        if (motion == 6 || motion == 7) {
+            emergency = true;
+            standing = false;
+            clearWalk();
+        }
+    }
+
+    private static int tagInt(String xml, String tag, int fallback) {
+        String open = "<" + tag + ">";
+        String close = "</" + tag + ">";
+        int begin = xml.indexOf(open);
+        if (begin < 0) return fallback;
+        begin += open.length();
+        int end = xml.indexOf(close, begin);
+        if (end < 0) return fallback;
+        try {
+            return Integer.parseInt(xml.substring(begin, end).trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
         }
     }
 
@@ -787,6 +975,7 @@ final class RadioLink {
             running = true;
             handler.post(loop);
         }
+        startBodyMonitor();
     }
 
     private synchronized void openUdp() {
@@ -1246,6 +1435,7 @@ final class RadioLink {
     private synchronized void stop() {
         running = false;
         if (handler != null) handler.removeCallbacks(loop);
+        stopBodyMonitor();
         cancelPendingStand();
         standing = false;
         // 关掉这一档之后，本机记的姿态就只是历史了：狗可能被 MESH 那侧或原厂手柄

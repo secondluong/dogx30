@@ -134,10 +134,16 @@ void MotionClient::TxLoop() {
       // 力控左杆就会走路、俯仰轴被丢掉。RL 主机又可能在已站立后继续报
       // basic_state=0，所以不能要求它必须报 3/4；控制层已发出的模式指令才
       // 决定轴含义，主机遥测只负责失联、急停、起趴过渡和姿态安全门。
+      // TCP 监控只有低频查询响应，绝不能单独放开 50Hz 轴。它只作为额外
+      // 锁定条件；真正的轴安全门始终要求运动 UDP 新鲜。
+      const bool body_locked =
+          state_.body_monitor_alive &&
+          (state_.body_motion_state == 6 || state_.body_motion_state == 7);
+      const bool safe_state = safe_upright && !body_locked;
       if (stepping_ && step_sent_) {
-        send_axes = safe_upright;
+        send_axes = safe_state;
       } else if (torqued_ && !stepping_) {
-        send_axes = safe_upright;
+        send_axes = safe_state;
       } else {
         send_axes = false;
       }
@@ -329,6 +335,43 @@ void MotionClient::ApplyMileage(int32_t cm, bool from_udp) {
     mileage_from_ros_ = true;
   }
   state_.current_mileage_cm = cm;
+}
+
+void MotionClient::ApplyBodyMonitor(bool alive, int motion_state,
+                                    int gait_state, int motor_state,
+                                    int charge_state, int control_mode,
+                                    int location_state, int on_dock_state) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  state_.body_monitor_alive = alive;
+  if (!alive) return;
+  state_.body_motion_state = motion_state;
+  state_.body_gait_state = gait_state;
+  state_.body_motor_state = motor_state;
+  state_.body_charge_state = charge_state;
+  state_.body_control_mode = control_mode;
+  state_.body_location_state = location_state;
+  state_.body_on_dock_state = on_dock_state;
+  if (motion_state == 6 || motion_state == 7) {
+    axes_unlocked_ = false;
+    torqued_ = false;
+    stepping_ = false;
+    step_sent_ = false;
+    step_at_ = {};
+    motion_phase_ = MotionPhase::kUnavailable;
+  } else if (!state_.telemetry_alive && motion_state == 4 && stepping_) {
+    step_sent_ = true;
+    motion_phase_ = MotionPhase::kWalking;
+  } else if (!state_.telemetry_alive && motion_state == 3 &&
+             torqued_ && !stepping_) {
+    if (motion_phase_ == MotionPhase::kStopping) {
+      motion_phase_ = MotionPhase::kStopped;
+    } else if (motion_phase_ != MotionPhase::kStopped) {
+      motion_phase_ = MotionPhase::kTorque;
+    }
+  } else if (!state_.telemetry_alive && motion_state == 2 &&
+             motion_phase_ == MotionPhase::kStopping) {
+    motion_phase_ = MotionPhase::kStopped;
+  }
 }
 
 void MotionClient::HandleDatagram(const uint8_t* data, int len) {
@@ -776,7 +819,9 @@ void MotionClient::StopStepping() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     const bool pending = step_at_ != Clock::time_point{} && !step_sent_;
-    send_step = (step_sent_ || state_.basic_state == BasicState::kStepping) &&
+    send_step = (step_sent_ || state_.basic_state == BasicState::kStepping ||
+                 (state_.body_monitor_alive &&
+                  state_.body_motion_state == 4)) &&
                 !pending;
     stepping_ = false;
     torqued_ = true;
@@ -842,42 +887,74 @@ void MotionClient::StopUnwantedMarch() {
 
 bool MotionClient::UserStepping() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  return stepping_ || state_.basic_state == BasicState::kStepping;
+  return stepping_ || state_.basic_state == BasicState::kStepping ||
+         (state_.body_monitor_alive && state_.body_motion_state == 4);
 }
 
 MotionView MotionClient::View() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
   MotionView out;
-  out.state_valid = state_.telemetry_alive;
-  const bool locked = JointsLocked(state_.basic_state, state_.emergency_source);
+  // 运动 UDP 是 200Hz 控制/安全主通道；Type=1002 是低频请求响应补充。
+  // 监控通道补出摔倒(7)、RL(16)，但不能覆盖 UDP emergency_source。
+  const bool udp = state_.telemetry_alive;
+  const bool official = state_.body_monitor_alive &&
+                        state_.body_motion_state >= 0;
+  out.state_valid = udp || official;
+  const int body = state_.body_motion_state;
+  const bool locked =
+      (udp && JointsLocked(state_.basic_state, state_.emergency_source)) ||
+      (official && (body == 6 || body == 7));
+  const bool use_official_motion =
+      official && (!udp || body == 16);
   const bool remembered_up = last_stand_sit_ == LastStandSit::kStood;
-  const bool upright = TelemUpright(state_.basic_state) ||
-                       (remembered_up &&
-                        state_.basic_state == BasicState::kSitting);
+  const bool upright =
+      use_official_motion
+          ? (body == 2 || body == 3 || body == 4 || body == 16)
+          : (TelemUpright(state_.basic_state) ||
+             (remembered_up &&
+              state_.basic_state == BasicState::kSitting));
+  const bool transient = use_official_motion
+                             ? (body == 1 || body == 5)
+                             : IsStandSitTransient(state_.basic_state);
 
   if (locked) out.posture = "locked";
-  else if (state_.basic_state == BasicState::kSitToStand) out.posture = "rising";
-  else if (state_.basic_state == BasicState::kStandToSit) out.posture = "falling";
+  else if (use_official_motion && body == 1) out.posture = "rising";
+  else if (use_official_motion && body == 5) out.posture = "falling";
+  else if (!use_official_motion &&
+           state_.basic_state == BasicState::kSitToStand)
+    out.posture = "rising";
+  else if (!use_official_motion &&
+           state_.basic_state == BasicState::kStandToSit)
+    out.posture = "falling";
   else out.posture = upright ? "standing" : "prone";
 
-  if (locked || !upright || IsStandSitTransient(state_.basic_state)) {
+  if (locked || !upright || transient) {
     out.phase = MotionPhase::kUnavailable;
     out.motion = "unavailable";
     return out;
   }
 
-  if (motion_phase_ == MotionPhase::kStopping &&
-      state_.basic_state == BasicState::kStepping) {
+  const bool reported_walking =
+      use_official_motion ? body == 4
+                          : state_.basic_state == BasicState::kStepping;
+  const bool reported_torque =
+      use_official_motion ? body == 3
+                          : state_.basic_state == BasicState::kTorqueStanding;
+  if (motion_phase_ == MotionPhase::kStopping && reported_walking) {
     out.phase = MotionPhase::kStopping;
     out.motion = "stopping";
-  } else if (state_.basic_state == BasicState::kStepping ||
-             motion_phase_ == MotionPhase::kWalking) {
+  } else if (reported_walking || motion_phase_ == MotionPhase::kWalking) {
     out.phase = MotionPhase::kWalking;
     out.motion = "walking";
   } else if (motion_phase_ == MotionPhase::kStarting) {
     out.phase = MotionPhase::kStarting;
     out.motion = "starting";
-  } else if (motion_phase_ == MotionPhase::kTorque) {
+  } else if (reported_torque &&
+             (motion_phase_ == MotionPhase::kStopped ||
+              motion_phase_ == MotionPhase::kStopping)) {
+    out.phase = MotionPhase::kStopped;
+    out.motion = "stopped";
+  } else if (reported_torque || motion_phase_ == MotionPhase::kTorque) {
     out.phase = MotionPhase::kTorque;
     out.motion = "torque";
   } else {
@@ -885,9 +962,9 @@ MotionView MotionClient::View() const {
     out.motion = "stopped";
   }
 
-  if (out.state_valid && out.phase == MotionPhase::kWalking) {
+  if (udp && out.phase == MotionPhase::kWalking) {
     out.axis_mode = "vel";
-  } else if (out.state_valid && out.phase == MotionPhase::kTorque) {
+  } else if (udp && out.phase == MotionPhase::kTorque) {
     out.axis_mode = "pose";
   }
   return out;

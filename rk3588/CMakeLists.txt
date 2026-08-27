@@ -21,6 +21,7 @@ add_library(x30_core
   src/media_registry.cpp
   src/ptz_client.cpp
   src/net_util.cpp
+  src/body_monitor.cpp
   src/xmlrpc.cpp
   src/ros_client.cpp
   src/point_cloud.cpp

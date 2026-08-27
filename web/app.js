@@ -533,6 +533,7 @@ function syncRadioStanding(st0) {
 const RADIO_GAIT_KEYS = {
   0: 'walk', 1: 'offroad', 2: 'slope', 3: 'run', 6: 'stair',
   7: 'stairmulti', 8: 'stair45', 32: 'lwalk', 33: 'mountain', 34: 'silent',
+  36: 'lstair',
 };
 
 let radioGaitSeen = '';
@@ -565,7 +566,7 @@ function applyRadioPose(name) {
     return;
   }
   const gaits = ['walk', 'slope', 'offroad', 'lwalk', 'mountain', 'silent',
-                 'stair', 'stairmulti', 'stair45'];
+                 'stair', 'stairmulti', 'stair45', 'lstair'];
   if (gaits.indexOf(name) >= 0) {
     markGait(name);
     if (app.walkMode !== 'step') {

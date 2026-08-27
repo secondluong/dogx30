@@ -5,7 +5,7 @@ namespace x30 {
 const char* ToString(BasicState s) {
   switch (s) {
     case BasicState::kSitting:
-      return "坐下";
+      return "趴下";
     case BasicState::kSitToStand:
       return "起立中";
     case BasicState::kInitialStanding:
@@ -15,9 +15,11 @@ const char* ToString(BasicState s) {
     case BasicState::kStepping:
       return "踏步";
     case BasicState::kStandToSit:
-      return "坐下中";
+      return "趴下中";
     case BasicState::kEmergencyOrFall:
       return "急停/跌倒";
+    case BasicState::kRl:
+      return "RL";
   }
   return "未知";
 }
@@ -44,6 +46,8 @@ const char* ToString(Gait g) {
       return "山地";
     case Gait::kSilent:
       return "静音";
+    case Gait::kLStair:
+      return "L楼梯";
   }
   return "未知";
 }
@@ -68,6 +72,8 @@ uint32_t GaitCommandCode(Gait g) {
       return cmd::kGaitMountain;
     case Gait::kSilent:
       return cmd::kGaitSilent;
+    case Gait::kLStair:
+      return cmd::kGaitLStair;
     // Run 没有独立的切换指令码，遥控器上是 D 键，协议文档未列出。
     case Gait::kRun:
       return 0;
@@ -78,27 +84,29 @@ uint32_t GaitCommandCode(Gait g) {
 GaitLimits LimitsOf(Gait g) {
   switch (g) {
     case Gait::kWalk:
-      return {1.2f, 0.8f, 1.2f};
+      return {1.5f, 0.15f, 0.45f};
     case Gait::kSlope:
-      return {0.7f, 0.3f, 0.7f};
+      return {0.7f, 0.25f, 0.5f};
     case Gait::kOffRoad:
-      return {0.3f, 0.1f, 0.45f};
+      return {0.3f, 0.1f, 0.5f};
     case Gait::kStair:
-      return {0.3f, 0.1f, 0.45f};
+      return {0.3f, 0.2f, 0.8f};
     case Gait::kStairMulti:
-      return {0.6f, 0.1f, 0.45f};
+      return {0.6f, 0.2f, 0.8f};
     case Gait::kStair45:
-      return {0.3f, 0.1f, 0.45f};
+      return {0.3f, 0.2f, 0.8f};
     case Gait::kLWalk:
-      return {1.0f, 0.5f, 1.0f};
+      return {1.5f, 0.5f, 1.2f};
     case Gait::kMountain:
-      return {1.0f, 0.5f, 1.0f};
+      return {1.5f, 0.5f, 1.2f};
     case Gait::kSilent:
       return {1.0f, 0.5f, 1.0f};
     case Gait::kRun:
       return {2.5f, 0.8f, 1.2f};
+    case Gait::kLStair:
+      return {0.3f, 0.2f, 0.8f};
   }
-  return {1.2f, 0.8f, 1.2f};
+  return {1.5f, 0.15f, 0.45f};
 }
 
 const char* ToString(HeightMapMode m) {
@@ -125,6 +133,7 @@ StepZMax RecommendedStepZMax(Gait g) {
     case Gait::kStair:
     case Gait::kStairMulti:
     case Gait::kStair45:
+    case Gait::kLStair:
       return StepZMax::k28cm;
     default:
       return StepZMax::k8cm;
@@ -132,7 +141,8 @@ StepZMax RecommendedStepZMax(Gait g) {
 }
 
 bool RequiresHeightMap(Gait g) {
-  return g == Gait::kStair || g == Gait::kStairMulti || g == Gait::kStair45;
+  return g == Gait::kStair || g == Gait::kStairMulti ||
+         g == Gait::kStair45 || g == Gait::kLStair;
 }
 
 bool RequiresMultiFrame(Gait g) {

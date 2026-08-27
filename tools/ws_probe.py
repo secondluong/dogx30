@@ -802,6 +802,12 @@ def main():
     check("规范状态为停步",
           st.get("posture") == "standing" and st.get("motion") == "stopped",
           f"{st.get('posture')}/{st.get('motion')}")
+    st = a.wait_for("state", timeout=3,
+                    predicate=lambda m: m.get("body_monitor_alive") is True)
+    check("官方本体监控作为 UDP 补充状态源",
+          st.get("state_truth") == "motion_udp"
+          and st.get("body_motion_state") == 2,
+          f"{st.get('state_truth')} state={st.get('body_motion_state')}")
 
     print("\n== 步态与速度 ==")
     # 力控/停步时只记配置，不应提前发给狗主机。
@@ -886,6 +892,11 @@ def main():
     check("观察者也能触发急停",
           st["basic_state"] == 6 or st["emergency_source"] != 0,
           f"状态={st['basic_state_text']} 急停源={st['emergency_source']}")
+    st = b.wait_for("state", timeout=3,
+                    predicate=lambda m: m.get("body_motion_state") == 6)
+    check("官方本体监控识别软急停",
+          st.get("posture") == "locked" and st.get("axis_mode") == "none",
+          f"{st.get('posture')} / {st.get('axis_mode')}")
 
     print("\n== 断连释放控制权 ==")
     a.close()

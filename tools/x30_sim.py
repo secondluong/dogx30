@@ -55,6 +55,7 @@ GAITS = {
     0x21010420: (32, "L-Walk"),
     0x21010421: (33, "山地"),
     0x21010422: (34, "静音"),
+    0x21010424: (36, "L楼梯"),
 }
 
 # --- 地形图模块（感知主机 192.168.1.105:43899）------------------------------
@@ -85,6 +86,7 @@ STAIR_REQUIREMENTS = {
     6: {MAP_SOLID, MAP_GRATING, MAP_NO_RISER},
     7: {MAP_MULTI},
     8: {MAP_MULTI},
+    36: {MAP_SOLID},
 }
 
 # --- 遥测报文码 -------------------------------------------------------------
@@ -121,16 +123,17 @@ AXIS_DEAD_ZONE = 655
 
 # 各步态最大速度，取自 API 文档附录 B（正常身高档）
 GAIT_LIMITS = {
-    0: (1.2, 0.8, 1.2),
-    1: (0.3, 0.1, 0.45),
-    2: (0.7, 0.3, 0.7),
+    0: (1.5, 0.15, 0.45),
+    1: (0.3, 0.1, 0.5),
+    2: (0.7, 0.25, 0.5),
     3: (2.5, 0.8, 1.2),
-    6: (0.3, 0.1, 0.45),
-    7: (0.6, 0.1, 0.45),
-    8: (0.3, 0.1, 0.45),
-    32: (1.0, 0.5, 1.0),
-    33: (1.0, 0.5, 1.0),
+    6: (0.3, 0.2, 0.8),
+    7: (0.6, 0.2, 0.8),
+    8: (0.3, 0.2, 0.8),
+    32: (1.5, 0.5, 1.2),
+    33: (1.5, 0.5, 1.2),
     34: (1.0, 0.5, 1.0),
+    36: (0.3, 0.2, 0.8),
 }
 
 HEAD = struct.Struct("<III")
@@ -523,6 +526,12 @@ def main():
         default="127.0.0.1:43897",
         help="遥测回送目标，对应实机 network.toml 里登记的地址",
     )
+    parser.add_argument(
+        "--body-port",
+        type=int,
+        default=30000,
+        help="官方本体监控 TCP 端口（Type=1002）",
+    )
     parser.add_argument("--quiet", action="store_true", help="只打印状态迁移")
     parser.add_argument(
         "--lie-rl-state",
@@ -542,6 +551,10 @@ def main():
     terrain_rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     terrain_rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     terrain_rx.bind(("0.0.0.0", args.terrain_port))
+    body_rx = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    body_rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    body_rx.bind(("0.0.0.0", args.body_port))
+    body_rx.listen(8)
 
     robot = Robot()
     robot.lie_rl_state = args.lie_rl_state
@@ -552,6 +565,8 @@ def main():
 
     log(f"仿真器已启动，监听 {args.listen_port}，遥测回送至 {target[0]}:{target[1]}")
     log(f"地形图模块监听 {args.terrain_port}")
+    log(f"本体监控 Type=1002 监听 {args.body_port}")
+    log(f"本体监控 Type=1002 监听 {args.body_port}")
     log("等待网关连接…")
 
     def rx_loop():
@@ -613,10 +628,62 @@ def main():
             else:
                 next_t = time.perf_counter()
 
+    def body_loop():
+        body_rx.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                conn, _ = body_rx.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            with conn:
+                conn.settimeout(0.7)
+                try:
+                    frame = b""
+                    while len(frame) < 16:
+                        chunk = conn.recv(16 - len(frame))
+                        if not chunk:
+                            break
+                        frame += chunk
+                    if len(frame) != 16 or frame[:4] != b"\xeb\x91\xeb\x90":
+                        continue
+                    size, request_id = struct.unpack_from("<HH", frame, 4)
+                    request = b""
+                    while len(request) < size:
+                        chunk = conn.recv(size - len(request))
+                        if not chunk:
+                            break
+                        request += chunk
+                    if b"<Type>1002</Type>" not in request:
+                        continue
+                    with robot.lock:
+                        motion = robot.state
+                        gait = robot.gait
+                        nav_mode = robot.nav_mode
+                    xml = (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        "<PatrolDevice><Type>1002</Type><Command>1</Command>"
+                        f"<MotionState>{motion}</MotionState>"
+                        f"<GaitState>{gait}</GaitState>"
+                        "<MotorState>1</MotorState><ChargeState>0</ChargeState>"
+                        f"<ControlMode>{nav_mode}</ControlMode>"
+                        "<Location>1</Location><OnDockState>0</OnDockState>"
+                        "<Electricity>80</Electricity><Speed>0</Speed>"
+                        "</PatrolDevice>"
+                    ).encode("utf-8")
+                    reply = bytearray(16)
+                    reply[:4] = b"\xeb\x91\xeb\x90"
+                    struct.pack_into("<HH", reply, 4, len(xml), request_id)
+                    conn.sendall(reply + xml)
+                except (OSError, socket.timeout):
+                    pass
+
     threads = [
         threading.Thread(target=rx_loop, daemon=True),
         threading.Thread(target=terrain_loop, daemon=True),
         threading.Thread(target=tx_loop, daemon=True),
+        threading.Thread(target=body_loop, daemon=True),
     ]
     for t in threads:
         t.start()
@@ -629,6 +696,8 @@ def main():
         stop.set()
         rx.close()
         tx.close()
+        terrain_rx.close()
+        body_rx.close()
     return 0
 
 
