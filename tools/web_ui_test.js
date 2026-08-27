@@ -586,7 +586,7 @@ check('菜单收起时显示「菜单名|当前档 ›」',
       /paintPickers\(\);/.test(appJs) &&
       /app\.gaitPending/.test(appJs) &&
       /class="acc-name">步态</.test(html) &&
-      /class="acc-name">上下楼踏面</.test(html) &&
+      /class="acc-name">踏面</.test(html) &&
       /class="acc-name">身高</.test(html) &&
       /class="acc-arrow"[^>]*>›</.test(html) &&
       /\.acc-name \{/.test(styleText) &&
@@ -599,11 +599,9 @@ check('菜单收起时显示「菜单名|当前档 ›」',
 check('踏面那颗显示的是踏面材质',
       /\{ val: 'acc-val-stair', sel: '\[data-stair\]\.active' \}/.test(appJs) &&
       /class="btn sm active" data-stair="solid"/.test(html));
-check('点踏面会下发楼梯步态和踏面类型',
-      /el\.dataset\.stair/.test(appJs) &&
-      /name: 'gait'/.test(appJs) &&
-      /stair_style: b\.dataset\.stair/.test(appJs) &&
-      /value: gait/.test(appJs));
+check('点踏面只记材质，不把楼梯发给主机',
+      /踏面只记材质/.test(appJs) &&
+      !/点实心\/格栅\/无踢面就按下发楼梯/.test(appJs));
 // 刚开机或刚切过来时我们什么都没点过，档位只能问狗。身高是单独一条报文，
 // 不解它就只能显示「我点过的」，那在切档之后必然是错的。
 check('2.4G 的档位也听狗自己报',
@@ -624,24 +622,26 @@ check('两条链路都不再自动补力控/起步',
       !/axesPushed/.test(radioJava) &&
       !/torqueByUser/.test(radioJava) &&
       !/torqueByUser/.test(appJs));
-// 踏步是切换码，切档后一发就拧反。起步不再下发，推杆也不再喊先按那两下。
-check('起步不再发踏步切换码',
-      /void EnterStepping/.test(motionHpp) &&
-      /EnterStepping\(\)/.test(serviceCpp) &&
-      /不再发踏步切换码/.test(motionCpp) &&
-      /不再发踏步切换码/.test(radioJava) &&
+// 起步跟原厂：人点一下发一条 0x21010201。程序不得自动补，补了就等于停步。
+check('起步发一条踏步切换码，程序不连发',
+      /void ToggleStepping/.test(motionHpp) &&
+      /ToggleStepping\(\)/.test(serviceCpp) &&
+      /踏步切换 →/.test(motionCpp) &&
+      /sendSimple\(STEP\)/.test(radioJava) &&
       !/onRadioDelayed\(stepTask, ARM_GAP_MS\)/.test(radioJava) &&
-      !/请先按力控、起步之后才能行走/.test(appJs) &&
+      !/ArmForWalk/.test(motionCpp) &&
       !/speak\(ARM_HINT\)/.test(appJs));
 // 切档后起趴仍按站没站发明确指令，不翻转。
 check('切档后起趴不翻转',
       /app\.walkMode = null/.test(appJs) &&
       /return isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(appJs) &&
       /name: app\.isStandingUi && app\.isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(read('gamepad.js')));
-// 力控站立才走姿态通道。起立后（没点力控）推杆走速度。
-check('力控调姿态，起立后推杆就走',
-      /isStandingUi\(\) \|\| app\.walkMode === 'step'/.test(appJs) &&
-      /walkMode === 'torque' \|\| app\.basicState === STATE_TORQUE_STANDING/.test(appJs));
+// 力控调姿态，起步才走。起立后先不发速度。
+check('力控调姿态，起步才走',
+      /walkMode === 'step'/.test(appJs) &&
+      /walkMode === 'torque'/.test(appJs) &&
+      /textContent = walk === 'step' \? '停步' : '起步'/.test(appJs) &&
+      /app\.walkMode === 'step' \? 'torque' : 'step'/.test(appJs));
 // B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
 check('B1/B2 一次按键、屏幕跟着亮',
       /function noteWalkCmd/.test(appJs) &&
@@ -654,30 +654,32 @@ check('离开楼梯后回到手动模式',
       /只在离开楼梯/.test(gaitCpp) &&
       /RequiresHeightMap\(snapshot\.gait\)/.test(gaitCpp) &&
       /SetControlMode\(ControlMode::kManual\)/.test(gaitCpp) &&
+      /楼梯没切成立刻拉回手动/.test(gaitCpp) &&
       /QueueGait/.test(gaitCpp) &&
-      /StopUnwantedMarch/.test(gaitCpp) &&
       /void QueueGait/.test(motionHpp) &&
-      /StopUnwantedMarch\(\)/.test(motionCpp) &&
       /pendingGait/.test(radioJava) &&
-      /stopUnwantedMarch/.test(radioJava) &&
       !/restoreManualIfNeeded/.test(radioJava) &&
       !/SitDown[\s\S]{0,500}emergency_source = 5/.test(motionCpp));
-// 站着点爬坡不能把步态码发给主机，也不能让摇杆把记下的档冲出去。
-// 否则主机自己踏步，再切档只改记录，20Hz 速度 0 还在喂，狗踏个不停。
-check('站着点步态不发给主机，踏步用力控停',
-      /StopUnwantedMarch/.test(gaitCpp) &&
+// 站着点爬坡不能把步态码或力控发给主机。力控会把摇杆从走路拧成调姿，
+// 再点常规也回不去。
+check('站着点步态不发给主机，也不发力控',
       /QueueGait\(target\)/.test(gaitCpp) &&
+      !/StopUnwantedMarch/.test(gaitCpp) &&
       /不要在这里冲记下的步态/.test(motionCpp) &&
       !/SetVelocity[\s\S]{0,250}FlushQueuedGait/.test(motionCpp) &&
-      /noteWalkCmd\('torque'\)/.test(appJs) &&
-      /STATE_STEPPING && app\.walkMode !== 'torque'/.test(appJs) &&
-      /stopUnwantedMarch/.test(radioJava) &&
+      !/noteWalkCmd\('torque'\)/.test(appJs) &&
+      /walkMode === 'torque'/.test(appJs) &&
+      !/stopUnwantedMarch/.test(radioJava) &&
       !/sendAxes[\s\S]{0,80}flushPendingGait/.test(radioJava));
-check('上下楼那一排有平地这个出口',
-      /data-gait="walk" data-short="平地"/.test(html) &&
+check('楼梯多帧45度在步态菜单，踏面只有材质',
       /data-gait="stair" data-short="楼梯"/.test(html) &&
       /data-gait="stairmulti"/.test(html) &&
-      /data-gait="stair45"/.test(html));
+      /data-gait="stair45"/.test(html) &&
+      /acc-name">步态</.test(html) &&
+      /acc-name">踏面</.test(html) &&
+      !/data-gait="walk" data-short="平地"/.test(html) &&
+      /data-stair="solid"/.test(html) &&
+      /踏面只记材质/.test(appJs));
 // 步态高亮以人点的为准，遥测只在读数真的变了时接管。以前每帧照遥测标一次，而狗的
 // gait_state 在好几种常见情况下一直报 0（收不到遥测、切换被拒、楼梯要地形图配合），
 // 人点了爬坡下一帧就被顶回常规，看着像「点了没选上」。

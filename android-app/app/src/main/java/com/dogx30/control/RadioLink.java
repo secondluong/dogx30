@@ -480,11 +480,13 @@ final class RadioLink {
                 stepping = false;
                 break;
             case "step":
-                // 起立后推杆就能走，不再发踏步切换码。
+                // 原厂起步：一条切换码。点一下踏步，再点停步。不要连发。
                 if (emergency) break;
-                standing = true;
+                sendSimple(STEP);
+                stepping = !stepping;
                 torqued = true;
-                stepping = true;
+                standing = true;
+                if (stepping) flushPendingGait();
                 break;
             case "estop":
                 cancelPendingStand();
@@ -525,8 +527,7 @@ final class RadioLink {
             sendSimple(MODE_MANUAL);
             telemNavMode = 0;
         }
-        if (!isStairGait(gait)) stopUnwantedMarch();
-        // 没在人按的踏步里就只记下。推杆再发会让主机自己踏，再切档也停不掉。
+        // 没在人按的踏步里就只记下。不要发力控：一点步态摇杆就变成调姿。
         if (!isStairGait(gait)
                 && !(stepping && telemFresh() && telemState == ST_STEPPING)) {
             pendingGait = gait;
@@ -538,11 +539,11 @@ final class RadioLink {
         lastGaitSent = gait;
     }
 
-    private void stopUnwantedMarch() {
-        if (stepping) return;
-        sendSimple(TORQUE);
-        torqued = true;
-        stepping = false;
+    private void flushPendingGait() {
+        if (pendingGait.isEmpty() || isStairGait(pendingGait)) return;
+        int code = gaitCode(pendingGait);
+        if (code != 0) sendSimple(code, 0);
+        pendingGait = "";
     }
 
     private static boolean isStairGait(String gait) {

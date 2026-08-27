@@ -558,19 +558,18 @@ void MotionClient::EnterTorqueStand() {
 }
 
 void MotionClient::ToggleStepping() {
+  // 原厂起步：点一下原地踏，再点一下停步站着。一条切换码，程序不许连发。
   SendSimple(cmd::kSteppingToggle);
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  stepping_ = !stepping_;
-  axes_unlocked_ = true;
-}
-
-void MotionClient::EnterStepping() {
-  // 起立后推杆就能走，不再发踏步切换码。切档后那条码会把狗停住或再踏一步。
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  step_at_ = {};
-  torqued_ = true;
-  stepping_ = true;
-  axes_unlocked_ = true;
+  bool now_step = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    stepping_ = !stepping_;
+    now_step = stepping_;
+    torqued_ = true;
+    axes_unlocked_ = true;
+  }
+  std::printf("[运动] 踏步切换 → %s 0x21010201\n", now_step ? "起步" : "停步");
+  if (now_step) FlushQueuedGait();
 }
 
 void MotionClient::SetGait(Gait gait) {
@@ -595,6 +594,8 @@ void MotionClient::FlushQueuedGait() {
     gait = queued_gait_;
     queued_gait_set_ = false;
   }
+  // 楼梯要地形图编排，不能只丢一条步态码。
+  if (RequiresHeightMap(gait)) return;
   SetGait(gait);
 }
 

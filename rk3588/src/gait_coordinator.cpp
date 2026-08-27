@@ -92,6 +92,10 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
   const bool already = snapshot.gait == target;
 
   if (needs_map) {
+    if (!motion_.UserStepping()) {
+      return {false, "not_stepping",
+              "请先点起步，再切楼梯。楼梯是步态，要在踏步态下切。"};
+    }
     // 多帧模式只能在静止时切换，这是文档的硬性约束。
     if (multiframe) {
       motion_.ReleaseAxes();
@@ -115,17 +119,13 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
     }
     SleepMs(cfg_.settle_delay_ms);
   } else {
-    // 只在离开楼梯/非手动时拉回手动。爬坡、常规不要附带模式指令。
+    // 只在离开楼梯/非手动时拉回手动。爬坡、常规不要附带模式、力控、步态码。
+    // 上次一点爬坡就发力控，摇杆从走路变成调姿，常规也回不去。
     if (snapshot.control_mode == ControlMode::kNonManual ||
         RequiresHeightMap(snapshot.gait)) {
       motion_.SetControlMode(ControlMode::kManual);
     }
-    // 站着点爬坡/常规不要改障碍阈值，也不要把步态码发给主机。
-    // 文档：步态仅踏步态可切。现在发 → 主机自己踏，gait_state 仍报 0，
-    // 再切别的档只改记录，20Hz 速度 0 还在喂，狗就踏个不停。
-    motion_.StopUnwantedMarch();
-    if (motion_.UserStepping() &&
-        snapshot.basic_state == BasicState::kStepping) {
+    if (motion_.UserStepping()) {
       if (!already) motion_.SetGait(target);
       return {true, "", ""};
     }
@@ -140,6 +140,8 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
   motion_.SetGait(target);
 
   if (!WaitGaitConfirmed(target)) {
+    // 楼梯没切成立刻拉回手动，别把摇杆留在非手动里吃速度。
+    motion_.SetControlMode(ControlMode::kManual);
     return {false, "gait_not_applied",
             std::string("切换到") + ToString(target) +
                 "未生效。楼梯步态需要感知主机的地形图模块配合，"

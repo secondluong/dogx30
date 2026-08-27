@@ -125,8 +125,7 @@ class MotionClient {
   void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
   void EnterTorqueStand();  // 进力控站立，只发力控码，不切踏步。
-  void ToggleStepping();    // 力控站立 <-> 踏步 切换（命令行用）
-  void EnterStepping();     // 不再发踏步切换码。切档后那条码会停步或再踏一步。
+  void ToggleStepping();    // 起步/停步：发一条踏步切换码 0x21010201。
 
   void SetGait(Gait gait);
   // 站着点步态不要发给主机：文档写仅踏步态可切，RL 站着发会自己踏步。

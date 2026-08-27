@@ -562,7 +562,9 @@
           }
         } else if (key === 'torque' || key === 'step') {
           if (radioPose(key)) {
-            say(key === 'torque' ? '力控' : '起步');
+            if (app.noteWalkCmd) app.noteWalkCmd(key);
+            say(key === 'torque' ? '力控'
+              : (app.walkMode === 'step' ? '起步' : '停步'));
             return;
           }
         } else if (key === 'gait_up' || key === 'gait_dn') {
@@ -620,7 +622,8 @@
         }
         send({ t: 'cmd', name: key });
         if (app.noteWalkCmd) app.noteWalkCmd(key);
-        say(key === 'torque' ? '力控' : '起步');
+        say(key === 'torque' ? '力控'
+          : (app.walkMode === 'step' ? '起步' : '停步'));
         return;
       }
       if (key === 'gait_up' || key === 'gait_dn') {

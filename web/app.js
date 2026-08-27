@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826q';
+const WEB_BUILD = '0826s';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -136,20 +136,17 @@ function isStandingUi() {
 app.isStandingUi = isStandingUi;
 
 function controlChannel() {
-  // 起立后推杆就走。力控才改成调姿态。不再要求先起步 —— 踏步是切换指令，
-  // 切档后发一条等于停步。
-  if (app.walkMode === 'torque' || app.basicState === STATE_TORQUE_STANDING) {
-    return 'pose';
-  }
+  // 跟原厂：力控调姿态，起步才走。起立后先别发速度，否则没踏步也在喂 0。
+  // 本端刚点的起步/力控优先于遥测，免得停步后遥测还报踏步、速度 0 又把狗钉住。
   if (app.emergencyLocked) return null;
   if (app.basicState === STATE_SIT_TO_STAND ||
       app.basicState === STATE_STAND_TO_SIT) {
     return null;
   }
-  if (isStandingUi() || app.walkMode === 'step' ||
-      app.basicState === STATE_STEPPING) {
-    return 'vel';
-  }
+  if (app.walkMode === 'step') return 'vel';
+  if (app.walkMode === 'torque') return 'pose';
+  if (app.basicState === STATE_STEPPING) return 'vel';
+  if (app.basicState === STATE_TORQUE_STANDING) return 'pose';
   return null;
 }
 
@@ -159,7 +156,9 @@ function effectiveWalk() {
 
 function noteWalkCmd(name) {
   if (name === 'torque') app.walkMode = 'torque';
-  else if (name === 'step') app.walkMode = 'step';
+  else if (name === 'step') {
+    app.walkMode = app.walkMode === 'step' ? 'torque' : 'step';
+  }
   else if (name === 'stand' || name === 'stand_up' || name === 'sit' ||
            name === 'sit_down' || name === 'unload' || name === 'estop') {
     app.walkMode = null;
@@ -177,6 +176,7 @@ function paintWalkButtons() {
   });
   document.querySelectorAll('[data-cmd="step"]').forEach((b) => {
     b.classList.toggle('on', walk === 'step');
+    b.textContent = walk === 'step' ? '停步' : '起步';
     b.disabled = !!app.lioAligning;
   });
 }
@@ -1494,12 +1494,6 @@ document.querySelectorAll('[data-gait]').forEach((b) => {
     gaitBefore = app.gait;
     markGait(b.dataset.gait);
     setGaitPending(true);
-    // 非楼梯步态：网关会发力控停踏步。这里改走姿态通道，别再 20Hz 喂速度 0
-    // （速度 0 在踏步态里就是原地踏，力控刚发出去又被摇杆回路踩回去）。
-    if (b.dataset.gait !== 'stair' && b.dataset.gait !== 'stairmulti' &&
-        b.dataset.gait !== 'stair45') {
-      noteWalkCmd('torque');
-    }
     send({
       t: 'cmd',
       name: 'gait',
@@ -1775,26 +1769,8 @@ document.querySelectorAll('[data-stair]').forEach((b) => {
       x.classList.toggle('active', x.dataset.stair === b.dataset.stair);
     });
     paintPickers();
-    // 以前只改按钮高亮，狗收不到。点实心/格栅/无踢面就按下发楼梯步态 + 踏面。
-    guarded(() => {
-      if (app.gaitPending) {
-        speak('步态切换中');
-        return;
-      }
-      const gait = (app.gait === 'stairmulti' || app.gait === 'stair45')
-        ? app.gait : 'stair';
-      gaitBefore = app.gait;
-      markGait(gait);
-      setGaitPending(true);
-      send({
-        t: 'cmd',
-        name: 'gait',
-        value: gait,
-        stair_style: b.dataset.stair,
-      });
-      markPending(b);
-      setTimeout(() => { if (app.gaitPending) setGaitPending(false); }, 9000);
-    })(e);
+    // 踏面只记材质，不发步态。以前点实心就进非手动、下发楼梯，
+    // 地形图一失败控制就乱，步态按钮还要锁好几秒。
   });
 });
 
