@@ -11,8 +11,9 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 // 起立/趴下之后停发轴多久。够盖住遥测把过渡态报上来的滞后（实测几十毫秒），
-// 又远短于起身本身的两秒，所以不影响「站起来就能推杆走」。
+// 又远短于起身本身的两秒，不挡后面的力控/起步。
 constexpr int kAxisHoldMs = 300;
+constexpr int kSitAfterStepMs = 300;
 
 // 从原始报文里安全地取出一个结构体。长度不足就返回 false，避免越界读。
 template <typename T>
@@ -124,19 +125,31 @@ void MotionClient::TxLoop() {
     }
     if (send_axes) {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      // 遥测还没来或已经断时，不知道当前基础状态，沿用旧行为继续发轴——
-      // 否则 network.toml 没登记、一条遥测都没有时，力控姿态也发不出去。
-      if (state_.telemetry_alive) {
-        // 起立本身不发轴，否则没起步也在喂速度。力控发姿态，起步发速度。
-        send_axes = (torqued_ || stepping_) &&
-                    AxisCommandsApply(state_.basic_state, true,
-                                      state_.emergency_source);
+      // 力控只发姿态，起步只发速度。主机在初始站立里把同一组轴当速度，
+      // 力控左杆就会走路、俯仰轴被丢掉。
+      if (stepping_ && step_sent_) {
+        if (state_.telemetry_alive) {
+          send_axes = state_.basic_state == BasicState::kStepping &&
+                      AxisCommandsApply(state_.basic_state, true,
+                                        state_.emergency_source);
+        } else {
+          send_axes = true;
+        }
+      } else if (torqued_ && !stepping_) {
+        if (state_.telemetry_alive) {
+          send_axes = state_.basic_state == BasicState::kTorqueStanding &&
+                      AxisCommandsApply(state_.basic_state, true,
+                                        state_.emergency_source);
+        } else {
+          send_axes = true;
+        }
       } else {
-        send_axes = torqued_ || stepping_;
+        send_axes = false;
       }
     }
 
     bool fire_step = false;
+    bool fire_sit = false;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (step_at_ != Clock::time_point{} && Clock::now() >= step_at_) {
@@ -144,11 +157,19 @@ void MotionClient::TxLoop() {
         step_sent_ = true;
         fire_step = true;
       }
+      if (sit_at_ != Clock::time_point{} && Clock::now() >= sit_at_) {
+        sit_at_ = {};
+        fire_sit = true;
+      }
     }
     if (fire_step) {
       SendSimple(cmd::kSteppingToggle);
       std::printf("[运动] 踏步切换 → 起步 0x21010201（力控之后）\n");
       FlushQueuedGait();
+    }
+    if (fire_sit) {
+      SendSimple(cmd::kRlSitDown);
+      std::printf("[运动] 停步之后 RL 趴下 0x21010222\n");
     }
 
     if (send_axes) {
@@ -437,12 +458,13 @@ void MotionClient::StandOrSit() {
     }
     last_stand_sit_ = sitting ? LastStandSit::kStood : LastStandSit::kSat;
     state_.rl_standing = (last_stand_sit_ == LastStandSit::kStood);
-    if (!sitting) {
+    if (sitting) {
       axes_unlocked_ = false;
       torqued_ = false;
       stepping_ = false;
       step_sent_ = false;
       step_at_ = {};
+      sit_at_ = {};
     }
   }
 
@@ -450,8 +472,7 @@ void MotionClient::StandOrSit() {
     std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n", ToString(s.basic_state));
     SendSimple(cmd::kRlStandUp);
   } else {
-    std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n", ToString(s.basic_state));
-    SendSimple(cmd::kRlSitDown);
+    SitDown();
   }
 }
 
@@ -469,10 +490,11 @@ void MotionClient::StandUp() {
   }
   {
     std::lock_guard<std::mutex> lock(axis_mutex_);
-    if (Clock::now() < axis_hold_until_) {
+    if (Clock::now() < stand_sit_hold_until_) {
       std::printf("[运动] 忽略起立：刚发过起/趴\n");
       return;
     }
+    stand_sit_hold_until_ = Clock::now() + std::chrono::milliseconds(kAxisHoldMs);
   }
   ReleaseAxes();
   {
@@ -485,6 +507,7 @@ void MotionClient::StandUp() {
     queued_gait_set_ = false;
     step_sent_ = false;
     step_at_ = {};
+    sit_at_ = {};
   }
   std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n",
               ToString(Snapshot().basic_state));
@@ -505,10 +528,20 @@ void MotionClient::SitDown() {
   }
   {
     std::lock_guard<std::mutex> lock(axis_mutex_);
-    if (Clock::now() < axis_hold_until_) {
+    if (Clock::now() < stand_sit_hold_until_) {
       std::printf("[运动] 忽略趴下：刚发过起/趴\n");
       return;
     }
+    stand_sit_hold_until_ = Clock::now() + std::chrono::milliseconds(kAxisHoldMs);
+  }
+  bool leave_step = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    leave_step = stepping_ && step_sent_;
+  }
+  if (leave_step) {
+    SendSimple(cmd::kSteppingToggle);
+    std::printf("[运动] 趴下前先停步 0x21010201\n");
   }
   ReleaseAxes();
   {
@@ -527,6 +560,16 @@ void MotionClient::SitDown() {
     queued_gait_set_ = false;
     step_sent_ = false;
     step_at_ = {};
+    if (leave_step) {
+      sit_at_ = Clock::now() + std::chrono::milliseconds(kSitAfterStepMs);
+    } else {
+      sit_at_ = {};
+    }
+  }
+  if (leave_step) {
+    std::printf("[运动] 停步后再发 RL 趴下 0x21010222（遥测=%s）\n",
+                ToString(Snapshot().basic_state));
+    return;
   }
   std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
               ToString(Snapshot().basic_state));
@@ -544,6 +587,7 @@ void MotionClient::AdoptPosture(bool standing) {
   queued_gait_set_ = false;
   step_sent_ = false;
   step_at_ = {};
+  sit_at_ = {};
   std::printf("[运动] 采纳遥控端告知的姿态：%s（遥测=%s）\n",
               standing ? "站立" : "坐下", ToString(state_.basic_state));
 }
@@ -563,6 +607,7 @@ void MotionClient::UnloadForce() {
   queued_gait_set_ = false;
   step_sent_ = false;
   step_at_ = {};
+  sit_at_ = {};
   std::printf("[运动] 卸力 0x21010202（遥测=%s）\n", ToString(state_.basic_state));
 }
 
@@ -576,10 +621,16 @@ void MotionClient::EnterTorqueStand() {
     stepping_ = false;
     torqued_ = true;
     axes_unlocked_ = true;
+    sit_at_ = {};
   }
-  // 还在踏步里俯仰轴无定义。先用踏步切换码退出力控站立，再发力控。
+  // 还在踏步里俯仰轴无定义，速度轴也还在。先停步，再力控，轴停发一小会，
+  // 免得 50 Hz 的「身高」在过渡里被主机读成前进。
   if (leave_step) SendSimple(cmd::kSteppingToggle);
+  ReleaseAxes();
   SendSimple(cmd::kTorqueStand);
+  SendSimple(cmd::kTorqueStand);
+  std::printf("[运动] 力控站立 0x2101020A%s\n",
+              leave_step ? "（先停步）" : "");
 }
 
 void MotionClient::StartStepping() {
@@ -612,9 +663,10 @@ void MotionClient::StopStepping() {
     step_sent_ = false;
     if (pending || !send_step) {
       std::printf("[运动] 停步：取消待发踏步，留在力控\n");
-      return;
     }
   }
+  ReleaseAxes();
+  if (!send_step) return;
   SendSimple(cmd::kSteppingToggle);
   std::printf("[运动] 踏步切换 → 停步 0x21010201\n");
 }
@@ -700,6 +752,7 @@ void MotionClient::SoftEmergencyStop() {
   queued_gait_set_ = false;
   step_sent_ = false;
   step_at_ = {};
+  sit_at_ = {};
 }
 
 void MotionClient::SaveData(bool legacy_firmware) {
@@ -720,6 +773,11 @@ int32_t MotionClient::Normalize(float v) {
 }
 
 void MotionClient::SetVelocity(float vx, float vy, float wz) {
+  // 只要起步发出去之后才收速度。力控/停步/起立都不当走路。
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!stepping_ || !step_sent_) return;
+  }
   // 不要在这里冲记下的步态。杆一动就发爬坡，主机会自己踏步，再切档也停不掉。
   std::lock_guard<std::mutex> lock(axis_mutex_);
   // 协议里 Y 向线速度与偏航角速度的映射带一个负号：轴为正表示向右平移 /
@@ -732,6 +790,10 @@ void MotionClient::SetVelocity(float vx, float vy, float wz) {
 }
 
 void MotionClient::SetPose(float height, float roll, float pitch, float yaw) {
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!torqued_ || stepping_) return;
+  }
   std::lock_guard<std::mutex> lock(axis_mutex_);
   axis_left_y_ = Normalize(height);
   axis_left_x_ = Normalize(roll);

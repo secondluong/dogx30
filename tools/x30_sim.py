@@ -375,8 +375,8 @@ class Robot:
             if not axes_valid:
                 self._zero_axes()
 
-            # 原厂 RL 起立后（初始站立，遥测常仍报 0）推杆即走，不必再进踏步。
-            # 力控站立仍按姿态轴理解，这里不当速度用。
+            # 主机：踏步和初始站立把轴当速度；力控站立当姿态（这里不当走路）。
+            # 网关不得在初始站立里发轴，否则力控左杆会变成前进。
             if self.state in (STEPPING_STATE, INITIAL_STANDING):
                 fwd, lat, yaw_rate = GAIT_LIMITS.get(self.gait, (1.2, 0.8, 1.2))
                 if self.height_gear == -1 and self.gait in (0, 2):

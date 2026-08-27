@@ -417,6 +417,8 @@ final class RadioLink {
         stepping = false;
         torqued = true;
         standing = true;
+        lastStandAt = System.currentTimeMillis();
+        sendAxes(new float[]{0f, 0f, 0f, 0f});
         if (!cancelOnly && sent) sendSimple(STEP);
     }
 
@@ -433,13 +435,19 @@ final class RadioLink {
                 && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS) {
             return false;
         }
-        if (!torqued && !stepping) return false;
         if (telemFresh()) {
             if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
                 return false;
             }
+            // 主机在初始站立里把同一组轴当速度。力控必须真的进了力控站立
+            // 才发姿态，否则左杆会走、俯仰没了。
+            if (stepping && stepSent) return telemState == ST_STEPPING;
+            if (torqued && !stepping) return telemState == ST_TORQUE_STANDING;
+            return false;
         }
-        return true;
+        if (stepping && stepSent) return true;
+        if (torqued && !stepping) return true;
+        return false;
     }
 
     /**
@@ -499,9 +507,17 @@ final class RadioLink {
                 cancelPendingStand();
                 pendingGait = "";
                 if (telemNavMode == 1) sendSimple(MODE_MANUAL);
-                sendSimple(SIT);
+                boolean sitAfterStep = stepping && stepSent;
+                if (sitAfterStep) sendSimple(STEP);
+                cancelPendingStep();
                 standing = false;
                 clearWalk();
+                lastStandAt = System.currentTimeMillis();
+                if (sitAfterStep) {
+                    onRadioDelayed(() -> sendSimple(SIT), 300);
+                } else {
+                    sendSimple(SIT);
+                }
                 break;
             case "stand":
                 if (standing && !emergency) {
@@ -523,8 +539,10 @@ final class RadioLink {
                 if (stepping && stepSent) sendSimple(STEP);
                 cancelPendingStep();
                 sendSimple(TORQUE);
+                sendSimple(TORQUE);
                 torqued = true;
                 stepping = false;
+                lastStandAt = System.currentTimeMillis();
                 break;
             case "step_on":
                 startStepping();

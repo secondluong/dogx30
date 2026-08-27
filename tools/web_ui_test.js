@@ -474,12 +474,13 @@ check('两条链路共用一份姿态，切档不走散',
       /app\.basicState = basic/.test(appJs) &&
       /app\.emergencyLocked = locked/.test(appJs) &&
       /STATE_TORQUE_STANDING/.test(appJs));
-// 起立后推杆就走。RL 起立后遥测仍报 0，以本端记得站着放行。力控只改姿态。
+// 力控只发姿态，起步才发速度。起立本身不发轴。
 check('力控起步之后才发轴',
       /private boolean axesApply\(\)/.test(radioJava) &&
       /if \(axesApply\(\)\)/.test(radioJava) &&
       /sendAxes\(ax\)/.test(radioJava) &&
-      /if \(!torqued && !stepping\) return false/.test(radioJava) &&
+      /if \(stepping && stepSent\) return true/.test(radioJava) &&
+      /if \(torqued && !stepping\) return true/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
       /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
@@ -634,11 +635,16 @@ check('起步先力控再延后发一条踏步码',
       /onRadioDelayed\(stepTask, STEP_AFTER_TORQUE_MS\)/.test(radioJava) &&
       !/ArmForWalk/.test(motionCpp) &&
       !/speak\(ARM_HINT\)/.test(appJs));
-// 切档后起趴仍按站没站发明确指令，不翻转。
+// 切档后屏幕那一颗仍按站没站发明确指令。G20 起立/趴下是两颗键，按哪颗发哪条。
 check('切档后起趴不翻转',
       /app\.walkMode = null/.test(appJs) &&
       /return isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(appJs) &&
-      /name: app\.isStandingUi && app\.isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(read('gamepad.js')));
+      /var poseCmd = key === 'stand'/.test(read('gamepad.js')) &&
+      /var want = key === 'stand'/.test(read('gamepad.js')));
+check('G20 起立键不改发趴下',
+      /G20 起立\/趴下是两颗键/.test(read('gamepad.js')) &&
+      /不能按「界面以为站着」把起立/.test(read('gamepad.js')) &&
+      /: key;/.test(read('gamepad.js')));
 // 力控调姿态，起步才走。起立后先不发速度。
 check('力控调姿态，起步才走',
       /walkMode === 'step'/.test(appJs) &&
@@ -648,7 +654,11 @@ check('力控调姿态，起步才走',
       !/basicState === STATE_STEPPING\) return 'vel'/.test(appJs) &&
       !/basic === STATE_STEPPING && app\.walkMode !== 'torque'/.test(appJs) &&
       /tilt: right\.y/.test(read('gamepad.js')) &&
-      /AXIS_RY/.test(radioJava));
+      /AXIS_RY/.test(radioJava) &&
+      /if \(!stepping_ \|\| !step_sent_\) return/.test(motionCpp) &&
+      /if \(!torqued_ \|\| stepping_\) return/.test(motionCpp) &&
+      /basic_state == BasicState::kTorqueStanding/.test(motionCpp) &&
+      /basic_state == BasicState::kStepping/.test(motionCpp));
 // B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
 check('B1/B2 一次按键、屏幕跟着亮',
       /function noteWalkCmd/.test(appJs) &&
@@ -752,11 +762,12 @@ var mismatch = gaitNums.filter(function (n) { return cppGaits[n] !== jsGaits[n];
 check('两条链路对步态编码的理解一致',
       gaitNums.length >= 9 && mismatch.length === 0,
       gaitNums.length + ' 个，不一致: ' + mismatch.join(', '));
-check('轴放行看记得起立，过渡和急停仍挡',
+check('轴只在力控站立或踏步发',
       /bool AxisCommandsApply\(BasicState s, bool standing/.test(protoHpp) &&
       /inline bool JointsLocked/.test(protoHpp) &&
       /emergency_source >= 4 && emergency_source <= 6/.test(protoHpp) &&
-      /return standing;/.test(protoHpp) &&
+      /s == BasicState::kTorqueStanding \|\| s == BasicState::kStepping/.test(protoHpp) &&
+      !/return standing;/.test(protoHpp) &&
       /if \(IsStandSitTransient\(s\)\) return false/.test(protoHpp));
 check('屏幕摇杆在 2.4G 下也能推',
       /void setScreenAxes\(float fwd, float lat, float turn\)/.test(radioJava) &&
@@ -988,7 +999,7 @@ check('实体键每一条派发都念',
       /function gaitName/.test(read('gamepad.js')) &&
       /say\(gaitName\(target\)\)/.test(read('gamepad.js')) &&
       /say\('急停'\)/.test(read('gamepad.js')) &&
-      /say\('已经站着'\)/.test(read('gamepad.js')));
+      /say\(poseCmd === 'sit_down' \? '趴下' : '起立'\)/.test(read('gamepad.js')));
 // 平板喇叭念的话会被自己的麦克风采回去，传到狗那侧就是回声。
 check('按住说话时闭嘴',
       /function talking/.test(read('media.js')) &&

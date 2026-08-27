@@ -629,6 +629,33 @@ check('有控制权时按键下发 stand_up',
 check('坐站键念的是这一下要做的动作',
       spoken.length === 1 && spoken[0] === '起立', JSON.stringify(spoken));
 
+// G20 起立/趴下是两颗键。站着按起立必须仍发 stand_up，不能按界面状态改成趴下。
+appState.isStandingUi = function () { return true; };
+sent = []; spoken = [];
+if (typeof B._onRcChannels === 'function') {
+  var g20rest = [];
+  for (var gi = 0; gi < 16; gi++) g20rest.push(1500);
+  B._onRcChannels({ connected: true, device: 'G20', ch: g20rest.slice() });
+  var g20stand = g20rest.slice();
+  g20stand[10] = 1050;
+  B._onRcChannels({ connected: true, device: 'G20', ch: g20stand });
+  check('G20 起立键站着也发 stand_up',
+        sent.length === 1 && sent[0].name === 'stand_up',
+        JSON.stringify(sent));
+  var g20sit = g20rest.slice();
+  g20sit[6] = 1050;
+  sent = [];
+  B._onRcChannels({ connected: true, device: 'G20', ch: g20rest.slice() });
+  B._onRcChannels({ connected: true, device: 'G20', ch: g20sit });
+  check('G20 趴下键发 sit_down',
+        sent.length === 1 && sent[0].name === 'sit_down',
+        JSON.stringify(sent));
+  B._onRcChannels({ connected: false, ch: [] });
+}
+delete appState.isStandingUi;
+pads = [makePad([0, 0, 0, 0], [])];
+pump(2);
+
 // 肩键循环步态
 sent = []; spoken = [];
 pads = [makePad([0, 0, 0, 0], [])];

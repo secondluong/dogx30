@@ -202,10 +202,15 @@ def no_terrain_scenario(host, port):
     a.send({"t": "claim"})
     a.wait_for("control", predicate=lambda m: "granted" in m)
 
-    a.send({"t": "cmd", "name": "stand"})
+    a.send({"t": "cmd", "name": "stand_up"})
     a.wait_for("state", timeout=8, predicate=lambda m: m["basic_state"] == 2)
+    a.send({"t": "cmd", "name": "torque"})
+    a.wait_for("state", timeout=3, predicate=lambda m: m["basic_state"] == 3)
+    a.send({"t": "cmd", "name": "step", "value": "on"})
+    a.wait_for("state", timeout=4, predicate=lambda m: m["basic_state"] == 4)
 
-    a.send({"t": "cmd", "name": "gait", "value": "stair", "stair_style": "solid"})
+    a.send({"t": "cmd", "name": "gait", "value": "stair", "stair_style": "solid",
+            "stepping": True})
     res = a.wait_for("gait_result", timeout=8)
     check("楼梯步态未生效时如实报错",
           res.get("ok") is False and res.get("code") == "gait_not_applied",
@@ -225,7 +230,7 @@ def pose_handoff_scenario(host, port):
 
     2.4G 直连时起立不经过网关，而运动主机 RL 起立后遥测仍报 basic_state=0，
     网关从遥测里也认不出来。不交接的现场表现是：切回 MESH 后左下角还是「起立」，
-    切回 MESH 后左下角还是「起立」。轴在记得站着之后就能发，不必再等力控/起步。
+    切回 MESH 后左下角还是「起立」。记得站着只改按钮，摇杆仍要力控或起步。
     """
     print("\n== 姿态交接 ==")
     a = WsClient(host, port)
@@ -262,46 +267,52 @@ def pose_handoff_scenario(host, port):
 
 
 def arm_steps_scenario(host, port):
-    """起立之后推杆就能走，网关不得再替人发踏步切换码。
-
-    踏步是**切换**指令。切档后记忆一错，力控/起步就会发反，狗一会停一会踏。
-    所以起步不再下发 0x21010201；速度轴在起立后直接放行。
-    """
-    print("\n== 起立后推杆就走 ==")
+    """力控调姿，起步才走。起立后推杆不得当走路。"""
+    print("\n== 力控调姿，起步才走 ==")
     a = WsClient(host, port)
     a.wait_for("hello")
     a.send({"t": "claim"})
     a.wait_for("control", predicate=lambda m: m.get("granted") is True)
 
-    a.send({"t": "cmd", "name": "stand"})
+    a.send({"t": "cmd", "name": "stand_up"})
     st = a.wait_for("state", timeout=8,
                     predicate=lambda m: m.get("basic_state") == 2)
     check("起立后停在初始站立", st.get("basic_state") == 2, st.get("basic_state"))
 
-    deadline = time.time() + 3
+    deadline = time.time() + 2
+    vx = 0.0
     stepping = False
-    while time.time() < deadline and not stepping:
+    while time.time() < deadline:
         a.send({"t": "vel", "vx": 0.5, "vy": 0.0, "wz": 0.0})
         try:
-            a.wait_for("state", timeout=0.2,
-                       predicate=lambda m: m.get("basic_state") == 4)
-            stepping = True
+            st = a.wait_for("state", timeout=0.2)
+            vx = max(vx, st.get("vel", {}).get("x", 0.0))
+            if st.get("basic_state") == 4:
+                stepping = True
         except TimeoutError:
             pass
-    check("光推杆不会自己进踏步", not stepping)
+    check("起立后推杆不能走", vx < 0.05 and not stepping, f"vx={vx} stepping={stepping}")
 
-    a.send({"t": "cmd", "name": "step"})
-    time.sleep(0.4)
-    stepping = False
+    a.send({"t": "cmd", "name": "torque"})
+    st = a.wait_for("state", timeout=3,
+                    predicate=lambda m: m.get("basic_state") == 3)
+    check("力控后进力控站立", st.get("basic_state") == 3, st.get("basic_state"))
+
     deadline = time.time() + 2
-    while time.time() < deadline and not stepping:
+    vx = 0.0
+    while time.time() < deadline:
+        a.send({"t": "vel", "vx": 0.5, "vy": 0.0, "wz": 0.0})
         try:
-            a.wait_for("state", timeout=0.2,
-                       predicate=lambda m: m.get("basic_state") == 4)
-            stepping = True
+            st = a.wait_for("state", timeout=0.2)
+            vx = max(vx, st.get("vel", {}).get("x", 0.0))
         except TimeoutError:
             pass
-    check("点起步也不会发踏步切换码", not stepping)
+    check("力控后速度轴不能走", vx < 0.05, f"vx={vx}")
+
+    a.send({"t": "cmd", "name": "step", "value": "on"})
+    st = a.wait_for("state", timeout=4,
+                    predicate=lambda m: m.get("basic_state") == 4)
+    check("起步后进踏步", st.get("basic_state") == 4, st.get("basic_state"))
 
     deadline = time.time() + 5
     vx = 0.0
@@ -312,7 +323,20 @@ def arm_steps_scenario(host, port):
             vx = st.get("vel", {}).get("x", 0.0)
         except TimeoutError:
             pass
-    check("起立后速度闭环回传", vx > 0.2, f"vx={vx} m/s")
+    check("起步后速度闭环回传", vx > 0.2, f"vx={vx} m/s")
+
+    a.send({"t": "cmd", "name": "step", "value": "off"})
+    time.sleep(0.6)
+    deadline = time.time() + 3
+    vx = 1.0
+    while time.time() < deadline:
+        a.send({"t": "vel", "vx": 0.5, "vy": 0.0, "wz": 0.0})
+        try:
+            st = a.wait_for("state", timeout=0.2)
+            vx = min(vx, st.get("vel", {}).get("x", 0.0))
+        except TimeoutError:
+            pass
+    check("停步后速度轴不能走", vx < 0.05, f"vx={vx}")
     a.close()
 
 
@@ -691,7 +715,7 @@ def main():
                  "pose-handoff", "arm-steps", "config"],
         help="no-terrain 验证感知主机地形图不可达；media/no-media 验证媒体编排；"
              "cloud-down 验证感知主机 ROS 不可达；pose-handoff 验证 2.4G 切回 MESH "
-             "时的姿态交接；arm-steps 验证起立后推杆就能走且不自动踏步；config 验证在线改配置",
+             "时的姿态交接；arm-steps 验证力控调姿、起步才走；config 验证在线改配置",
     )
     args = parser.parse_args()
     host, port = args.host, args.port

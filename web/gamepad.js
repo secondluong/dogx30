@@ -544,13 +544,6 @@
               say('卸力');
               return;
             }
-          } else if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) {
-            // 什么都没发出去。不念的话人听不出是「按到了但没必要」还是「没按上」。
-            say('已经站着');
-            return;
-          } else if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) {
-            say('已经趴着');
-            return;
           } else {
             var want = key === 'stand'
               ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up')
@@ -604,19 +597,13 @@
           say('卸力');
           return;
         }
-        if (key === 'stand_up' && app.isStandingUi && app.isStandingUi()) {
-          say('已经站着');
-          return;
-        }
-        if (key === 'sit_down' && app.isStandingUi && !app.isStandingUi()) {
-          say('已经趴着');
-          return;
-        }
-        send({
-          t: 'cmd',
-          name: app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up',
-        });
-        say(app.isStandingUi && app.isStandingUi() ? '趴下' : '起立');
+        // G20 起立/趴下是两颗键，按哪颗发哪条。不能按「界面以为站着」把起立
+        // 改成趴下 —— 遥测常报坐下，站着按起立就会把狗按趴。
+        var poseCmd = key === 'stand'
+          ? (app.isStandingUi && app.isStandingUi() ? 'sit_down' : 'stand_up')
+          : key;
+        send({ t: 'cmd', name: poseCmd });
+        say(poseCmd === 'sit_down' ? '趴下' : '起立');
         return;
       }
       if (key === 'torque' || key === 'step') {

@@ -119,9 +119,9 @@ class MotionClient {
   //
   // 为什么本机会不知道：2.4G 直连时起立/趴下由遥控器直接打给运动主机，不经过这里；
   // 而运动主机在 RL 起立后仍报 basic_state=0（见 protocol.hpp），遥测也认不出来。
-  // 于是遥控端从 2.4G 切回 MESH 时，本机记的是「坐着」，按钮显示「起立」，
-  // 按钮会显示「起立」。起立后推杆就能走，不再等力控/起步。
+  // 于是遥控端从 2.4G 切回 MESH 时，本机记的是「坐着」，按钮显示「起立」。
   // 这条就是让那份记忆对上。只有拿到控制权的客户端能调。
+  // 记得站着并不等于能走：力控才调姿，起步才走。
   void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
   void EnterTorqueStand();  // 进力控站立。若在踏步里先发一条踏步码退出。
@@ -202,6 +202,8 @@ class MotionClient {
   // basic_state 还报坐下，若此时已点力控，50 Hz 的身高=0
   // 正好打在起身轨迹的头上，把原厂柔和的起身掐成猛起。
   std::chrono::steady_clock::time_point axis_hold_until_{};
+  // 只挡住连点起/趴，不挡力控之后立刻趴下。axis_hold 是给轴用的。
+  std::chrono::steady_clock::time_point stand_sit_hold_until_{};
 
   mutable std::mutex state_mutex_;
   RobotState state_;
@@ -230,6 +232,8 @@ class MotionClient {
   bool step_sent_{false};
   // 力控刚发就跟一条踏步，主机还在过渡里会丢掉。TxLoop 到点再发。
   std::chrono::steady_clock::time_point step_at_{};
+  // 踏步里趴下会被主机丢掉。先停步，到点再发 RL 趴下。
+  std::chrono::steady_clock::time_point sit_at_{};
 };
 
 }  // namespace x30

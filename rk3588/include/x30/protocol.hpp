@@ -211,21 +211,18 @@ inline bool JointsLocked(BasicState s, uint8_t emergency_source = 0) {
   return emergency_source >= 4 && emergency_source <= 6;
 }
 
-// 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。其余状态里发轴，
-// 实测会把原厂柔和的起身/趴下掐成猛起猛趴——力控站立的左摇杆 Y 是身高，
-// 50 Hz 发 0 等于一直在喊「把身子按到最低」。
-//
-// 起立后就能走：RL 起立后主机常停在 0/2，原厂此时推杆即走。
-// 力控/起步是可选的（力控改姿态），不再当走路门槛 —— 那两下是切换指令，
-// 切档后记忆一错就会发反。起立中 / 坐下中 / 急停仍然不发，免得掐硬。
+// 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。
+//   力控站立：身高 / 横滚 / 俯仰 / 偏航
+//   踏步：速度；俯仰轴无定义
+// 初始站立或 RL 起立后撒谎的「坐下」里发轴，主机会按速度理解：
+// 力控左杆变成走路，右杆 Y 的俯仰被丢掉。起立中 / 坐下中 / 急停不发，
+// 免得把柔和起身掐硬。standing 留给调用方，这里不再凭「记得站着」放行。
 inline bool AxisCommandsApply(BasicState s, bool standing = false,
                              uint8_t emergency_source = 0) {
+  (void)standing;
   if (JointsLocked(s, emergency_source)) return false;
-  if (s == BasicState::kTorqueStanding || s == BasicState::kStepping) {
-    return true;
-  }
   if (IsStandSitTransient(s)) return false;
-  return standing;
+  return s == BasicState::kTorqueStanding || s == BasicState::kStepping;
 }
 
 // 运动主机自己报的站立态。不含「我们记得 RL 已起立、遥测仍报坐下」。
