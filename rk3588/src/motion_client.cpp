@@ -14,6 +14,9 @@ using Clock = std::chrono::steady_clock;
 // 又远短于起身本身的两秒，不挡后面的力控/起步。
 constexpr int kAxisHoldMs = 300;
 constexpr int kSitAfterStepMs = 300;
+// /robot_basic_state 是低频状态话题，真机上的相邻报文可能超过 1.2 秒。
+// 过短会让状态在 ROS 站立与 UDP 错报趴下之间来回切换，导致按钮和摇杆闪烁。
+constexpr int kRosStateFreshMs = 5000;
 
 // 从原始报文里安全地取出一个结构体。长度不足就返回 false，避免越界读。
 template <typename T>
@@ -127,7 +130,7 @@ void MotionClient::TxLoop() {
       std::lock_guard<std::mutex> lock(state_mutex_);
       const bool ros_upright =
           ros_basic_at_ != Clock::time_point{} &&
-          Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200) &&
+          Clock::now() - ros_basic_at_ < std::chrono::milliseconds(kRosStateFreshMs) &&
           (state_.ros_basic_state == 2 || state_.ros_basic_state == 3 ||
            state_.ros_basic_state == 4 || state_.ros_basic_state == 16);
       const bool safe_upright =
@@ -775,7 +778,7 @@ void MotionClient::EnterTorqueStand() {
     std::lock_guard<std::mutex> lock(state_mutex_);
     const bool ros_upright =
         ros_basic_at_ != Clock::time_point{} &&
-        Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200) &&
+        Clock::now() - ros_basic_at_ < std::chrono::milliseconds(kRosStateFreshMs) &&
         (state_.ros_basic_state == 2 || state_.ros_basic_state == 3 ||
          state_.ros_basic_state == 4 || state_.ros_basic_state == 16);
     need_stand = state_.telemetry_alive &&
@@ -923,7 +926,7 @@ MotionView MotionClient::View() const {
   const bool udp = state_.telemetry_alive;
   const bool ros =
       ros_basic_at_ != Clock::time_point{} &&
-      Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200);
+      Clock::now() - ros_basic_at_ < std::chrono::milliseconds(kRosStateFreshMs);
   const bool official = state_.body_monitor_alive &&
                         state_.body_motion_state >= 0;
   out.state_valid = udp || ros || official;
@@ -1168,7 +1171,7 @@ RobotState MotionClient::Snapshot() const {
   RobotState s = state_;
   s.ros_motion_alive =
       ros_basic_at_ != Clock::time_point{} &&
-      Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200);
+      Clock::now() - ros_basic_at_ < std::chrono::milliseconds(kRosStateFreshMs);
   s.rl_standing = (last_stand_sit_ == LastStandSit::kStood);
   return s;
 }

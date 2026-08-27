@@ -60,7 +60,9 @@ final class RadioLink {
     /** 官方本体监控协议服务（智能控制器），Type=1002。 */
     private static final String BODY_IP = "192.168.1.106";
     private static final int BODY_PORT = 30000;
-    private static final long BODY_FRESH_MS = 1200;
+    // Type=1002 在真机上会偶发超过一秒才返回。保持期过短会让姿态在本体状态和
+    // 本地交接状态之间反复跳变，页面按钮与摇杆就会周期闪烁。
+    private static final long BODY_FRESH_MS = 5000;
     private static final int LOCAL_PORT = 43897;
     private static final int TICK_MS = 20;
     private static final int HB_EVERY = 10;
@@ -482,7 +484,7 @@ final class RadioLink {
     }
 
     private String axisMode() {
-        if ((!telemFresh() && !poseKnown) || telemLocked()) return "none";
+        if (!poseIsKnown() || telemLocked()) return "none";
         if (telemFresh() &&
                 (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT)) {
             return "none";
