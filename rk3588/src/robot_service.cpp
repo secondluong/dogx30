@@ -527,7 +527,12 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     // 而运动主机 RL 起立后仍报坐下，本机无从得知。只在真带了这个键时采纳，
     // 而且必须拿到控制权 —— 旁观者不该改本机的记忆。
     if (granted && msg.Has("standing")) {
-      client_.AdoptPosture(msg["standing"].AsBool(false));
+      const RobotState truth = client_.Snapshot();
+      // 官方 ROS / 本体监控新鲜时不接受平板的历史记忆覆盖。旧 2.4G APK
+      // 切回 MESH 会带 standing=false；以前这会把真实站立改成趴下并让按钮闪烁。
+      if (!truth.ros_motion_alive && !truth.body_monitor_alive) {
+        client_.AdoptPosture(msg["standing"].AsBool(false));
+      }
     }
     JsonWriter w;
     w.BeginObject().Key("t", "control").Key("granted", granted);

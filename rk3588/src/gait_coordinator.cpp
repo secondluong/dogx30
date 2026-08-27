@@ -131,7 +131,12 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
 
   const bool needs_map = RequiresHeightMap(target);
   const bool multiframe = RequiresMultiFrame(target);
-  const bool already = snapshot.telemetry_alive && snapshot.gait == target;
+  const bool already =
+      (snapshot.telemetry_alive && snapshot.gait == target) ||
+      (snapshot.ros_motion_alive &&
+       snapshot.ros_gait_state == static_cast<int>(target)) ||
+      (snapshot.body_monitor_alive &&
+       snapshot.body_gait_state == static_cast<int>(target));
 
   // 力控或停步时允许先选整套配置，但不碰主机；起步后由
   // ApplyQueuedWhenWalking 重新排入，并等待狗主机确认踏步。
@@ -239,7 +244,14 @@ bool GaitCoordinator::WaitGaitConfirmed(Gait target) {
   const auto deadline =
       Clock::now() + std::chrono::milliseconds(cfg_.gait_confirm_timeout_ms);
   while (Clock::now() < deadline) {
-    if (motion_.Snapshot().gait == target) return true;
+    const RobotState s = motion_.Snapshot();
+    if (s.gait == target ||
+        (s.ros_motion_alive &&
+         s.ros_gait_state == static_cast<int>(target)) ||
+        (s.body_monitor_alive &&
+         s.body_gait_state == static_cast<int>(target))) {
+      return true;
+    }
     SleepMs(50);
   }
   return false;
@@ -250,7 +262,11 @@ bool GaitCoordinator::WaitWalking() {
       Clock::now() + std::chrono::milliseconds(cfg_.standstill_timeout_ms);
   while (Clock::now() < deadline) {
     const RobotState s = motion_.Snapshot();
-    if (s.telemetry_alive && s.basic_state == BasicState::kStepping) return true;
+    if ((s.telemetry_alive && s.basic_state == BasicState::kStepping) ||
+        (s.ros_motion_alive && s.ros_basic_state == 4) ||
+        (s.body_monitor_alive && s.body_motion_state == 4)) {
+      return true;
+    }
     SleepMs(50);
   }
   return false;

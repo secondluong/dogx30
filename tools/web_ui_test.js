@@ -420,6 +420,8 @@ var gaitCpp = fs.readFileSync(
 check('2.4G RadioLink 含起立趴下行走指令',
       /STAND = 0x21010202/.test(radioJava) &&
       /SIT = 0x21010202/.test(radioJava) &&
+      !/sendSimple\(STAND\);\s*sendSimple\(STAND\)/.test(radioJava) &&
+      !/sendSimple\(SIT\);\s*sendSimple\(SIT\)/.test(radioJava) &&
       /0x21010201/.test(radioJava) &&
       /bindSocket/.test(radioJava) &&
       /192, 168, 144/.test(radioJava) &&
@@ -497,7 +499,9 @@ check('力控起步之后才发轴',
       /sendAxes\(ax\)/.test(radioJava) &&
       /telemState == ST_STEPPING/.test(radioJava) &&
       /telemState == ST_TORQUE_STANDING/.test(radioJava) &&
-      /没有遥测宁可不发/.test(radioJava) &&
+      /if \(!poseKnown \|\| !standing\) return false/.test(radioJava) &&
+      /stepping && stepSent/.test(radioJava) &&
+      /torqued && !stepping/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
       /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。

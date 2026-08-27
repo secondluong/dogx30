@@ -226,12 +226,7 @@ def no_terrain_scenario(host, port):
 
 
 def pose_handoff_scenario(host, port):
-    """遥控端从 2.4G 切回 MESH 时，能把「狗已经站着」交接给网关。
-
-    2.4G 直连时起立不经过网关，而运动主机 RL 起立后遥测仍报 basic_state=0，
-    网关从遥测里也认不出来。不交接的现场表现是：切回 MESH 后左下角还是「起立」，
-    切回 MESH 后左下角还是「起立」。记得站着只改按钮，摇杆仍要力控或起步。
-    """
+    """有官方状态时，旧 2.4G APK 的历史姿态不能污染网关。"""
     print("\n== 姿态交接 ==")
     a = WsClient(host, port)
     a.wait_for("hello")
@@ -240,29 +235,18 @@ def pose_handoff_scenario(host, port):
 
     a.send({"t": "claim", "standing": True})
     a.wait_for("control", predicate=lambda m: m.get("granted") is True)
-    st = a.wait_for("state", timeout=5,
-                    predicate=lambda m: m.get("rl_standing") is True)
-    # rl_standing 表示「记得站着」，用来画按钮、放行步态和起立后推杆。
-    check("claim 带 standing 后网关认为狗站着", st.get("rl_standing") is True)
-    check("遥测仍报坐下也不改口", st.get("basic_state") == 0, st.get("basic_state"))
+    st = a.wait_for("state", timeout=5)
+    check("官方状态不被 claim.standing 覆盖",
+          st.get("body_monitor_alive") is True
+          and st.get("rl_standing") is False,
+          f"body={st.get('body_monitor_alive')} remembered={st.get('rl_standing')}")
 
-    # 反向：告知坐下后网关要改回来，否则趴着的狗也会收轴。
     a.send({"t": "yield"})
     a.send({"t": "claim", "standing": False})
     a.wait_for("control", predicate=lambda m: m.get("granted") is True)
-    st = a.wait_for("state", timeout=5,
-                   predicate=lambda m: m.get("rl_standing") is False)
-    check("告知坐下后网关改回坐着", st.get("rl_standing") is False)
-
-    # 没带这个键的 claim 不该动网关的记忆：网页控制台不知道姿态，别让它清掉。
-    a.send({"t": "claim", "standing": True})
-    a.wait_for("state", timeout=5, predicate=lambda m: m.get("rl_standing") is True)
-    a.send({"t": "yield"})
-    a.send({"t": "claim"})
-    a.wait_for("control", predicate=lambda m: m.get("granted") is True)
     st = a.wait_for("state", timeout=5)
-    check("不带 standing 的 claim 不动记忆", st.get("rl_standing") is True,
-          st.get("rl_standing"))
+    check("反向历史姿态同样不覆盖官方状态",
+          st.get("posture") == "prone", st.get("posture"))
     a.close()
 
 

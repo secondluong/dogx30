@@ -353,7 +353,7 @@ final class RadioLink {
             o.put("cmd", lastCmd);
             o.put("standing", isStanding());
             o.put("stateSource", "radio");
-            o.put("stateValid", bodyFresh() || telemFresh());
+            o.put("stateValid", bodyFresh() || telemFresh() || poseKnown);
             o.put("stateTruth", telemFresh() ? "motion_udp"
                     : (bodyFresh() ? "body_monitor" : "unavailable"));
             o.put("posture", postureState());
@@ -482,8 +482,9 @@ final class RadioLink {
     }
 
     private String axisMode() {
-        if (!telemFresh() || telemLocked()) return "none";
-        if (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT) {
+        if ((!telemFresh() && !poseKnown) || telemLocked()) return "none";
+        if (telemFresh() &&
+                (telemState == ST_SIT_TO_STAND || telemState == ST_STAND_TO_SIT)) {
             return "none";
         }
         String motion = motionState();
@@ -559,8 +560,12 @@ final class RadioLink {
             if (torqued && !stepping) return isStanding();
             return false;
         }
-        // 没有遥测宁可不发。否则力控身高轴会被主机读成前进，俯仰也没了。
-        return false;
+        // 2.4G 接收机地址通常没登记在运动主机 network.toml，收不到 UDP 遥测。
+        // 切档时由仍在线的 MESH 状态交接姿态；只有姿态已知且本层确实发过模式
+        // 指令时才放轴，绝不能因为没遥测让整条 2.4G 永久失效。
+        if (!poseKnown || !standing) return false;
+        if (stepping && stepSent) return true;
+        return torqued && !stepping;
     }
 
     /**
@@ -586,7 +591,6 @@ final class RadioLink {
 
     private synchronized void standNow() {
         if (!enabled) return;
-        sendSimple(STAND);
         sendSimple(STAND);
         standing = true;
         lastStandAt = System.currentTimeMillis();
@@ -631,9 +635,8 @@ final class RadioLink {
                 clearWalk();
                 lastStandAt = System.currentTimeMillis();
                 if (sitAfterStep) {
-                    onRadioDelayed(() -> { sendSimple(SIT); sendSimple(SIT); }, 300);
+                    onRadioDelayed(() -> sendSimple(SIT), 300);
                 } else {
-                    sendSimple(SIT);
                     sendSimple(SIT);
                 }
                 break;
