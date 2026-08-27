@@ -227,13 +227,15 @@ class Robot:
                 log("软急停 -> 趴下并锁关节")
 
             elif code == STAND_SIT:
-                # 急停后原厂卸力。RL 起/趴在自锁态会被主机吞掉。
+                # 官方 V1.0.6：趴下/初始站立之间切换；急停态下先解除保护。
                 if self.state == EMERGENCY:
                     self.state = SITTING
                     self.emergency_source = 0
                     log("卸力 -> 解除关节保护")
                 elif self.state == SITTING:
-                    log("卸力（已坐下）")
+                    self._begin(SIT_TO_STAND, INITIAL_STANDING, 2.0,
+                                log, "官方起立")
+                    self.emergency_source = 0
                 elif self.state in (INITIAL_STANDING, TORQUE_STANDING, STEPPING_STATE):
                     self._begin(STAND_TO_SIT, SITTING, 2.0, log, "坐下")
                 else:

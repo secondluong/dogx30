@@ -107,8 +107,9 @@ final class RadioLink {
 
     private static final int HEARTBEAT = 0x21040001;
     private static final int CONNECT = 0x21020001;
-    private static final int STAND = 0x21010223;
-    private static final int SIT = 0x21010222;
+    // 官方 UDP V1.0.6：根据当前状态用同一条指令起立或趴下。
+    private static final int STAND = 0x21010202;
+    private static final int SIT = 0x21010202;
     private static final int UNLOAD = 0x21010202;
     private static final int TORQUE = 0x2101020A;
     private static final int STEP = 0x21010201;

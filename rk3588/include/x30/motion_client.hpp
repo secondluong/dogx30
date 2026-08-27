@@ -100,6 +100,9 @@ struct RobotState {
   int body_control_mode = -1;
   int body_location_state = -1;
   int body_on_dock_state = -1;
+  bool ros_motion_alive = false;
+  int ros_basic_state = -1;
+  int ros_gait_state = -1;
 };
 
 // 面向遥控端的规范化运动状态。BasicState 是狗主机的原始遥测；这里把
@@ -208,6 +211,8 @@ class MotionClient {
   void ApplyBodyMonitor(bool alive, int motion_state, int gait_state,
                         int motor_state, int charge_state, int control_mode,
                         int location_state, int on_dock_state);
+  void ApplyRosBasicState(int32_t state);
+  void ApplyRosGaitState(int32_t gait);
 
  private:
   void TxLoop();
@@ -250,6 +255,8 @@ class MotionClient {
   bool att_from_udp_{false};
   bool mileage_from_udp_{false};
   bool mileage_from_ros_{false};
+  std::chrono::steady_clock::time_point ros_basic_at_{};
+  std::chrono::steady_clock::time_point ros_gait_at_{};
 
   // 上次「坐/站」发出去的是起立还是趴下。RL 起立后遥测仍报坐下，
   // 只能靠这个决定下一次该发哪条，不能信 basic_state。

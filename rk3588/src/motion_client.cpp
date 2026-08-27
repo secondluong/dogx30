@@ -125,11 +125,17 @@ void MotionClient::TxLoop() {
     }
     if (send_axes) {
       std::lock_guard<std::mutex> lock(state_mutex_);
+      const bool ros_upright =
+          ros_basic_at_ != Clock::time_point{} &&
+          Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200) &&
+          (state_.ros_basic_state == 2 || state_.ros_basic_state == 3 ||
+           state_.ros_basic_state == 4 || state_.ros_basic_state == 16);
       const bool safe_upright =
           state_.telemetry_alive &&
           !JointsLocked(state_.basic_state, state_.emergency_source) &&
           !IsStandSitTransient(state_.basic_state) &&
-          (TelemUpright(state_.basic_state) || state_.rl_standing);
+          (TelemUpright(state_.basic_state) || state_.rl_standing ||
+           ros_upright);
       // 力控只发姿态，起步只发速度。主机在初始站立里把同一组轴当速度，
       // 力控左杆就会走路、俯仰轴被丢掉。RL 主机又可能在已站立后继续报
       // basic_state=0，所以不能要求它必须报 3/4；控制层已发出的模式指令才
@@ -169,9 +175,8 @@ void MotionClient::TxLoop() {
       std::printf("[运动] 踏步切换 → 起步 0x21010201（力控之后）\n");
     }
     if (fire_sit) {
-      SendSimple(cmd::kRlSitDown);
-      SendSimple(cmd::kRlSitDown);
-      std::printf("[运动] 停步之后 RL 趴下 0x21010222\n");
+      SendSimple(cmd::kStandSitToggle);
+      std::printf("[运动] 停步之后官方起趴切换 0x21010202\n");
     }
 
     bool fire_torque = false;
@@ -372,6 +377,22 @@ void MotionClient::ApplyBodyMonitor(bool alive, int motion_state,
              motion_phase_ == MotionPhase::kStopping) {
     motion_phase_ = MotionPhase::kStopped;
   }
+}
+
+void MotionClient::ApplyRosBasicState(int32_t state) {
+  if (state < 0 || (state > 6 && state != 16)) return;
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  state_.ros_basic_state = state;
+  state_.ros_motion_alive = true;
+  ros_basic_at_ = Clock::now();
+}
+
+void MotionClient::ApplyRosGaitState(int32_t gait) {
+  if (gait < 0 || gait > 255) return;
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  state_.ros_gait_state = gait;
+  ros_gait_at_ = Clock::now();
+  if (!state_.telemetry_alive) state_.gait = static_cast<Gait>(gait);
 }
 
 void MotionClient::HandleDatagram(const uint8_t* data, int len) {
@@ -577,9 +598,9 @@ void MotionClient::StandOrSit() {
   }
 
   if (sitting) {
-    std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n", ToString(s.basic_state));
-    SendSimple(cmd::kRlStandUp);
-    SendSimple(cmd::kRlStandUp);
+    std::printf("[运动] 官方起立切换 0x21010202（遥测=%s）\n",
+                ToString(s.basic_state));
+    SendSimple(cmd::kStandSitToggle);
   } else {
     SitDown();
   }
@@ -625,10 +646,9 @@ void MotionClient::StandUp() {
     torque_retries_ = 0;
     torque_retry_at_ = {};
   }
-  std::printf("[运动] RL 起立 0x21010223（遥测=%s）\n",
+  std::printf("[运动] 官方起立切换 0x21010202（遥测=%s）\n",
               ToString(Snapshot().basic_state));
-  SendSimple(cmd::kRlStandUp);
-  SendSimple(cmd::kRlStandUp);
+  SendSimple(cmd::kStandSitToggle);
 }
 
 void MotionClient::SitDown() {
@@ -695,10 +715,9 @@ void MotionClient::SitDown() {
                 ToString(Snapshot().basic_state));
     return;
   }
-  std::printf("[运动] RL 趴下 0x21010222（遥测=%s）\n",
+  std::printf("[运动] 官方趴下切换 0x21010202（遥测=%s）\n",
               ToString(Snapshot().basic_state));
-  SendSimple(cmd::kRlSitDown);
-  SendSimple(cmd::kRlSitDown);
+  SendSimple(cmd::kStandSitToggle);
 }
 
 void MotionClient::AdoptPosture(bool standing) {
@@ -754,9 +773,15 @@ void MotionClient::EnterTorqueStand() {
   bool need_stand = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    const bool ros_upright =
+        ros_basic_at_ != Clock::time_point{} &&
+        Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200) &&
+        (state_.ros_basic_state == 2 || state_.ros_basic_state == 3 ||
+         state_.ros_basic_state == 4 || state_.ros_basic_state == 16);
     need_stand = state_.telemetry_alive &&
                  state_.basic_state == BasicState::kSitting &&
-                 last_stand_sit_ != LastStandSit::kStood;
+                 last_stand_sit_ != LastStandSit::kStood &&
+                 !ros_upright;
     if (need_stand) {
       last_stand_sit_ = LastStandSit::kStood;
       last_stand_cmd_at_ = Clock::now();
@@ -776,8 +801,7 @@ void MotionClient::EnterTorqueStand() {
   // 趴着发力控主机会丢掉。先起立，再靠补发进力控站立（3），否则左杆是走路、
   // 俯仰轴没定义。
   if (need_stand) {
-    SendSimple(cmd::kRlStandUp);
-    SendSimple(cmd::kRlStandUp);
+    SendSimple(cmd::kStandSitToggle);
   }
   // 还在踏步里俯仰轴无定义，速度轴也还在。先停步，再力控，轴停发一小会，
   // 免得 50 Hz 的「身高」在过渡里被主机读成前进。
@@ -897,33 +921,53 @@ MotionView MotionClient::View() const {
   // 运动 UDP 是 200Hz 控制/安全主通道；Type=1002 是低频请求响应补充。
   // 监控通道补出摔倒(7)、RL(16)，但不能覆盖 UDP emergency_source。
   const bool udp = state_.telemetry_alive;
+  const bool ros =
+      ros_basic_at_ != Clock::time_point{} &&
+      Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200);
   const bool official = state_.body_monitor_alive &&
                         state_.body_motion_state >= 0;
-  out.state_valid = udp || official;
+  out.state_valid = udp || ros || official;
   const int body = state_.body_motion_state;
+  const int ros_basic = state_.ros_basic_state;
   const bool locked =
       (udp && JointsLocked(state_.basic_state, state_.emergency_source)) ||
+      (ros && ros_basic == 6) ||
       (official && (body == 6 || body == 7));
+  // 官方 ROS 话题能修正现场已确认的“UDP 仍报趴下”问题。除此之外 UDP 优先。
+  const bool use_ros_motion =
+      ros && (!udp || (state_.basic_state == BasicState::kSitting &&
+                       ros_basic != 0));
   const bool use_official_motion =
-      official && (!udp || body == 16);
+      !use_ros_motion && official &&
+      (!udp || body == 16 ||
+       (state_.basic_state == BasicState::kSitting &&
+        body >= 1 && body <= 5));
+  const int effective =
+      use_ros_motion ? ros_basic
+                     : (use_official_motion
+                            ? body
+                            : static_cast<int>(state_.basic_state));
   const bool remembered_up = last_stand_sit_ == LastStandSit::kStood;
   const bool upright =
-      use_official_motion
-          ? (body == 2 || body == 3 || body == 4 || body == 16)
+      (use_ros_motion || use_official_motion)
+          ? (effective == 2 || effective == 3 || effective == 4 ||
+             effective == 16)
           : (TelemUpright(state_.basic_state) ||
              (remembered_up &&
               state_.basic_state == BasicState::kSitting));
-  const bool transient = use_official_motion
-                             ? (body == 1 || body == 5)
+  const bool transient = (use_ros_motion || use_official_motion)
+                             ? (effective == 1 || effective == 5)
                              : IsStandSitTransient(state_.basic_state);
 
   if (locked) out.posture = "locked";
-  else if (use_official_motion && body == 1) out.posture = "rising";
-  else if (use_official_motion && body == 5) out.posture = "falling";
-  else if (!use_official_motion &&
+  else if ((use_ros_motion || use_official_motion) && effective == 1)
+    out.posture = "rising";
+  else if ((use_ros_motion || use_official_motion) && effective == 5)
+    out.posture = "falling";
+  else if (!use_ros_motion && !use_official_motion &&
            state_.basic_state == BasicState::kSitToStand)
     out.posture = "rising";
-  else if (!use_official_motion &&
+  else if (!use_ros_motion && !use_official_motion &&
            state_.basic_state == BasicState::kStandToSit)
     out.posture = "falling";
   else out.posture = upright ? "standing" : "prone";
@@ -935,11 +979,13 @@ MotionView MotionClient::View() const {
   }
 
   const bool reported_walking =
-      use_official_motion ? body == 4
-                          : state_.basic_state == BasicState::kStepping;
+      (use_ros_motion || use_official_motion)
+          ? effective == 4
+          : state_.basic_state == BasicState::kStepping;
   const bool reported_torque =
-      use_official_motion ? body == 3
-                          : state_.basic_state == BasicState::kTorqueStanding;
+      (use_ros_motion || use_official_motion)
+          ? effective == 3
+          : state_.basic_state == BasicState::kTorqueStanding;
   if (motion_phase_ == MotionPhase::kStopping && reported_walking) {
     out.phase = MotionPhase::kStopping;
     out.motion = "stopping";
@@ -1120,6 +1166,9 @@ void MotionClient::SetCommanding(bool on) {
 RobotState MotionClient::Snapshot() const {
   std::lock_guard<std::mutex> lock(state_mutex_);
   RobotState s = state_;
+  s.ros_motion_alive =
+      ros_basic_at_ != Clock::time_point{} &&
+      Clock::now() - ros_basic_at_ < std::chrono::milliseconds(1200);
   s.rl_standing = (last_stand_sit_ == LastStandSit::kStood);
   return s;
 }

@@ -418,8 +418,8 @@ var bodyCpp = fs.readFileSync(
 var gaitCpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'src', 'gait_coordinator.cpp'), 'utf8');
 check('2.4G RadioLink 含起立趴下行走指令',
-      /0x21010223/.test(radioJava) &&
-      /0x21010222/.test(radioJava) &&
+      /STAND = 0x21010202/.test(radioJava) &&
+      /SIT = 0x21010202/.test(radioJava) &&
       /0x21010201/.test(radioJava) &&
       /bindSocket/.test(radioJava) &&
       /192, 168, 144/.test(radioJava) &&

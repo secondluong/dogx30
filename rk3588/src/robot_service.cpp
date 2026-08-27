@@ -1024,6 +1024,18 @@ void RobotService::StartBatteryRos() {
   rc.retry_ms = 4000;
 
   battery_ros_.reset(new RosClient(rc));
+  battery_ros_->Subscribe(
+      {"/robot_basic_state", "std_msgs/Int32", "*"},
+      [this](const uint8_t* d, size_t n) {
+        int32_t state = 0;
+        if (DecodeRosInt32(d, n, &state)) client_.ApplyRosBasicState(state);
+      });
+  battery_ros_->Subscribe(
+      {"/robot_gait_state", "std_msgs/Int32", "*"},
+      [this](const uint8_t* d, size_t n) {
+        int32_t gait = 0;
+        if (DecodeRosInt32(d, n, &gait)) client_.ApplyRosGaitState(gait);
+      });
   // md5=*：云深处 UInt8 的校验和与官方差一位，对不上会被直接踢掉。
   battery_ros_->Subscribe({"/battery/level", level_type, "*"},
                           [this, level_type](const uint8_t* d, size_t n) {
@@ -1056,6 +1068,13 @@ void RobotService::StartBatteryRos() {
       });
   battery_ros_->Subscribe(
       {"/imu_from_motion", "sensor_msgs/Imu", "*"},
+      [this](const uint8_t* d, size_t n) {
+        float roll = 0, pitch = 0, yaw = 0;
+        if (!DecodeRosImuRpy(d, n, &roll, &pitch, &yaw)) return;
+        client_.ApplyAtt(roll, pitch, yaw, false);
+      });
+  battery_ros_->Subscribe(
+      {"/imu/data", "sensor_msgs/Imu", "*"},
       [this](const uint8_t* d, size_t n) {
         float roll = 0, pitch = 0, yaw = 0;
         if (!DecodeRosImuRpy(d, n, &roll, &pitch, &yaw)) return;
@@ -1158,6 +1177,11 @@ std::string RobotService::BuildStateJson() const {
   const char* state_text = ToString(s.basic_state);
   if (JointsLocked(s.basic_state, s.emergency_source)) {
     state_text = "急停锁定";
+  } else if (s.ros_motion_alive &&
+             (!s.telemetry_alive ||
+              (s.basic_state == BasicState::kSitting &&
+               s.ros_basic_state != 0))) {
+    state_text = ToString(static_cast<BasicState>(s.ros_basic_state));
   } else if (s.body_monitor_alive &&
              (!s.telemetry_alive || s.body_motion_state == 6 ||
               s.body_motion_state == 7 || s.body_motion_state == 16)) {
@@ -1202,6 +1226,9 @@ std::string RobotService::BuildStateJson() const {
       .Key("body_control_mode", s.body_control_mode)
       .Key("body_location_state", s.body_location_state)
       .Key("body_on_dock_state", s.body_on_dock_state)
+      .Key("ros_motion_alive", s.ros_motion_alive)
+      .Key("ros_basic_state", s.ros_basic_state)
+      .Key("ros_gait_state", s.ros_gait_state)
       .Key("gait", static_cast<int>(s.gait))
       .Key("gait_key", GaitKey(s.gait))
       .Key("gait_text", ToString(s.gait))

@@ -61,13 +61,12 @@ inline constexpr uint32_t kConnectConfirm = 0x21020001;
 // 这两码不在公开 API 里，但是运动程序认、原厂手柄在用，比文档更值得信。
 // RL 起立后 basic_state 仍报 0，下一次该起还是该坐只能自己记。
 //
-// 0x21010202 日常不再用来起/趴。软急停后关节自锁，RL 起/趴会被主机吞掉；
-// 原厂 App 的「卸力」、手册里急停后按 ⑤/㉑，打的都是这条。现场 8/10
-// 硬件急停松开后先 0x21010202（"Robot is waitting to stand up"），再 RL 起立。
-inline constexpr uint32_t kStandSitToggle = 0x21010202;  // 旧切换；急停后卸力
+// 新官方 UDP V1.0.6 只承诺 0x21010202；当前实机也只执行这条，因此日常起趴
+// 与急停后卸力均走它。0x22/0x23 仅保留为旧固件兼容常量，不作为默认路径。
+inline constexpr uint32_t kStandSitToggle = 0x21010202;
 inline constexpr uint32_t kUnloadForce = kStandSitToggle;
-inline constexpr uint32_t kRlSitDown = 0x21010222;       // 原厂手柄趴下
-inline constexpr uint32_t kRlStandUp = 0x21010223;       // 原厂手柄起立
+inline constexpr uint32_t kRlSitDown = 0x21010222;       // 旧固件 RL 趴下
+inline constexpr uint32_t kRlStandUp = 0x21010223;       // 旧固件 RL 起立
 inline constexpr uint32_t kTorqueStand = 0x2101020A;     // 初始站立 -> 力控站立
 inline constexpr uint32_t kSteppingToggle = 0x21010201;  // 力控站立 <-> 踏步 切换
 
