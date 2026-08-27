@@ -127,11 +127,12 @@ void MotionClient::TxLoop() {
       // 遥测还没来或已经断时，不知道当前基础状态，沿用旧行为继续发轴——
       // 否则 network.toml 没登记、一条遥测都没有时，力控姿态也发不出去。
       if (state_.telemetry_alive) {
-        send_axes = AxisCommandsApply(
-            state_.basic_state,
-            last_stand_sit_ == LastStandSit::kStood || axes_unlocked_ ||
-                torqued_ || stepping_,
-            state_.emergency_source);
+        // 起立本身不发轴，否则没起步也在喂速度。力控发姿态，起步发速度。
+        send_axes = (torqued_ || stepping_) &&
+                    AxisCommandsApply(state_.basic_state, true,
+                                      state_.emergency_source);
+      } else {
+        send_axes = torqued_ || stepping_;
       }
     }
 
@@ -566,60 +567,68 @@ void MotionClient::UnloadForce() {
 }
 
 void MotionClient::EnterTorqueStand() {
+  bool leave_step = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    leave_step = stepping_ && step_sent_;
     step_at_ = {};
     step_sent_ = false;
     stepping_ = false;
     torqued_ = true;
     axes_unlocked_ = true;
   }
-  // 只发力控，不再先切踏步：踏步是切换指令，切档后记忆错了会把力控发成起步。
+  // 还在踏步里俯仰轴无定义。先用踏步切换码退出力控站立，再发力控。
+  if (leave_step) SendSimple(cmd::kSteppingToggle);
   SendSimple(cmd::kTorqueStand);
 }
 
-void MotionClient::ToggleStepping() {
-  // 原厂：踏步只在力控站立里切。站着直接发 0x21010201 会被丢掉，
-  // 看起来像「起步没踏、再按就停步」。起步先力控，TxLoop 到点再发一条。
-  bool stopping = false;
-  bool cancel_only = false;
+void MotionClient::StartStepping() {
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    stopping = stepping_;
-    if (stopping) {
-      stepping_ = false;
-      torqued_ = true;
-      axes_unlocked_ = true;
-      cancel_only = (step_at_ != Clock::time_point{} && !step_sent_);
-      step_at_ = {};
-      const bool sent = step_sent_;
-      step_sent_ = false;
-      if (cancel_only || !sent) {
-        // 踏步码还没发出去，停步只要留在力控，再发一条等于起步。
-        std::printf("[运动] 停步：取消待发踏步，留在力控\n");
-        return;
-      }
-    } else {
-      stepping_ = true;
-      torqued_ = true;
-      axes_unlocked_ = true;
-      step_sent_ = false;
-      step_at_ = Clock::now() + std::chrono::milliseconds(400);
+    if (stepping_ && (step_sent_ || step_at_ != Clock::time_point{})) {
+      std::printf("[运动] 起步：已经在踏步，不重发\n");
+      return;
     }
-  }
-  if (stopping) {
-    SendSimple(cmd::kSteppingToggle);
-    std::printf("[运动] 踏步切换 → 停步 0x21010201\n");
-    return;
+    stepping_ = true;
+    torqued_ = true;
+    axes_unlocked_ = true;
+    step_sent_ = false;
+    step_at_ = Clock::now() + std::chrono::milliseconds(500);
   }
   SendSimple(cmd::kTorqueStand);
   std::printf("[运动] 起步：先力控 0x2101020A，稍后踏步\n");
+}
+
+void MotionClient::StopStepping() {
+  bool send_step = false;
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    const bool pending = step_at_ != Clock::time_point{} && !step_sent_;
+    send_step = step_sent_ && !pending;
+    stepping_ = false;
+    torqued_ = true;
+    axes_unlocked_ = true;
+    step_at_ = {};
+    step_sent_ = false;
+    if (pending || !send_step) {
+      std::printf("[运动] 停步：取消待发踏步，留在力控\n");
+      return;
+    }
+  }
+  SendSimple(cmd::kSteppingToggle);
+  std::printf("[运动] 踏步切换 → 停步 0x21010201\n");
+}
+
+void MotionClient::ToggleStepping() {
+  if (UserStepping()) StopStepping();
+  else StartStepping();
 }
 
 void MotionClient::SetGait(Gait gait) {
   const uint32_t code = GaitCommandCode(gait);
   if (code == 0) return;
   std::printf("[运动] 步态 → %s 0x%08x\n", ToString(gait), code);
+  SendSimple(code);
   SendSimple(code);
 }
 

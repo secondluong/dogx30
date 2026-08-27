@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0826u';
+const WEB_BUILD = '0826v';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -1051,14 +1051,10 @@ function renderState(s) {
   wrap.classList.toggle('dog-prone', !standing);
   paintStandButton();
   if (!radioDirect()) {
-    // walkMode 只跟人点的走。遥测报踏步就写成 step，B2 一按就变成停步，
-    // 而狗其实还在站着。坐下遥测也不要灭刚点的力控/起步。
-    if (s.basic_state !== meshWalkSeen) {
-      meshWalkSeen = s.basic_state;
-      if (!standing) app.walkMode = null;
-    } else if (!standing) {
-      app.walkMode = null;
-    }
+    // walkMode 只跟人点的走。遥测常报坐下，每帧清掉的话按钮又变回起步，
+    // 再按一次等于又发起步，主机那条切换码就把刚踏起来的狗停掉。
+    if (s.basic_state !== meshWalkSeen) meshWalkSeen = s.basic_state;
+    if (!standing && !app.walkMode) app.walkMode = null;
   }
   paintWalkButtons();
   if (!standing) closeAccordions();
@@ -1336,7 +1332,9 @@ setInterval(() => {
     send({ t: 'vel', vx: c.fwd, vy: c.lat, wz: c.turn });
   } else if (channel === 'pose') {
     // 姿态接口收的是原始轴语义：向右为正，与通道约定相反，故取负。
-    send({ t: 'pose', h: c.fwd, roll: -c.lat, pitch: c.tilt, yaw: -c.turn });
+    const pitch = (typeof c.tilt === 'number' && c.tilt) ? c.tilt
+      : (typeof c.look === 'number' ? c.look : 0);
+    send({ t: 'pose', h: c.fwd, roll: -c.lat, pitch: pitch, yaw: -c.turn });
   }
 }, 1000 / SEND_HZ);
 
@@ -1424,14 +1422,19 @@ function radioCmdFromEl(el) {
 }
 
 function fireRadioFromEl(el) {
-  const name = radioCmdFromEl(el);
-  if (!name || !nativeRadioCmd(name)) return '';
+  let name = radioCmdFromEl(el);
+  if (!name) return '';
+  if (name === 'step') {
+    noteWalkCmd('step');
+    name = app.walkMode === 'step' ? 'step_on' : 'step_off';
+  }
+  if (!nativeRadioCmd(name)) return '';
   const st = nativeRadioStatus() || {};
   if (!st.ready) {
     showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
     speak('2.4G 还没通');
   }
-  applyRadioPose(name);
+  if (name !== 'step_on' && name !== 'step_off') applyRadioPose(name);
   markPending(el);
   return name;
 }
@@ -1467,14 +1470,18 @@ document.querySelectorAll('[data-cmd]').forEach((b) => {
     let name = b.dataset.cmd;
     if (name === 'stand' && app.emergencyLocked) name = 'unload';
     else if (name === 'stand') name = isStandingUi() ? 'sit_down' : 'stand_up';
-    send({ t: 'cmd', name });
-    markPending(b);
     if (name === 'step' && app.lioAligning) {
       showBanner('LIO 还在对准，请站稳，不要走', 4000);
       speak('LIO 对准中');
       return;
     }
     noteWalkCmd(name);
+    if (name === 'step') {
+      send({ t: 'cmd', name: 'step', value: app.walkMode === 'step' ? 'on' : 'off' });
+    } else {
+      send({ t: 'cmd', name });
+    }
+    markPending(b);
   }));
 });
 document.querySelectorAll('[data-gait]').forEach((b) => {
@@ -1494,7 +1501,14 @@ document.querySelectorAll('[data-gait]').forEach((b) => {
       name: 'gait',
       value: b.dataset.gait,
       stair_style: $('stair-style').value,
+      stepping: app.walkMode === 'step',
     });
+    if (b.dataset.gait === 'lwalk') {
+      const crawl = document.querySelector('[data-height="crawl"].active');
+      if (crawl) {
+        showBanner('匍匐档下低姿步态不生效，请先把身高切回正常', 6000);
+      }
+    }
     markPending(b);
     // 网关最长约 5 秒给结果（含等待静止）。兜底解禁，别把按钮永久锁死。
     setTimeout(() => { if (app.gaitPending) setGaitPending(false); }, 9000);

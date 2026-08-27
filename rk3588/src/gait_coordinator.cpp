@@ -33,12 +33,13 @@ void GaitCoordinator::Stop() {
 }
 
 bool GaitCoordinator::Request(Gait target, HeightMapMode stair_style,
-                              ResultHandler on_done) {
+                              ResultHandler on_done, bool stepping_hint) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (pending_ || busy_.load()) return false;
   pending_ = true;
   pending_target_ = target;
   pending_style_ = stair_style;
+  pending_step_hint_ = stepping_hint;
   pending_handler_ = std::move(on_done);
   cv_.notify_one();
   return true;
@@ -48,6 +49,7 @@ void GaitCoordinator::WorkerLoop() {
   while (running_.load()) {
     Gait target;
     HeightMapMode style;
+    bool step_hint = false;
     ResultHandler handler;
     {
       std::unique_lock<std::mutex> lock(mutex_);
@@ -58,11 +60,12 @@ void GaitCoordinator::WorkerLoop() {
       pending_ = false;
       target = pending_target_;
       style = pending_style_;
+      step_hint = pending_step_hint_;
       handler = std::move(pending_handler_);
     }
 
     busy_.store(true);
-    Result result = Execute(target, style);
+    Result result = Execute(target, style, step_hint);
     busy_.store(false);
 
     if (handler) handler(result);
@@ -70,9 +73,10 @@ void GaitCoordinator::WorkerLoop() {
 }
 
 GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
-                                                 HeightMapMode stair_style) {
+                                                 HeightMapMode stair_style,
+                                                 bool stepping_hint) {
   const RobotState snapshot = motion_.Snapshot();
-  const bool user_step = motion_.UserStepping();
+  const bool user_step = motion_.UserStepping() || stepping_hint;
   const bool standing = GaitSwitchApply(snapshot.basic_state, snapshot.rl_standing,
                                         snapshot.emergency_source);
 

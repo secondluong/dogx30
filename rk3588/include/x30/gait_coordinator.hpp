@@ -67,13 +67,14 @@ class GaitCoordinator {
 
   // 异步发起切换。stair_style 仅对单帧楼梯步态有意义，其余情况忽略。
   // 已有切换在途时返回 false，不排队 —— 操作员连点两下不应该叠加执行。
-  bool Request(Gait target, HeightMapMode stair_style, ResultHandler on_done);
+  bool Request(Gait target, HeightMapMode stair_style, ResultHandler on_done,
+               bool stepping_hint = false);
 
   bool busy() const { return busy_.load(); }
 
  private:
   void WorkerLoop();
-  Result Execute(Gait target, HeightMapMode stair_style);
+  Result Execute(Gait target, HeightMapMode stair_style, bool stepping_hint);
 
   // 等待机器狗速度落到阈值以下。
   bool WaitStandstill();
@@ -93,6 +94,7 @@ class GaitCoordinator {
   bool pending_ = false;
   Gait pending_target_ = Gait::kWalk;
   HeightMapMode pending_style_ = HeightMapMode::kSolid;
+  bool pending_step_hint_ = false;
   ResultHandler pending_handler_;
 };
 

@@ -624,8 +624,10 @@ check('两条链路都不再自动补力控/起步',
       !/torqueByUser/.test(appJs));
 // 起步跟原厂：人点一下发一条 0x21010201。程序不得自动补，补了就等于停步。
 check('起步先力控再延后发一条踏步码',
-      /void ToggleStepping/.test(motionHpp) &&
-      /ToggleStepping\(\)/.test(serviceCpp) &&
+      /void StartStepping/.test(motionHpp) &&
+      /void StopStepping/.test(motionHpp) &&
+      /StartStepping\(\)/.test(serviceCpp) &&
+      /walkMode === 'step' \? 'on' : 'off'/.test(appJs) &&
       /先力控/.test(motionCpp) &&
       /step_at_/.test(motionCpp) &&
       /STEP_AFTER_TORQUE_MS/.test(radioJava) &&

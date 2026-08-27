@@ -218,7 +218,7 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 连上立即下发一次。
 
 ```json
-{"t":"hello","version":"0.2.17","client_id":3,"control":false,"lease_ms":2000,
+{"t":"hello","version":"0.2.18","client_id":3,"control":false,"lease_ms":2000,
  "config":true,"pose_adopt":true}
 ```
 

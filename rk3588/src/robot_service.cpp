@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.2.17";
+constexpr const char* kVersion = "0.2.18";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。
@@ -610,7 +610,10 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
         SendError(id, "lio_wait", "LIO 还在对准，请站稳，不要走");
         return;
       }
-      client_.ToggleStepping();
+      const std::string v = msg.String("value");
+      if (v == "off" || v == "stop") client_.StopStepping();
+      else if (v == "on" || v == "start") client_.StartStepping();
+      else client_.ToggleStepping();
     } else if (name == "savedata") {
       client_.SaveData();
     } else if (name == "gait") {
@@ -627,9 +630,11 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
         return;
       }
       const bool accepted = gaits_.Request(
-          gait, style, [this, id, gait](const GaitCoordinator::Result& r) {
+          gait, style,
+          [this, id, gait](const GaitCoordinator::Result& r) {
             SendGaitResult(id, gait, r);
-          });
+          },
+          msg.Bool("stepping") || client_.UserStepping());
       if (!accepted) {
         SendError(id, "gait_busy", "上一次步态切换尚未完成");
         return;

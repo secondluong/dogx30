@@ -110,7 +110,7 @@ final class RadioLink {
     private static final int AXIS_LX = 0x21010131;
     private static final int AXIS_RX = 0x21010135;
     private static final int AXIS_RY = 0x21010102;
-    private static final long STEP_AFTER_TORQUE_MS = 400;
+    private static final long STEP_AFTER_TORQUE_MS = 500;
 
     private static final RadioLink INST = new RadioLink();
 
@@ -397,6 +397,29 @@ final class RadioLink {
         flushPendingGait();
     }
 
+    private void startStepping() {
+        if (emergency) return;
+        if (stepping && (stepSent || stepPending)) return;
+        sendSimple(TORQUE);
+        torqued = true;
+        stepping = true;
+        standing = true;
+        stepSent = false;
+        stepPending = true;
+        onRadioDelayed(stepTask, STEP_AFTER_TORQUE_MS);
+    }
+
+    private void stopStepping() {
+        if (emergency) return;
+        boolean cancelOnly = stepPending && !stepSent;
+        boolean sent = stepSent;
+        cancelPendingStep();
+        stepping = false;
+        torqued = true;
+        standing = true;
+        if (!cancelOnly && sent) sendSimple(STEP);
+    }
+
     /**
      * 轴能不能发。规则与网关那侧的 protocol.hpp AxisCommandsApply 保持一致。
      *
@@ -497,30 +520,21 @@ final class RadioLink {
                 clearWalk();
                 break;
             case "torque":
+                if (stepping && stepSent) sendSimple(STEP);
                 cancelPendingStep();
                 sendSimple(TORQUE);
                 torqued = true;
                 stepping = false;
                 break;
+            case "step_on":
+                startStepping();
+                break;
+            case "step_off":
+                stopStepping();
+                break;
             case "step":
-                // 踏步只在力控站立里切。站着直接发会被丢掉，看起来像没踏、再按就停步。
-                if (emergency) break;
-                if (stepping) {
-                    boolean cancelOnly = stepPending && !stepSent;
-                    cancelPendingStep();
-                    stepping = false;
-                    torqued = true;
-                    standing = true;
-                    if (!cancelOnly) sendSimple(STEP);
-                    break;
-                }
-                sendSimple(TORQUE);
-                torqued = true;
-                stepping = true;
-                standing = true;
-                stepSent = false;
-                stepPending = true;
-                onRadioDelayed(stepTask, STEP_AFTER_TORQUE_MS);
+                if (stepping || stepPending) stopStepping();
+                else startStepping();
                 break;
             case "estop":
                 cancelPendingStand();

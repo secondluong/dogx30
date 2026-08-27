@@ -124,8 +124,10 @@ class MotionClient {
   // 这条就是让那份记忆对上。只有拿到控制权的客户端能调。
   void AdoptPosture(bool standing);
   void UnloadForce();       // 卸力：急停后解除关节自锁，才能再起立
-  void EnterTorqueStand();  // 进力控站立，只发力控码，不切踏步。
-  void ToggleStepping();    // 起步/停步。起步先力控再延后发踏步码。
+  void EnterTorqueStand();  // 进力控站立。若在踏步里先发一条踏步码退出。
+  void StartStepping();     // 起步：已在踏步则不再发。否则先力控再延后一条踏步码。
+  void StopStepping();      // 停步：待发就取消；已发出去再发一条退出。
+  void ToggleStepping();    // 兼容旧客户端：按本端记忆翻转。
 
   void SetGait(Gait gait);
   // 站着点步态不要发给主机：文档写仅踏步态可切，RL 站着发会自己踏步。
