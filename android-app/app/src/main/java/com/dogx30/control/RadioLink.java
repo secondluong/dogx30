@@ -471,15 +471,15 @@ final class RadioLink {
     private String motionState() {
         if (!"standing".equals(postureState())) return "unavailable";
         if (stepPending) return "starting";
-        if (!telemFresh() && bodyFresh() && bodyMotion == 4) {
-            return stepping ? "walking" : "stopping";
-        }
-        if (telemFresh() && telemState == ST_STEPPING) {
-            return stepping ? "walking" : "stopping";
-        }
+        // 本控制层发过的明确模式指令优先。Type=1002/运动 UDP 在真机上低频、
+        // 间歇或长期错报，拿它持续覆盖本地意图会让力控/起步按钮反复闪烁。
         if (stepping && stepSent) return "walking";
-        if ((bodyFresh() && bodyMotion == 3 && !stopped)
-                || (torqued && !stopped)) return "torque";
+        if (torqued) return stopped ? "stopped" : "torque";
+        // 刚切到 2.4G、这侧还没发过模式指令时，才用狗主机状态初始化显示。
+        if ((!telemFresh() && bodyFresh() && bodyMotion == 4)
+                || (telemFresh() && telemState == ST_STEPPING)) return "walking";
+        if ((!telemFresh() && bodyFresh() && bodyMotion == 3)
+                || (telemFresh() && telemState == ST_TORQUE_STANDING)) return "torque";
         return "stopped";
     }
 
@@ -506,6 +506,10 @@ final class RadioLink {
         stepPending = false;
         stepSent = true;
         sendSimple(STEP);
+        // 起步指令已经发出即满足“起步后执行设置”。真机 basic_state 常不报踏步，
+        // 若等遥测确认，预选的步态和身高会永远留在队列里。
+        flushPendingGait();
+        flushPendingHeight();
     }
 
     private void startStepping() {
@@ -755,6 +759,9 @@ final class RadioLink {
         gaitExpected = gaitValue(gait);
         if (!isStairGait(gait)) {
             sendSimple(code, 0);
+            // 非楼梯步态不需要等待地形图或不可靠的步态遥测确认。
+            gaitApplying = false;
+            gaitExpected = -1;
             return;
         }
         sendSimple(MODE_AUTO);

@@ -214,11 +214,10 @@ void MotionClient::TxLoop() {
     HeightGear queued_height = HeightGear::kNormal;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      flush_profile = step_sent_ &&
-                      state_.basic_state == BasicState::kStepping;
-      const bool gait_ready =
-          !height_waits_for_gait_ || state_.gait == height_after_gait_;
-      if (flush_profile && queued_height_set_ && gait_ready) {
+      // 起步码已经发出就执行预选配置。现场 basic_state 和 gait 都可能长期保留
+      // 旧值，继续等“确认”会让步态/身高永远卡在队列中。
+      flush_profile = step_sent_;
+      if (flush_profile && queued_height_set_) {
         flush_height = true;
         queued_height = queued_height_;
         queued_height_set_ = false;

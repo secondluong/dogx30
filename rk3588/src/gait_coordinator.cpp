@@ -156,9 +156,8 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
             std::string("已记下") + ToString(target) + "，起步后切换"};
   }
 
-  if (!WaitWalking()) {
-    return {false, "not_stepping", "起步未被狗主机确认，步态设置没有执行"};
-  }
+  // 真机的 basic_state 在已经踏步时仍可能长期报 0，不能再用它否决执行。
+  // user_step 来自本控制层已经发出的明确起步指令，符合“起步后执行设置”的规则。
   // 从匍匐切到越野/楼梯时，主机会先拒绝步态码；正常身高必须先恢复。
   // 反向（目标匍匐）仍是先切步态再降身高，由 MotionClient 的步态屏障保证。
   motion_.ApplyQueuedNormalHeightBeforeGait();
