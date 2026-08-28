@@ -59,9 +59,10 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 ```
 
 状态规则由控制层检查：只有 `stopped|torque` 能起步；任意行走状态都能停步；
-只有站立状态能进入力控。步态、踏面和身高在 `stopped|torque|walking` 都能选择，
-但停步/力控时只记下，狗主机确认起步后才执行。遥控端必须跟随 `state` 的
-`posture/motion/axis_mode`，不能按按钮历史猜状态。
+只有站立状态能进入力控。`torque` 以及已经发过力控的 `stopped` 都使用
+`axis_mode=pose`，四个姿态轴继续有效；只有 `walking` 使用 `axis_mode=vel`。
+步态、踏面和身高在 `stopped|torque|walking` 都能选择，停步/力控时只记下，
+本控制层发出起步指令后执行。
 
 ### 步态切换（异步）
 
@@ -300,8 +301,12 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 `posture` 取 `unknown|prone|rising|standing|falling|locked`；`motion` 取
 `unavailable|stopped|torque|starting|walking|stopping`；`axis_mode` 取
 `none|pose|vel`。MESH 使用网关生成的这组字段，2.4G 使用 Android 控制层生成的
-同构字段；两条链路没有永久主从关系。切换链路时状态先失效，接手链路收到狗主机
-遥测并重新生成状态后，摇杆才开放。
+同构字段；**当前控制链路是 UI 运动状态的唯一写入者**，另一条链路的状态只能用于
+仪表显示，不能覆盖按钮和摇杆状态。
+
+链路切换采用释放确认：MESH → 2.4G 必须先收到网关 `control.holder=0`，再启动
+2.4G 心跳；2.4G → MESH 必须先看到 `radioStatus.enabled=false`，再发送 `claim`。
+交接期间两边都不发运动指令，避免两个 `0x21` 控制源同时向主机送心跳和零轴。
 
 每个控制层都可轮询智能控制器 `192.168.1.106:30000` 的官方本体监控
 `Type=1002`。运动主机 200Hz UDP 始终是控制与安全主通道；TCP 只补充

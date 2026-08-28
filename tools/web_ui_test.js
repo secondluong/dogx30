@@ -406,6 +406,9 @@ var radioJava = fs.readFileSync(
 var radioBridge = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
             'com', 'dogx30', 'control', 'ControlActivity.java'), 'utf8');
+var g20Java = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+            'com', 'dogx30', 'control', 'G20Rc.java'), 'utf8');
 // 姿态交接是网页、原生、网关三处一起改才成立的，少一处就是「切档姿态又变了」。
 var motionHpp = fs.readFileSync(
   path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'motion_client.hpp'), 'utf8');
@@ -507,8 +510,8 @@ check('力控起步之后才发轴',
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
 check('坐下遥测不清掉刚点的力控起步',
       /RL 起立后主机仍报坐下/.test(radioJava) &&
-      /本端刚点的力控\/起步不要灭/.test(appJs) &&
-      /walkMode 只跟人点的走/.test(appJs));
+      /本控制层发过的明确模式指令优先/.test(radioJava) &&
+      /motion_phase_ == MotionPhase::kWalking/.test(motionCpp));
 // 起立中 / 坐下中 / 急停仍然不发轴：那几个状态下轴没有文档定义，
 // 实测会把原厂柔和的起身趴下掐成猛起猛趴。
 check('过渡和急停期间不发轴',
@@ -662,7 +665,7 @@ check('起步先力控再延后发一条踏步码',
       !/speak\(ARM_HINT\)/.test(appJs));
 // 切档后屏幕那一颗仍按站没站发明确指令。G20 起立/趴下是两颗键，按哪颗发哪条。
 check('切档后起趴不翻转',
-      /app\.walkMode = null/.test(appJs) &&
+      !/walkMode:/.test(appJs) &&
       /return isStandingUi\(\) \? 'sit_down' : 'stand_up'/.test(appJs) &&
       /var poseCmd = key === 'stand'/.test(read('gamepad.js')) &&
       /var want = key === 'stand'/.test(read('gamepad.js')));
@@ -686,6 +689,27 @@ check('力控调姿态，起步才走',
       /stepping_ && step_sent_/.test(motionCpp) &&
       /torqued_ && !stepping_/.test(motionCpp) &&
       /RL 起立后主机可能一直谎报坐下/.test(radioJava));
+check('停步后仍可控制四轴姿态',
+      /out\.phase == MotionPhase::kStopped/.test(motionCpp) &&
+      /torqued_ && !stepping_/.test(motionCpp) &&
+      /"stopped"\.equals\(motion\) && torqued && !stepping/.test(radioJava) &&
+      /axis_right_y_ = Normalize\(pitch\)/.test(motionCpp) &&
+      /AXIS_RY, bits/.test(radioJava));
+check('当前链路独占 UI 运动状态',
+      /运动状态只能由当前控制链路写/.test(appJs) &&
+      /if \(!radioDirect\(\)\) \{\s*app\.alive/.test(appJs) &&
+      /if \(!radioDirect\(\)\) \{\s*meshGaitSeen/.test(appJs));
+check('链路交接确认后才启动新心跳',
+      /setRadioControlEnabled/.test(radioBridge) &&
+      /finishRadioAcquire/.test(appJs) &&
+      /waitRadioReleased/.test(appJs) &&
+      /if \(!st\.enabled\)/.test(appJs) &&
+      /if \(!enabled\) return/.test(radioJava) &&
+      /radioActivatedThisSession/.test(g20Java));
+check('运动切换命令必须显式 on off',
+      /case "step_on"/.test(radioJava) &&
+      /case "step_off"/.test(radioJava) &&
+      !/case "step":/.test(radioJava));
 // B1/B2 在 MESH 也要亮屏幕按钮；安卓不能让 poll 和 onRcChannels 各派发一次。
 check('B1/B2 一次按键、屏幕跟着亮',
       /motionState/.test(appJs) &&

@@ -152,8 +152,17 @@ public class ControlActivity extends AppCompatActivity {
     private void toggleRadioPath() {
         String next = "radio".equals(GatewayStore.radioPath(this)) ? "mesh" : "radio";
         GatewayStore.saveRadioPath(this, next);
-        G20Rc.get().setBackupRadio("radio".equals(next));
+        switchMotionPath(next);
         pushRadioPathToWeb();
+    }
+
+    private void switchMotionPath(String path) {
+        if (!"radio".equals(path)) {
+            // 回 MESH 先立刻停掉 2.4G 心跳，再由网页申请网关控制权。
+            G20Rc.get().setBackupRadio(false);
+        }
+        // 去 2.4G 不在这里立即启动。网页收到网关 yield 确认后会显式调用
+        // setRadioControlEnabled(true)，从协议上保证两条心跳不重叠。
     }
 
     /** 页面脚本可能比 onPageFinished 晚一拍，多试几次才能切到 2.4G。 */
@@ -242,7 +251,13 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public void setRadioPath(String path) {
             GatewayStore.saveRadioPath(ControlActivity.this, path);
-            G20Rc.get().setBackupRadio(path != null && path.equals("radio"));
+            switchMotionPath(path);
+        }
+
+        @JavascriptInterface
+        public void setRadioControlEnabled(boolean on) {
+            if (on && !"radio".equals(GatewayStore.radioPath(ControlActivity.this))) return;
+            G20Rc.get().setBackupRadio(on);
         }
 
         @JavascriptInterface

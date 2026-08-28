@@ -491,7 +491,10 @@ final class RadioLink {
         }
         String motion = motionState();
         if ("walking".equals(motion)) return "vel";
-        if ("torque".equals(motion)) return "pose";
+        if ("torque".equals(motion) ||
+                ("stopped".equals(motion) && torqued && !stepping)) {
+            return "pose";
+        }
         return "none";
     }
 
@@ -616,13 +619,11 @@ final class RadioLink {
 
     private synchronized void commandOnRadio(String name) {
         lastCmd = name;
+        // 链路只能由已完成的 MESH↔2.4G 交接开启。按钮不得偷偷拉起第二套心跳。
+        if (!enabled) return;
         // 发过起立/趴下这一类，本机记的姿态才算有依据；否则切回 MESH 时不该拿它去
         // 改网关的记忆（那边可能记着别人刚把狗扶起来）。
         if (POSE_CMDS.contains(name)) poseKnown = true;
-        if (!enabled) {
-            enabled = true;
-            start();
-        }
         if (udp == null) openUdp();
         switch (name) {
             case "stand_up":
@@ -662,7 +663,6 @@ final class RadioLink {
                 if (stepping && stepSent) sendSimple(STEP);
                 cancelPendingStep();
                 sendSimple(TORQUE);
-                sendSimple(TORQUE);
                 torqued = true;
                 stepping = false;
                 stopped = false;
@@ -673,10 +673,6 @@ final class RadioLink {
                 break;
             case "step_off":
                 stopStepping();
-                break;
-            case "step":
-                if (stepping || stepPending) stopStepping();
-                else startStepping();
                 break;
             case "estop":
                 cancelPendingStand();

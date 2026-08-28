@@ -83,6 +83,7 @@ public final class G20Rc {
     private boolean connected;
     private boolean polling;
     private boolean backupRadio;
+    private boolean radioActivatedThisSession;
     private String device = "";
     private String error = "";
     private int[] ch = new int[0];
@@ -173,7 +174,16 @@ public final class G20Rc {
     public void setBackupRadio(boolean on) {
         backupRadio = on;
         RadioLink.get().setEnabled(on);
-        enableRf(on);
+        // 用过 2.4G 后切 MESH 只停运动心跳，不拆射频网卡。拆掉再立即重建时
+        // ar_net0/SDK UDP 管道经常回不来，表现为再切回 2.4G 后所有按钮失效。
+        // MESH 期间进程出口由 RadioLink 钉在 WiFi，保留射频网卡不会抢控制权。
+        if (on) {
+            radioActivatedThisSession = true;
+            enableRf(true);
+        } else if (!radioActivatedThisSession) {
+            // App 以 MESH 启动时要清理上个进程可能遗留的射频状态。
+            enableRf(false);
+        }
         if (on && connected) RadioLink.get().onRcReady();
     }
 

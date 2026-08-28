@@ -772,23 +772,8 @@ void MotionClient::EnterTorqueStand() {
     return;
   }
   bool leave_step = false;
-  bool need_stand = false;
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    const bool ros_upright =
-        ros_basic_at_ != Clock::time_point{} &&
-        Clock::now() - ros_basic_at_ < std::chrono::milliseconds(kRosStateFreshMs) &&
-        (state_.ros_basic_state == 2 || state_.ros_basic_state == 3 ||
-         state_.ros_basic_state == 4 || state_.ros_basic_state == 16);
-    need_stand = state_.telemetry_alive &&
-                 state_.basic_state == BasicState::kSitting &&
-                 last_stand_sit_ != LastStandSit::kStood &&
-                 !ros_upright;
-    if (need_stand) {
-      last_stand_sit_ = LastStandSit::kStood;
-      last_stand_cmd_at_ = Clock::now();
-      state_.rl_standing = true;
-    }
     leave_step = stepping_ && step_sent_;
     step_at_ = {};
     step_sent_ = false;
@@ -797,22 +782,15 @@ void MotionClient::EnterTorqueStand() {
     motion_phase_ = MotionPhase::kTorque;
     axes_unlocked_ = true;
     sit_at_ = {};
-    torque_retries_ = need_stand ? 8 : 4;
+    torque_retries_ = 4;
     torque_retry_at_ = Clock::now() + std::chrono::milliseconds(400);
-  }
-  // 趴着发力控主机会丢掉。先起立，再靠补发进力控站立（3），否则左杆是走路、
-  // 俯仰轴没定义。
-  if (need_stand) {
-    SendSimple(cmd::kStandSitToggle);
   }
   // 还在踏步里俯仰轴无定义，速度轴也还在。先停步，再力控，轴停发一小会，
   // 免得 50 Hz 的「身高」在过渡里被主机读成前进。
   if (leave_step) SendSimple(cmd::kSteppingToggle);
   ReleaseAxes();
   SendSimple(cmd::kTorqueStand);
-  SendSimple(cmd::kTorqueStand);
-  std::printf("[运动] 力控站立 0x2101020A%s%s\n",
-              need_stand ? "（先起立）" : "",
+  std::printf("[运动] 力控站立 0x2101020A%s\n",
               leave_step ? "（先停步）" : "");
 }
 
@@ -988,21 +966,28 @@ MotionView MotionClient::View() const {
       (use_ros_motion || use_official_motion)
           ? effective == 3
           : state_.basic_state == BasicState::kTorqueStanding;
-  if (motion_phase_ == MotionPhase::kStopping && reported_walking) {
-    out.phase = MotionPhase::kStopping;
-    out.motion = "stopping";
-  } else if (reported_walking || motion_phase_ == MotionPhase::kWalking) {
+  // 本控制层刚发出的明确模式优先于滞后的主机回报。否则从 2.4G 切来时，
+  // 主机还报“行走”，用户点力控/停步后 UI 仍显示行走，下一次点击又被解释成停步。
+  if (motion_phase_ == MotionPhase::kStopping) {
+    out.phase = reported_torque ? MotionPhase::kStopped
+                                : MotionPhase::kStopping;
+    out.motion = reported_torque ? "stopped" : "stopping";
+  } else if (motion_phase_ == MotionPhase::kWalking) {
     out.phase = MotionPhase::kWalking;
     out.motion = "walking";
   } else if (motion_phase_ == MotionPhase::kStarting) {
     out.phase = MotionPhase::kStarting;
     out.motion = "starting";
-  } else if (reported_torque &&
-             (motion_phase_ == MotionPhase::kStopped ||
-              motion_phase_ == MotionPhase::kStopping)) {
+  } else if (motion_phase_ == MotionPhase::kTorque) {
+    out.phase = MotionPhase::kTorque;
+    out.motion = "torque";
+  } else if (motion_phase_ == MotionPhase::kStopped) {
     out.phase = MotionPhase::kStopped;
     out.motion = "stopped";
-  } else if (reported_torque || motion_phase_ == MotionPhase::kTorque) {
+  } else if (reported_walking) {
+    out.phase = MotionPhase::kWalking;
+    out.motion = "walking";
+  } else if (reported_torque) {
     out.phase = MotionPhase::kTorque;
     out.motion = "torque";
   } else {
@@ -1012,7 +997,10 @@ MotionView MotionClient::View() const {
 
   if (udp && out.phase == MotionPhase::kWalking) {
     out.axis_mode = "vel";
-  } else if (udp && out.phase == MotionPhase::kTorque) {
+  } else if (udp && torqued_ && !stepping_ &&
+             (out.phase == MotionPhase::kTorque ||
+              out.phase == MotionPhase::kStopped)) {
+    // 停步后的主机仍处于力控站立，四个姿态轴应继续有效。
     out.axis_mode = "pose";
   }
   return out;

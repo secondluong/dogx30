@@ -99,13 +99,14 @@ const app = {
   gait: 'walk',
   gaitPending: false,
   lioAligning: false,
-  walkMode: null,         // 兼容旧模块；显示与摇杆不再以它为状态来源
   height: '',             // 人点的身高：'normal' | 'crawl'
   poseCmdOurs: false,     // 这轮会话我们发过起/趴。没发过就不能信网关那份旧记忆
   poseHandoff: null,      // 待交接给网关的姿态（切档时记下，网关认了才算完）
   poseHintWarned: false,  // 旧网关的提示只说一次，别在遥控时反复弹
   gwVersion: '',          // hello.version，设置里能对上板子装的是哪一版
   gwPoseAdopt: false,     // hello.pose_adopt：这份网关认不认 claim.standing
+  radioAcquirePending: false, // 等网关确认 yield 后再启动 2.4G 心跳
+  meshAcquirePending: false,  // 等 2.4G 心跳停稳后再申请网关控制权
   modePick: null,         // G20 三挡或点按：manual | assist | auto
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
@@ -279,8 +280,10 @@ function connect() {
         paintVerChip();
         renderControl();
         if (window.X30Settings) window.X30Settings.onHello(msg);
-        if (isAppShell && app.radioPath === 'mesh') requestControl();
+        if (isAppShell && app.radioPath === 'mesh' &&
+            !app.meshAcquirePending) requestControl();
         else if (isAppShell && app.radioPath === 'radio' && app.hasControl) {
+          app.radioAcquirePending = true;
           send({ t: 'yield' });
         }
         break;
@@ -294,8 +297,9 @@ function connect() {
         app.holder = msg.holder || 0;
         app.hasControl = app.holder === app.clientId;
         renderControl();
+        if (isAppShell && app.radioPath === 'radio') finishRadioAcquire();
         if (isAppShell && app.radioPath === 'mesh' &&
-            !app.hasControl && !app.holder) {
+            !app.meshAcquirePending && !app.hasControl && !app.holder) {
           setTimeout(requestControl, 100);
         }
         if (msg.granted === false) {
@@ -485,9 +489,6 @@ function syncRadioStanding(st0) {
   let changed = normalizedChanged;
   if (basic >= 0 && basic !== app.basicState) {
     app.basicState = basic;
-    if (basic === STATE_EMERGENCY || basic === STATE_STAND_TO_SIT) {
-      app.walkMode = null;
-    }
     // 坐下 / 初始站立：RL 起立后常停在这里。本端刚点的力控/起步不要灭，
     // 灭了按钮暗掉，人再按一次起步就等于停步，摇杆也跟着没了。
     changed = true;
@@ -569,7 +570,7 @@ function applyRadioPose(name) {
                  'stair', 'stairmulti', 'stair45', 'lstair'];
   if (gaits.indexOf(name) >= 0) {
     markGait(name);
-    if (app.walkMode !== 'step') {
+    if (app.motionState !== 'walking' && app.motionState !== 'starting') {
       showBanner('已记下，起步后切换');
       speak('已记下，起步后切换');
     }
@@ -691,6 +692,36 @@ function notifyNativeRadio() {
   } catch (e) { /* 网页没有原生桥 */ }
 }
 
+function setNativeRadioControl(on) {
+  try {
+    if (window.X30Native && window.X30Native.setRadioControlEnabled) {
+      window.X30Native.setRadioControlEnabled(!!on);
+    }
+  } catch (e) { /* 网页没有原生桥 */ }
+}
+
+function finishRadioAcquire() {
+  if (!app.radioAcquirePending || app.radioPath !== 'radio') return;
+  if (app.hasControl || app.holder) return;
+  app.radioAcquirePending = false;
+  setNativeRadioControl(true);
+}
+
+function waitRadioReleased(deadline) {
+  if (!app.meshAcquirePending || app.radioPath !== 'mesh') return;
+  const st = nativeRadioStatus() || {};
+  if (!st.enabled) {
+    app.meshAcquirePending = false;
+    if (linkOpen()) requestControl();
+    return;
+  }
+  if (Date.now() < deadline) {
+    setTimeout(() => waitRadioReleased(deadline), 40);
+    return;
+  }
+  showBanner('2.4G 控制链路未能释放，已停止切换以避免双链路抢控制', 8000);
+}
+
 function syncNativeRadioPath() {
   const native = nativeRadioPath();
   if (!native || native === app.radioPath) return;
@@ -703,10 +734,17 @@ function applyRadioPath(announce) {
   document.documentElement.classList.toggle('radio-24', radioDirect());
   // 初次绘制不要把原生已选的 2.4G 写回 MESH。只在用户或原生真切了档时通知。
   if (app.radioPath === 'radio') {
+    app.meshAcquirePending = false;
     if (hasNativeRadio()) {
       if (app.hasControl) {
-        app.hasControl = false;
+        app.radioAcquirePending = true;
         send({ t: 'yield' });
+      } else if (app.holder) {
+        app.radioAcquirePending = true;
+        showBanner('MESH 仍由其他控制端占用，2.4G 暂不接管', 8000);
+      } else {
+        app.radioAcquirePending = false;
+        setNativeRadioControl(true);
       }
       if (announce) {
         showBanner('已切到 2.4G。指令走 G20 数传，不经网关');
@@ -729,8 +767,11 @@ function applyRadioPath(announce) {
     return;
   }
   // 切回 MESH 要把 2.4G 档留下的空文本换成网关那侧的说法，setLink 负责。
+  app.radioAcquirePending = false;
+  setNativeRadioControl(false);
+  app.meshAcquirePending = true;
   setLink(linkOpen());
-  if (linkOpen()) requestControl();
+  waitRadioReleased(Date.now() + 1500);
   if (announce) {
     showBanner(linkOpen()
       ? '已切到 MESH，网关接管'
@@ -752,7 +793,6 @@ function adoptRadioPath(path, announce) {
   if (changed) {
     // 力控/起步是切换指令。带着上一条链路的记忆切过去会发反：
     // 力控变成踏步、起步变成停步。切档后两边都重新点。
-    app.walkMode = null;
     app.stateValid = false;
     app.axisMode = 'none';
     app.motionState = 'unavailable';
@@ -939,12 +979,17 @@ function renderControl() {
 const fmt = (v, n = 2) => (typeof v === 'number' ? v.toFixed(n) : '—');
 
 function renderState(s) {
-  app.alive = !!s.alive;
-  app.stateSource = s.state_source || 'mesh';
-  app.stateValid = !!s.state_valid;
-  app.posture = s.posture || 'unknown';
-  app.motionState = s.motion || 'unavailable';
-  app.axisMode = s.axis_mode || 'none';
+  // 网关 state 始终用于仪表数据；运动状态只能由当前控制链路写。
+  // 2.4G 下若再让 10Hz 网关 state 覆盖 20Hz RadioLink statusJson，
+  // 力控/起步按钮就会在两份状态之间来回闪烁。
+  if (!radioDirect()) {
+    app.alive = !!s.alive;
+    app.stateSource = s.state_source || 'mesh';
+    app.stateValid = !!s.state_valid;
+    app.posture = s.posture || 'unknown';
+    app.motionState = s.motion || 'unavailable';
+    app.axisMode = s.axis_mode || 'none';
+  }
   setLink(linkOpen());
   if (linkOpen() && !s.alive && !app.warnedRobotDown && !radioDirect()) {
     app.warnedRobotDown = true;
@@ -975,9 +1020,6 @@ function renderState(s) {
     app.emergencyLocked = app.posture === 'locked' ||
                           jointsLocked(s.basic_state, s.emergency_source);
     if (app.emergencyLocked) app.rlStanding = false;
-  } else if (s.alive && jointsLocked(s.basic_state, s.emergency_source)) {
-    app.emergencyLocked = true;
-    app.rlStanding = false;
   }
   app.controlMode = typeof s.mode === 'number' ? s.mode : 0;
 
@@ -1053,8 +1095,8 @@ function renderState(s) {
     $('banner').classList.add('hidden');
   }
 
-  meshGaitSeen = adoptGaitTelem(s.gait_key, meshGaitSeen);
   if (!radioDirect()) {
+    meshGaitSeen = adoptGaitTelem(s.gait_key, meshGaitSeen);
     meshHeightSeen = adoptHeightTelem(s.height_gear, meshHeightSeen);
   }
 
@@ -1065,12 +1107,7 @@ function renderState(s) {
   wrap.classList.toggle('dog-up', standing);
   wrap.classList.toggle('dog-prone', !standing);
   paintStandButton();
-  if (!radioDirect()) {
-    // walkMode 只跟人点的走。遥测常报坐下，每帧清掉的话按钮又变回起步，
-    // 再按一次等于又发起步，主机那条切换码就把刚踏起来的狗停掉。
-    if (s.basic_state !== meshWalkSeen) meshWalkSeen = s.basic_state;
-    if (!standing && !app.walkMode) app.walkMode = null;
-  }
+  if (!radioDirect() && s.basic_state !== meshWalkSeen) meshWalkSeen = s.basic_state;
   paintWalkButtons();
   if (!standing) closeAccordions();
 
@@ -1440,12 +1477,13 @@ function fireRadioFromEl(el) {
     const moving = app.motionState === 'walking' || app.motionState === 'starting';
     name = moving ? 'step_off' : 'step_on';
   }
-  if (!nativeRadioCmd(name)) return '';
   const st = nativeRadioStatus() || {};
-  if (!st.ready) {
-    showBanner('2.4G 已点「' + name + '」，链路还没通（' + (st.status || 'off') + '）', 5000);
-    speak('2.4G 还没通');
+  if (app.radioAcquirePending || !st.enabled || !st.ready) {
+    showBanner('2.4G 尚未完成控制权交接，请稍候', 4000);
+    speak('2.4G 尚未接管');
+    return 'blocked';
   }
+  if (!nativeRadioCmd(name)) return '';
   if (name !== 'step_on' && name !== 'step_off') applyRadioPose(name);
   markPending(el);
   return name;
@@ -1811,7 +1849,8 @@ document.addEventListener('visibilitychange', () => {
   }
   // 切去原厂 App 时心跳会被节流，3 秒租约一过权就没了。
   // 手持壳回到前台自动再要一次，否则横幅只剩「请先发送 claim」。
-  if (!document.hidden && isAppShell && app.radioPath === 'mesh') requestControl();
+  if (!document.hidden && isAppShell && app.radioPath === 'mesh' &&
+      !app.meshAcquirePending) requestControl();
   // 点云订阅不要跟着显隐走：切标签、缩窗口、平板分屏都会把
   // document.hidden 置上，退订后再回来要重新点，操作员会以为订不住。
 });

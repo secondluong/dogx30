@@ -313,6 +313,12 @@ def arm_steps_scenario(host, port):
 
     a.send({"t": "cmd", "name": "step", "value": "off"})
     time.sleep(0.6)
+    stopped = a.wait_for(
+        "state", timeout=3,
+        predicate=lambda m: m.get("motion") == "stopped")
+    check("停步后回到姿态控制",
+          stopped.get("axis_mode") == "pose",
+          stopped.get("axis_mode"))
     deadline = time.time() + 3
     vx = 1.0
     while time.time() < deadline:
