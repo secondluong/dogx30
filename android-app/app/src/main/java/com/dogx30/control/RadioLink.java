@@ -164,6 +164,11 @@ final class RadioLink {
     private boolean telemHeightSeen;
     private long telemAt;
     private long lastStandAt;
+    private long modeCmdAt;
+    private int lastAxisLy;
+    private int lastAxisLx;
+    private int lastAxisRx;
+    private int lastAxisRy;
     private float scrFwd;
     private float scrLat;
     private float scrTurn;
@@ -378,6 +383,10 @@ final class RadioLink {
             o.put("bodyOnDock", bodyFresh() ? bodyOnDock : -1);
             o.put("bodyErr", bodyErr);
             o.put("axes", axesApply());
+            o.put("axisLy", lastAxisLy);
+            o.put("axisLx", lastAxisLx);
+            o.put("axisRx", lastAxisRx);
+            o.put("axisRy", lastAxisRy);
             o.put("poseKnown", poseIsKnown());
             return o.toString();
         } catch (Exception e) {
@@ -506,6 +515,18 @@ final class RadioLink {
 
     private synchronized void firePendingStep() {
         if (!enabled || !stepPending) return;
+        if (bodyFresh() && bodyMotion != 3) {
+            if (System.currentTimeMillis() - modeCmdAt < 2500) {
+                onRadioDelayed(stepTask, 100);
+                return;
+            }
+            stepPending = false;
+            stepping = false;
+            torqued = false;
+            stopped = true;
+            bodyErr = "起步取消：本体未确认力控状态3";
+            return;
+        }
         stepPending = false;
         stepSent = true;
         sendSimple(STEP);
@@ -524,6 +545,7 @@ final class RadioLink {
         torqued = true;
         stepping = true;
         stopped = false;
+        modeCmdAt = System.currentTimeMillis();
         standing = true;
         stepSent = false;
         stepPending = true;
@@ -539,6 +561,7 @@ final class RadioLink {
         stepping = false;
         torqued = true;
         stopped = true;
+        modeCmdAt = System.currentTimeMillis();
         standing = true;
         lastStandAt = System.currentTimeMillis();
         sendAxes(new float[]{0f, 0f, 0f, 0f});
@@ -666,6 +689,7 @@ final class RadioLink {
                 torqued = true;
                 stepping = false;
                 stopped = false;
+                modeCmdAt = System.currentTimeMillis();
                 lastStandAt = System.currentTimeMillis();
                 break;
             case "step_on":
@@ -949,6 +973,25 @@ final class RadioLink {
             emergency = true;
             standing = false;
             clearWalk();
+        } else if (System.currentTimeMillis() - modeCmdAt >= 800 && !stepPending) {
+            // 保护期后让本体真实状态纠正本地记忆，避免切步态后“力控/起步反了”。
+            if (motion == 4) {
+                standing = true;
+                torqued = true;
+                stepping = true;
+                stepSent = true;
+                stopped = false;
+            } else if (motion == 3) {
+                standing = true;
+                torqued = true;
+                stepping = false;
+                stepSent = false;
+                stopped = true;
+            }
+        }
+        if (gaitApplying && gait == gaitExpected) {
+            gaitApplying = false;
+            gaitExpected = -1;
         }
     }
 
@@ -1580,10 +1623,14 @@ final class RadioLink {
     }
 
     private void sendAxes(float[] a) {
-        sendSimple(AXIS_LY, bits(a[0]));
-        sendSimple(AXIS_LX, bits(a[1]));
-        sendSimple(AXIS_RX, bits(a[2]));
-        if (!stepping) sendSimple(AXIS_RY, bits(a.length > 3 ? a[3] : 0f));
+        lastAxisLy = bits(a[0]);
+        lastAxisLx = bits(a[1]);
+        lastAxisRx = bits(a[2]);
+        lastAxisRy = !stepping ? bits(a.length > 3 ? a[3] : 0f) : 0;
+        sendSimple(AXIS_LY, lastAxisLy);
+        sendSimple(AXIS_LX, lastAxisLx);
+        sendSimple(AXIS_RX, lastAxisRx);
+        if (!stepping) sendSimple(AXIS_RY, lastAxisRy);
     }
 
     private static float axis(int[] ch, int index, boolean invert) {

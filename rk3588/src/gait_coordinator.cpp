@@ -202,7 +202,23 @@ GaitCoordinator::Result GaitCoordinator::Execute(Gait target,
     // 非楼梯：踏步里立刻发。遥测常年报 0 / 收不到，不能拿它当「已经是这档」
     // 或「还没踏步」——静音、低姿就是这样点了像没反应。
     motion_.SetGait(target);
-    return {true, "", std::string("已切换到") + ToString(target)};
+    if (snapshot.body_monitor_alive) {
+      if (!WaitGaitConfirmed(target)) {
+        return {false, "gait_not_confirmed",
+                std::string("已发送") + ToString(target) +
+                    "，但狗主机没有确认该步态"};
+      }
+      const RobotState after = motion_.Snapshot();
+      if (after.body_monitor_alive && after.body_motion_state != 4) {
+        return {false, "motion_changed",
+                std::string("步态指令后狗已退出行走，当前本体状态=") +
+                    std::to_string(after.body_motion_state)};
+      }
+      return {true, "", std::string("已确认切换到") + ToString(target)};
+    }
+    return {true, "sent_unconfirmed",
+            std::string("已发送") + ToString(target) +
+                "，当前无 Type=1002 反馈，结果未确认"};
   }
 
   if (already) {

@@ -159,14 +159,30 @@ void MotionClient::TxLoop() {
     }
 
     bool fire_step = false;
+    bool step_feedback_timeout = false;
     bool fire_sit = false;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (step_at_ != Clock::time_point{} && Clock::now() >= step_at_) {
-        step_at_ = {};
-        step_sent_ = true;
-        motion_phase_ = MotionPhase::kWalking;
-        fire_step = true;
+        const bool torque_confirmed =
+            state_.body_motion_state == 3 || state_.ros_basic_state == 3 ||
+            state_.basic_state == BasicState::kTorqueStanding;
+        if (state_.body_monitor_alive && !torque_confirmed) {
+          if (Clock::now() - motion_command_at_ < std::chrono::milliseconds(2500)) {
+            step_at_ = Clock::now() + std::chrono::milliseconds(100);
+          } else {
+            step_at_ = {};
+            stepping_ = false;
+            torqued_ = false;
+            motion_phase_ = MotionPhase::kStopped;
+            step_feedback_timeout = true;
+          }
+        } else {
+          step_at_ = {};
+          step_sent_ = true;
+          motion_phase_ = MotionPhase::kWalking;
+          fire_step = true;
+        }
       }
       if (sit_at_ != Clock::time_point{} && Clock::now() >= sit_at_) {
         sit_at_ = {};
@@ -176,6 +192,9 @@ void MotionClient::TxLoop() {
     if (fire_step) {
       SendSimple(cmd::kSteppingToggle);
       std::printf("[运动] 踏步切换 → 起步 0x21010201（力控之后）\n");
+    }
+    if (step_feedback_timeout) {
+      std::printf("[运动] 起步取消：本体监控未确认进入力控状态 3\n");
     }
     if (fire_sit) {
       SendSimple(cmd::kStandSitToggle);
@@ -344,6 +363,31 @@ void MotionClient::ApplyMileage(int32_t cm, bool from_udp) {
   state_.current_mileage_cm = cm;
 }
 
+void MotionClient::ReconcileReportedMotionLocked(int motion_state) {
+  if (motion_state != 3 && motion_state != 4) return;
+  const auto now = Clock::now();
+  if (motion_command_at_ != Clock::time_point{} &&
+      now - motion_command_at_ < std::chrono::milliseconds(800)) {
+    return;
+  }
+  if (motion_state == 4) {
+    if (motion_phase_ == MotionPhase::kStopping) return;
+    torqued_ = true;
+    stepping_ = true;
+    step_sent_ = true;
+    step_at_ = {};
+    motion_phase_ = MotionPhase::kWalking;
+    return;
+  }
+  // 本体明确回到力控站立，纠正步态切换后仍残留的本地 walking 记忆。
+  if (motion_phase_ == MotionPhase::kStarting) return;
+  torqued_ = true;
+  stepping_ = false;
+  step_sent_ = false;
+  step_at_ = {};
+  motion_phase_ = MotionPhase::kStopped;
+}
+
 void MotionClient::ApplyBodyMonitor(bool alive, int motion_state,
                                     int gait_state, int motor_state,
                                     int charge_state, int control_mode,
@@ -365,19 +409,12 @@ void MotionClient::ApplyBodyMonitor(bool alive, int motion_state,
     step_sent_ = false;
     step_at_ = {};
     motion_phase_ = MotionPhase::kUnavailable;
-  } else if (!state_.telemetry_alive && motion_state == 4 && stepping_) {
-    step_sent_ = true;
-    motion_phase_ = MotionPhase::kWalking;
-  } else if (!state_.telemetry_alive && motion_state == 3 &&
-             torqued_ && !stepping_) {
-    if (motion_phase_ == MotionPhase::kStopping) {
-      motion_phase_ = MotionPhase::kStopped;
-    } else if (motion_phase_ != MotionPhase::kStopped) {
-      motion_phase_ = MotionPhase::kTorque;
-    }
-  } else if (!state_.telemetry_alive && motion_state == 2 &&
+  } else if (motion_state == 2 &&
              motion_phase_ == MotionPhase::kStopping) {
     motion_phase_ = MotionPhase::kStopped;
+  } else {
+    // Type=1002 是官方本体状态；不能因为有一条会谎报 0 的 UDP 就忽略它。
+    ReconcileReportedMotionLocked(motion_state);
   }
 }
 
@@ -387,6 +424,7 @@ void MotionClient::ApplyRosBasicState(int32_t state) {
   state_.ros_basic_state = state;
   state_.ros_motion_alive = true;
   ros_basic_at_ = Clock::now();
+  ReconcileReportedMotionLocked(state);
 }
 
 void MotionClient::ApplyRosGaitState(int32_t gait) {
@@ -428,6 +466,7 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
       if (!Extract(data, len, &d)) return;
       state_.basic_state = static_cast<BasicState>(d.basic_state);
       state_.gait = static_cast<Gait>(d.gait_state);
+      ReconcileReportedMotionLocked(d.basic_state);
       {
         const float ox = d.leg_odom_pos[0];
         const float oy = d.leg_odom_pos[1];
@@ -780,6 +819,7 @@ void MotionClient::EnterTorqueStand() {
     stepping_ = false;
     torqued_ = true;
     motion_phase_ = MotionPhase::kTorque;
+    motion_command_at_ = Clock::now();
     axes_unlocked_ = true;
     sit_at_ = {};
     torque_retries_ = 4;
@@ -812,6 +852,7 @@ void MotionClient::StartStepping() {
     axes_unlocked_ = true;
     step_sent_ = false;
     motion_phase_ = MotionPhase::kStarting;
+    motion_command_at_ = Clock::now();
     step_at_ = Clock::now() + std::chrono::milliseconds(500);
   }
   SendSimple(cmd::kTorqueStand);
@@ -830,6 +871,7 @@ void MotionClient::StopStepping() {
     stepping_ = false;
     torqued_ = true;
     motion_phase_ = send_step ? MotionPhase::kStopping : MotionPhase::kStopped;
+    motion_command_at_ = Clock::now();
     axes_unlocked_ = true;
     step_at_ = {};
     step_sent_ = false;
@@ -852,7 +894,6 @@ void MotionClient::SetGait(Gait gait) {
   const uint32_t code = GaitCommandCode(gait);
   if (code == 0) return;
   std::printf("[运动] 步态 → %s 0x%08x\n", ToString(gait), code);
-  SendSimple(code);
   SendSimple(code);
 }
 
@@ -1151,6 +1192,19 @@ void MotionClient::SetCommanding(bool on) {
     step_at_ = {};
     std::printf("[运动] 本端松开：停止向运动主机发心跳，原厂手柄可单独接管\n");
   }
+}
+
+AxisView MotionClient::Axes() const {
+  std::lock_guard<std::mutex> lock(axis_mutex_);
+  AxisView out;
+  if (Clock::now() <= axis_deadline_) {
+    out.left_y = axis_left_y_;
+    out.left_x = axis_left_x_;
+    out.right_x = axis_right_x_;
+    out.right_y = axis_right_y_;
+    out.active = true;
+  }
+  return out;
 }
 
 RobotState MotionClient::Snapshot() const {

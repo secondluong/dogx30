@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.3.1";
+constexpr const char* kVersion = "0.3.2";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。
@@ -1165,6 +1165,7 @@ bool RobotService::WalkHold() const {
 std::string RobotService::BuildStateJson() const {
   const RobotState s = client_.Snapshot();
   const MotionView view = client_.View();
+  const AxisView axes = client_.Axes();
   const GaitLimits limits = LimitsOf(s.gait);
 
   bool lio_ready = false, lio_got = false, lio_fresh = false;
@@ -1220,6 +1221,11 @@ std::string RobotService::BuildStateJson() const {
       .Key("posture", view.posture)
       .Key("motion", view.motion)
       .Key("axis_mode", view.axis_mode)
+      .Key("axis_active", axes.active)
+      .Key("axis_left_y", axes.left_y)
+      .Key("axis_left_x", axes.left_x)
+      .Key("axis_right_x", axes.right_x)
+      .Key("axis_right_y", axes.right_y)
       .Key("basic_state", static_cast<int>(s.basic_state))
       .Key("basic_state_text", state_text)
       .Key("rl_standing", s.rl_standing)

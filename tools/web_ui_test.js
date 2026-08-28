@@ -694,7 +694,18 @@ check('停步后仍可控制四轴姿态',
       /torqued_ && !stepping_/.test(motionCpp) &&
       /"stopped"\.equals\(motion\) && torqued && !stepping/.test(radioJava) &&
       /axis_right_y_ = Normalize\(pitch\)/.test(motionCpp) &&
-      /AXIS_RY, bits/.test(radioJava));
+      /AXIS_RY, lastAxisRy/.test(radioJava));
+check('有本体反馈时起步必须先确认力控状态3',
+      /body_monitor_alive && !torque_confirmed/.test(motionCpp) &&
+      /起步取消：本体监控未确认进入力控状态 3/.test(motionCpp) &&
+      /bodyFresh\(\) && bodyMotion != 3/.test(radioJava) &&
+      /起步取消：本体未确认力控状态3/.test(radioJava));
+check('官方本体状态会纠正两侧的本地模式记忆',
+      /ReconcileReportedMotionLocked\(motion_state\)/.test(motionCpp) &&
+      /本体真实状态纠正本地记忆/.test(radioJava));
+check('两侧都暴露四轴实际发送值供诊断',
+      /"axis_right_y"/.test(serviceCpp) &&
+      /"axisRy"/.test(radioJava));
 check('当前链路独占 UI 运动状态',
       /运动状态只能由当前控制链路写/.test(appJs) &&
       /if \(!radioDirect\(\)\) \{\s*app\.alive/.test(appJs) &&

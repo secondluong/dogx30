@@ -124,6 +124,14 @@ struct MotionView {
   bool state_valid = false;
 };
 
+struct AxisView {
+  int32_t left_y = 0;
+  int32_t left_x = 0;
+  int32_t right_x = 0;
+  int32_t right_y = 0;
+  bool active = false;
+};
+
 // 把 error_state 位域翻译成人可读的告警列表，无告警时返回空串。
 std::string DescribeErrors(uint32_t error_state);
 
@@ -170,6 +178,7 @@ class MotionClient {
   void StopUnwantedMarch();
   bool UserStepping() const;
   MotionView View() const;
+  AxisView Axes() const;
   void SetBodyHeight(HeightGear gear);
   void QueueBodyHeight(HeightGear gear);
   void ExpectGaitBeforeHeight(Gait gait);
@@ -221,6 +230,7 @@ class MotionClient {
   void SendSimple(uint32_t code, uint32_t value = 0);
   void SendAxis(uint32_t code, int32_t value);
   void HandleDatagram(const uint8_t* data, int len);
+  void ReconcileReportedMotionLocked(int motion_state);
 
   static int32_t Normalize(float v);
 
@@ -280,6 +290,8 @@ class MotionClient {
   Gait height_after_gait_{Gait::kWalk};
   bool step_sent_{false};
   MotionPhase motion_phase_{MotionPhase::kUnavailable};
+  // 模式指令后的短暂保护期内不让旧反馈反向覆盖；保护期后由真实状态纠偏。
+  std::chrono::steady_clock::time_point motion_command_at_{};
   // 力控刚发就跟一条踏步，主机还在过渡里会丢掉。TxLoop 到点再发。
   std::chrono::steady_clock::time_point step_at_{};
   // 踏步里趴下会被主机丢掉。先停步，到点再发 RL 趴下。
