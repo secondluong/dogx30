@@ -165,6 +165,7 @@ final class RadioLink {
     private long telemAt;
     private long lastStandAt;
     private long modeCmdAt;
+    private long poseAxesAt;
     private int lastAxisLy;
     private int lastAxisLx;
     private int lastAxisRx;
@@ -562,6 +563,7 @@ final class RadioLink {
         torqued = true;
         stopped = true;
         modeCmdAt = System.currentTimeMillis();
+        poseAxesAt = modeCmdAt + 800;
         standing = true;
         lastStandAt = System.currentTimeMillis();
         sendAxes(new float[]{0f, 0f, 0f, 0f});
@@ -577,6 +579,9 @@ final class RadioLink {
      */
     private boolean axesApply() {
         if (telemLocked()) return false;
+        boolean poseReady = (telemFresh() && telemState == ST_TORQUE_STANDING)
+                || (bodyFresh() && bodyMotion == 3)
+                || (poseAxesAt != 0 && System.currentTimeMillis() >= poseAxesAt);
         if (lastStandAt != 0
                 && System.currentTimeMillis() - lastStandAt < AXIS_AFTER_STAND_MS) {
             return false;
@@ -589,7 +594,7 @@ final class RadioLink {
             // RL 起立后主机可能一直谎报坐下。模式以本控制层已经实际发出的
             // 力控/起步指令为准；遥测只做失联、急停与起趴过渡安全门。
             if (stepping && stepSent) return isStanding();
-            if (torqued && !stepping) return isStanding();
+            if (torqued && !stepping) return poseReady && isStanding();
             return false;
         }
         // 2.4G 接收机地址通常没登记在运动主机 network.toml，收不到 UDP 遥测。
@@ -597,7 +602,7 @@ final class RadioLink {
         // 指令时才放轴，绝不能因为没遥测让整条 2.4G 永久失效。
         if (!poseKnown || !standing) return false;
         if (stepping && stepSent) return true;
-        return torqued && !stepping;
+        return torqued && !stepping && poseReady;
     }
 
     /**
@@ -690,6 +695,7 @@ final class RadioLink {
                 stepping = false;
                 stopped = false;
                 modeCmdAt = System.currentTimeMillis();
+                poseAxesAt = modeCmdAt + 1200;
                 lastStandAt = System.currentTimeMillis();
                 break;
             case "step_on":

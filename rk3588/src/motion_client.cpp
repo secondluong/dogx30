@@ -152,7 +152,12 @@ void MotionClient::TxLoop() {
       if (stepping_ && step_sent_) {
         send_axes = safe_state;
       } else if (torqued_ && !stepping_) {
-        send_axes = safe_state;
+        const bool torque_confirmed =
+            state_.basic_state == BasicState::kTorqueStanding ||
+            state_.ros_basic_state == 3 || state_.body_motion_state == 3;
+        const bool fallback_ready =
+            pose_axes_at_ != Clock::time_point{} && Clock::now() >= pose_axes_at_;
+        send_axes = safe_state && (torque_confirmed || fallback_ready);
       } else {
         send_axes = false;
       }
@@ -199,31 +204,6 @@ void MotionClient::TxLoop() {
     if (fire_sit) {
       SendSimple(cmd::kStandSitToggle);
       std::printf("[运动] 停步之后官方起趴切换 0x21010202\n");
-    }
-
-    bool fire_torque = false;
-    {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      if (torqued_ && !stepping_ && torque_retries_ > 0 &&
-          torque_retry_at_ != Clock::time_point{} &&
-          Clock::now() >= torque_retry_at_) {
-        const bool need = !state_.telemetry_alive ||
-                          state_.basic_state == BasicState::kInitialStanding ||
-                          (state_.basic_state == BasicState::kSitting &&
-                           state_.rl_standing);
-        if (need) {
-          fire_torque = true;
-          torque_retries_--;
-          torque_retry_at_ = Clock::now() + std::chrono::milliseconds(400);
-        } else {
-          torque_retries_ = 0;
-          torque_retry_at_ = {};
-        }
-      }
-    }
-    if (fire_torque) {
-      SendSimple(cmd::kTorqueStand);
-      std::printf("[运动] 力控补发 0x2101020A\n");
     }
 
     // 用户可以在力控/停步时先选配置，但只有狗主机确认进入踏步态后才执行。
@@ -448,6 +428,8 @@ void MotionClient::HandleDatagram(const uint8_t* data, int len) {
     case telem::kRunningStatus: {
       RcsData d{};
       if (!Extract(data, len, &d)) return;
+      std::copy(std::begin(d.joystick), std::end(d.joystick),
+                std::begin(state_.joystick));
       if (d.current_mileage > 0) {
         mileage_from_udp_ = true;
         state_.current_mileage_cm = d.current_mileage;
@@ -684,8 +666,7 @@ void MotionClient::StandUp() {
     step_sent_ = false;
     step_at_ = {};
     sit_at_ = {};
-    torque_retries_ = 0;
-    torque_retry_at_ = {};
+    pose_axes_at_ = {};
   }
   std::printf("[运动] 官方起立切换 0x21010202（遥测=%s）\n",
               ToString(Snapshot().basic_state));
@@ -748,8 +729,7 @@ void MotionClient::SitDown() {
     } else {
       sit_at_ = {};
     }
-    torque_retries_ = 0;
-    torque_retry_at_ = {};
+    pose_axes_at_ = {};
   }
   if (leave_step) {
     std::printf("[运动] 停步后再发 RL 趴下 0x21010222（遥测=%s）\n",
@@ -822,8 +802,7 @@ void MotionClient::EnterTorqueStand() {
     motion_command_at_ = Clock::now();
     axes_unlocked_ = true;
     sit_at_ = {};
-    torque_retries_ = 4;
-    torque_retry_at_ = Clock::now() + std::chrono::milliseconds(400);
+    pose_axes_at_ = Clock::now() + std::chrono::milliseconds(1200);
   }
   // 还在踏步里俯仰轴无定义，速度轴也还在。先停步，再力控，轴停发一小会，
   // 免得 50 Hz 的「身高」在过渡里被主机读成前进。
@@ -875,6 +854,7 @@ void MotionClient::StopStepping() {
     axes_unlocked_ = true;
     step_at_ = {};
     step_sent_ = false;
+    pose_axes_at_ = Clock::now() + std::chrono::milliseconds(800);
     if (pending || !send_step) {
       std::printf("[运动] 停步：取消待发踏步，留在力控\n");
     }

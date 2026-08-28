@@ -700,6 +700,12 @@ check('有本体反馈时起步必须先确认力控状态3',
       /起步取消：本体监控未确认进入力控状态 3/.test(motionCpp) &&
       /bodyFresh\(\) && bodyMotion != 3/.test(radioJava) &&
       /起步取消：本体未确认力控状态3/.test(radioJava));
+check('力控只发一次并等状态3或稳定期后才放姿态轴',
+      !/力控补发/.test(motionCpp) &&
+      /pose_axes_at_.*milliseconds\(1200\)/.test(motionCpp) &&
+      /torque_confirmed \|\| fallback_ready/.test(motionCpp) &&
+      /poseAxesAt = modeCmdAt \+ 1200/.test(radioJava) &&
+      /torqued && !stepping\) return poseReady/.test(radioJava));
 check('官方本体状态会纠正两侧的本地模式记忆',
       /ReconcileReportedMotionLocked\(motion_state\)/.test(motionCpp) &&
       /本体真实状态纠正本地记忆/.test(radioJava));

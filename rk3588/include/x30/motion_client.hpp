@@ -82,6 +82,7 @@ struct RobotState {
   uint8_t battery_level = 0;
   float battery_voltage = 0.0f;
   bool battery_valid = false;
+  float joystick[4] = {0, 0, 0, 0};  // 运动主机回显 LX/LY/RX/RY
 
   int32_t current_mileage_cm = 0;
   uint32_t error_state = 0;
@@ -296,9 +297,9 @@ class MotionClient {
   std::chrono::steady_clock::time_point step_at_{};
   // 踏步里趴下会被主机丢掉。先停步，到点再发 RL 趴下。
   std::chrono::steady_clock::time_point sit_at_{};
-  // 力控刚发时主机还在初始站立，指令会被丢掉。TxLoop 再补几次。
-  std::chrono::steady_clock::time_point torque_retry_at_{};
-  int torque_retries_{0};
+  // 力控指令只发一次；主机完成 2→3 前不能发送姿态轴。
+  // 有状态 3 时立即放行，无可信反馈时到此时刻才使用保守降级。
+  std::chrono::steady_clock::time_point pose_axes_at_{};
 };
 
 }  // namespace x30
