@@ -151,14 +151,8 @@ void MotionClient::TxLoop() {
       const bool safe_state = safe_upright && !body_locked;
       if (stepping_ && step_sent_) {
         send_axes = safe_state;
-      } else if (torqued_ && !stepping_) {
-        const bool torque_confirmed =
-            state_.basic_state == BasicState::kTorqueStanding ||
-            state_.ros_basic_state == 3 || state_.body_motion_state == 3;
-        const bool fallback_ready =
-            pose_axes_at_ != Clock::time_point{} && Clock::now() >= pose_axes_at_;
-        send_axes = safe_state && (torque_confirmed || fallback_ready);
       } else {
+        // 当前机器的 motion.toml 禁用了姿态扭身；力控/停步不再发送四轴。
         send_axes = false;
       }
     }
@@ -359,13 +353,15 @@ void MotionClient::ReconcileReportedMotionLocked(int motion_state) {
     motion_phase_ = MotionPhase::kWalking;
     return;
   }
-  // 本体明确回到力控站立，纠正步态切换后仍残留的本地 walking 记忆。
+  // 状态 3 只说明本体处于力控站立，无法区分“主动点力控”还是“行走后停步”。
+  // 保留当前 kTorque 意图；只有从行走/停步路径回来时才显示 kStopped。
   if (motion_phase_ == MotionPhase::kStarting) return;
+  const bool keep_torque = motion_phase_ == MotionPhase::kTorque;
   torqued_ = true;
   stepping_ = false;
   step_sent_ = false;
   step_at_ = {};
-  motion_phase_ = MotionPhase::kStopped;
+  motion_phase_ = keep_torque ? MotionPhase::kTorque : MotionPhase::kStopped;
 }
 
 void MotionClient::ApplyBodyMonitor(bool alive, int motion_state,
@@ -666,7 +662,6 @@ void MotionClient::StandUp() {
     step_sent_ = false;
     step_at_ = {};
     sit_at_ = {};
-    pose_axes_at_ = {};
   }
   std::printf("[运动] 官方起立切换 0x21010202（遥测=%s）\n",
               ToString(Snapshot().basic_state));
@@ -729,7 +724,6 @@ void MotionClient::SitDown() {
     } else {
       sit_at_ = {};
     }
-    pose_axes_at_ = {};
   }
   if (leave_step) {
     std::printf("[运动] 停步后再发 RL 趴下 0x21010222（遥测=%s）\n",
@@ -798,19 +792,21 @@ void MotionClient::EnterTorqueStand() {
     step_sent_ = false;
     stepping_ = false;
     torqued_ = true;
-    motion_phase_ = MotionPhase::kTorque;
+    motion_phase_ = leave_step ? MotionPhase::kStopped : MotionPhase::kTorque;
     motion_command_at_ = Clock::now();
     axes_unlocked_ = true;
     sit_at_ = {};
-    pose_axes_at_ = Clock::now() + std::chrono::milliseconds(1200);
   }
-  // 还在踏步里俯仰轴无定义，速度轴也还在。先停步，再力控，轴停发一小会，
-  // 免得 50 Hz 的「身高」在过渡里被主机读成前进。
-  if (leave_step) SendSimple(cmd::kSteppingToggle);
   ReleaseAxes();
+  if (leave_step) {
+    // 踏步切换本身就会从状态 4 回到力控状态 3；再紧跟 0x2101020A
+    // 会撞在过渡期并被主机丢弃，甚至让 UI 记忆与真实状态再次分叉。
+    SendSimple(cmd::kSteppingToggle);
+    std::printf("[运动] 行走回力控：仅发送停步切换 0x21010201\n");
+    return;
+  }
   SendSimple(cmd::kTorqueStand);
-  std::printf("[运动] 力控站立 0x2101020A%s\n",
-              leave_step ? "（先停步）" : "");
+  std::printf("[运动] 初始站立进力控 0x2101020A\n");
 }
 
 void MotionClient::StartStepping() {
@@ -854,7 +850,6 @@ void MotionClient::StopStepping() {
     axes_unlocked_ = true;
     step_at_ = {};
     step_sent_ = false;
-    pose_axes_at_ = Clock::now() + std::chrono::milliseconds(800);
     if (pending || !send_step) {
       std::printf("[运动] 停步：取消待发踏步，留在力控\n");
     }
@@ -1018,11 +1013,6 @@ MotionView MotionClient::View() const {
 
   if (udp && out.phase == MotionPhase::kWalking) {
     out.axis_mode = "vel";
-  } else if (udp && torqued_ && !stepping_ &&
-             (out.phase == MotionPhase::kTorque ||
-              out.phase == MotionPhase::kStopped)) {
-    // 停步后的主机仍处于力控站立，四个姿态轴应继续有效。
-    out.axis_mode = "pose";
   }
   return out;
 }
@@ -1135,16 +1125,11 @@ void MotionClient::SetVelocity(float vx, float vy, float wz) {
 }
 
 void MotionClient::SetPose(float height, float roll, float pitch, float yaw) {
-  {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    if (!torqued_ || stepping_) return;
-  }
-  std::lock_guard<std::mutex> lock(axis_mutex_);
-  axis_left_y_ = Normalize(height);
-  axis_left_x_ = Normalize(roll);
-  axis_right_x_ = Normalize(yaw);
-  axis_right_y_ = Normalize(pitch);
-  axis_deadline_ = Clock::now() + std::chrono::milliseconds(cfg_.command_timeout_ms);
+  (void)height;
+  (void)roll;
+  (void)pitch;
+  (void)yaw;
+  // 机器侧未开放 enable_twist，保留接口兼容旧客户端，但明确不下发姿态轴。
 }
 
 void MotionClient::ReleaseAxes() {

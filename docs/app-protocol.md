@@ -59,8 +59,9 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 ```
 
 状态规则由控制层检查：只有 `stopped|torque` 能起步；任意行走状态都能停步；
-只有站立状态能进入力控。`torque` 以及已经发过力控的 `stopped` 都使用
-`axis_mode=pose`，四个姿态轴继续有效；只有 `walking` 使用 `axis_mode=vel`。
+只有站立状态能进入力控。当前机器未开放 `motion.toml enable_twist`，因此
+`torque|stopped` 使用 `axis_mode=none`，不下发姿态轴；只有 `walking`
+使用 `axis_mode=vel`。
 步态、踏面和身高在 `stopped|torque|walking` 都能选择，停步/力控时只记下，
 本控制层发出起步指令后执行。
 

@@ -195,7 +195,7 @@ class MotionClient {
   // 仅在踏步状态下有效。vx 前正后负，vy 左正右负，wz 逆时针为正（右手系）。
   void SetVelocity(float vx, float vy, float wz);
 
-  // 仅在力控站立状态下有效。四个量分别是抬升、横滚、俯仰、偏航。
+  // 兼容旧协议；当前产品不开放姿态扭身，调用不会向机器发送轴。
   void SetPose(float height, float roll, float pitch, float yaw);
 
   // 主动放弃控制，立刻把轴指令清零。
@@ -297,9 +297,6 @@ class MotionClient {
   std::chrono::steady_clock::time_point step_at_{};
   // 踏步里趴下会被主机丢掉。先停步，到点再发 RL 趴下。
   std::chrono::steady_clock::time_point sit_at_{};
-  // 力控指令只发一次；主机完成 2→3 前不能发送姿态轴。
-  // 有状态 3 时立即放行，无可信反馈时到此时刻才使用保守降级。
-  std::chrono::steady_clock::time_point pose_axes_at_{};
 };
 
 }  // namespace x30

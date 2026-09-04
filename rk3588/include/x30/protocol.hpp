@@ -213,9 +213,8 @@ inline bool JointsLocked(BasicState s, uint8_t emergency_source = 0) {
          (emergency_source >= 4 && emergency_source <= 6);
 }
 
-// 轴指令只在力控站立 / 踏步有文档定义（API 1.2.3）。
-//   力控站立：身高 / 横滚 / 俯仰 / 偏航
-//   踏步：速度；俯仰轴无定义
+// API 1.2.3 定义了力控姿态轴和踏步速度轴；当前产品未开放 enable_twist，
+// 因此只在踏步态发送速度轴。
 // 初始站立或 RL 起立后撒谎的「坐下」里发轴，主机会按速度理解：
 // 力控左杆变成走路，右杆 Y 的俯仰被丢掉。起立中 / 坐下中 / 急停不发，
 // 免得把柔和起身掐硬。standing 留给调用方，这里不再凭「记得站着」放行。
@@ -224,7 +223,7 @@ inline bool AxisCommandsApply(BasicState s, bool standing = false,
   (void)standing;
   if (JointsLocked(s, emergency_source)) return false;
   if (IsStandSitTransient(s)) return false;
-  return s == BasicState::kTorqueStanding || s == BasicState::kStepping;
+  return s == BasicState::kStepping;
 }
 
 // 运动主机自己报的站立态。不含「我们记得 RL 已起立、遥测仍报坐下」。

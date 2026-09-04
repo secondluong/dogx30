@@ -24,7 +24,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr const char* kVersion = "0.3.3";
+constexpr const char* kVersion = "0.3.6";
 
 // ToString(Gait) 返回的是中文显示名，不能拿来做标识比较。遥控端需要一个
 // 稳定的机器可读键来高亮当前步态按钮，这里给出与 ParseGaitName 互逆的映射。
@@ -781,8 +781,8 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
       client_.SetVelocity(Clamp01(msg.Number("vx")), Clamp01(msg.Number("vy")),
                           Clamp01(msg.Number("wz")));
     } else if (t == "pose") {
-      client_.SetPose(Clamp01(msg.Number("h")), Clamp01(msg.Number("roll")),
-                      Clamp01(msg.Number("pitch")), Clamp01(msg.Number("yaw")));
+      SendError(id, "unsupported",
+                "当前机器未开放姿态扭身，力控状态不接收姿态轴");
     } else {
       client_.ReleaseAxes();
     }

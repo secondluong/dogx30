@@ -495,16 +495,14 @@ check('两条链路共用一份姿态，切档不走散',
       /app\.basicState = basic/.test(appJs) &&
       /app\.emergencyLocked = locked/.test(appJs) &&
       /STATE_TORQUE_STANDING/.test(appJs));
-// 力控只发姿态，起步才发速度。起立本身不发轴。
-check('力控起步之后才发轴',
+// 当前产品取消姿态轴，只有起步后才发送速度轴。
+check('只有起步之后才发轴',
       /private boolean axesApply\(\)/.test(radioJava) &&
       /if \(axesApply\(\)\)/.test(radioJava) &&
       /sendAxes\(ax\)/.test(radioJava) &&
       /telemState == ST_STEPPING/.test(radioJava) &&
-      /telemState == ST_TORQUE_STANDING/.test(radioJava) &&
       /if \(!poseKnown \|\| !standing\) return false/.test(radioJava) &&
       /stepping && stepSent/.test(radioJava) &&
-      /torqued && !stepping/.test(radioJava) &&
       /AXIS_AFTER_STAND_MS/.test(radioJava) &&
       /last_stand_sit_ == LastStandSit::kStood/.test(motionCpp));
 // 撒谎的坐下遥测若清掉刚点的力控/起步，按钮灭掉，人再按一次起步就等于停步。
@@ -673,42 +671,45 @@ check('G20 起立键不改发趴下',
       /G20 起立\/趴下是两颗键/.test(read('gamepad.js')) &&
       /不能按「界面以为站着」把起立/.test(read('gamepad.js')) &&
       /: key;/.test(read('gamepad.js')));
-// 力控调姿态，起步才走。起立后先不发速度。
-check('力控调姿态，起步才走',
+// 当前机器未开放 enable_twist：力控只作为起步前置，不发送姿态轴。
+check('力控只作为起步前置，只有起步后才发速度轴',
       /app\.axisMode === 'vel'/.test(appJs) &&
-      /app\.axisMode === 'pose'/.test(appJs) &&
+      !/channel === 'pose'/.test(appJs) &&
       /b\.textContent = walk === 'step'/.test(appJs) &&
       /app\.motionState === 'stopping'/.test(appJs) &&
       !/basicState === STATE_STEPPING\) return 'vel'/.test(appJs) &&
       !/basic === STATE_STEPPING && app\.walkMode !== 'torque'/.test(appJs) &&
-      /tilt: right\.y/.test(read('gamepad.js')) &&
-      /AXIS_RY/.test(radioJava) &&
       /if \(!stepping_ \|\| !step_sent_\) return/.test(motionCpp) &&
-      /if \(!torqued_ \|\| stepping_\) return/.test(motionCpp) &&
       /const bool safe_upright/.test(motionCpp) &&
       /stepping_ && step_sent_/.test(motionCpp) &&
-      /torqued_ && !stepping_/.test(motionCpp) &&
+      /当前产品不开放姿态扭身/.test(motionHpp) &&
+      /当前机器未开放姿态扭身/.test(serviceCpp) &&
       /RL 起立后主机可能一直谎报坐下/.test(radioJava));
-check('停步后仍可控制四轴姿态',
-      /out\.phase == MotionPhase::kStopped/.test(motionCpp) &&
-      /torqued_ && !stepping_/.test(motionCpp) &&
-      /"stopped"\.equals\(motion\) && torqued && !stepping/.test(radioJava) &&
-      /axis_right_y_ = Normalize\(pitch\)/.test(motionCpp) &&
-      /AXIS_RY, lastAxisRy/.test(radioJava));
+check('力控与停步状态都不发送姿态轴',
+      /机器侧未开放 enable_twist/.test(motionCpp) &&
+      !/return "pose"/.test(radioJava) &&
+      /return stepping && stepSent/.test(radioJava));
 check('有本体反馈时起步必须先确认力控状态3',
       /body_monitor_alive && !torque_confirmed/.test(motionCpp) &&
       /起步取消：本体监控未确认进入力控状态 3/.test(motionCpp) &&
       /bodyFresh\(\) && bodyMotion != 3/.test(radioJava) &&
       /起步取消：本体未确认力控状态3/.test(radioJava));
-check('力控只发一次并等状态3或稳定期后才放姿态轴',
+check('力控指令只发一次且不再开放姿态轴',
       !/力控补发/.test(motionCpp) &&
-      /pose_axes_at_.*milliseconds\(1200\)/.test(motionCpp) &&
-      /torque_confirmed \|\| fallback_ready/.test(motionCpp) &&
-      /poseAxesAt = modeCmdAt \+ 1200/.test(radioJava) &&
-      /torqued && !stepping\) return poseReady/.test(radioJava));
+      !/pose_axes_at_/.test(motionCpp) &&
+      !/poseAxesAt/.test(radioJava) &&
+      !/axis_mode = "pose"/.test(motionCpp));
+check('行走回力控只发停步切换不叠加力控指令',
+      /行走回力控：仅发送停步切换/.test(motionCpp) &&
+      /if \(leave_step\)[\s\S]*SendSimple\(cmd::kSteppingToggle\);[\s\S]*return;[\s\S]*SendSimple\(cmd::kTorqueStand\)/.test(motionCpp) &&
+      /if \(!leaveStep\) sendSimple\(TORQUE\)/.test(radioJava));
 check('官方本体状态会纠正两侧的本地模式记忆',
       /ReconcileReportedMotionLocked\(motion_state\)/.test(motionCpp) &&
       /本体真实状态纠正本地记忆/.test(radioJava));
+check('状态3保留力控或停步的命令来源',
+      /keep_torque = motion_phase_ == MotionPhase::kTorque/.test(motionCpp) &&
+      /keep_torque \? MotionPhase::kTorque : MotionPhase::kStopped/.test(motionCpp) &&
+      /状态3无法区分“主动力控”和“行走后停步”/.test(radioJava));
 check('两侧都暴露四轴实际发送值供诊断',
       /"axis_right_y"/.test(serviceCpp) &&
       /"axisRy"/.test(radioJava));
@@ -837,12 +838,12 @@ var mismatch = gaitNums.filter(function (n) { return cppGaits[n] !== jsGaits[n];
 check('两条链路对步态编码的理解一致',
       gaitNums.length >= 9 && mismatch.length === 0,
       gaitNums.length + ' 个，不一致: ' + mismatch.join(', '));
-check('轴只在力控站立或踏步发',
+check('轴只在踏步状态发送',
       /bool AxisCommandsApply\(BasicState s, bool standing/.test(protoHpp) &&
       /inline bool JointsLocked/.test(protoHpp) &&
       /emergency_source == 1/.test(protoHpp) &&
       /emergency_source >= 4 && emergency_source <= 6/.test(protoHpp) &&
-      /s == BasicState::kTorqueStanding \|\| s == BasicState::kStepping/.test(protoHpp) &&
+      /return s == BasicState::kStepping/.test(protoHpp) &&
       !/return standing;/.test(protoHpp) &&
       /if \(IsStandSitTransient\(s\)\) return false/.test(protoHpp));
 check('屏幕摇杆在 2.4G 下也能推',
