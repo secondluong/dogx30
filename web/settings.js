@@ -20,8 +20,23 @@
   'use strict';
 
   const TOKEN_KEY = 'x30.admin.token';
+  const DEFAULT_PTZ_VIS = 'rtsp://192.168.1.168:554/11';
 
   const SECTIONS = [
+    {
+      title: '双光布控球',
+      note: '布控球输出一路白光+热成像拼接画面。网关用 MediaMTX 拉这一路 RTSP，' +
+            '再转 WebRTC。编码必须和相机实际一致。云台口令从地址里取。',
+      fields: [
+        { key: 'ptz_vis_rtsp', label: '双光视频', type: 'text',
+          value: DEFAULT_PTZ_VIS,
+          hint: '默认 rtsp://192.168.1.168:554/11 。路径带 /h264、/h265 时按地址认编码。' },
+        { key: 'ptz_vis_codec', label: '双光编码', type: 'text',
+          hint: 'h264 或 h265。/11 这类短路径空着按 h264。相机主码请开 H.264，旧平板解不了 H.265。' },
+        { key: 'ptz_ir_rtsp', label: '热成像 RTSP', type: 'text', hidden: true },
+        { key: 'ptz_ir_codec', label: '热成像编码', type: 'text', hidden: true },
+      ],
+    },
     {
       title: '机器狗连接',
       note: '运动与感知是两台不同的主机，上下楼步态需要两条通道配合。',
@@ -58,8 +73,8 @@
         { key: 'http_port', label: '服务端口', type: 'number',
           hint: '控制台与 WebSocket 都在这个端口上。' },
         { key: 'bind_address', label: '监听地址', type: 'text',
-          hint: '0.0.0.0 表示全部网卡。协议没有身份认证，本机接了 4G ' +
-                '就务必填遥控链路那块网卡的地址。' },
+          hint: '0.0.0.0 表示全部网卡。遥控 WiFi 在 10 网时，也可填板子的 ' +
+                '192.168.10.2（同一网口上的第二地址）。接了 4G 不要留 0.0.0.0。' },
       ],
     },
     {
@@ -79,21 +94,6 @@
           hint: '20000 点约 120 KB/帧。' },
       ],
     },
-    {
-      title: '双光布控球',
-      note: '网关用 MediaMTX 拉 RTSP，再转 WebRTC。编码必须和相机实际一致：' +
-            '标成 H.265 而遥控端解不了，就会退到子码流。云台口令从白光地址里取。',
-      fields: [
-        { key: 'ptz_vis_rtsp', label: '白光 RTSP', type: 'text',
-          hint: '例如 rtsp://admin:密码@192.168.1.206/h264' },
-        { key: 'ptz_vis_codec', label: '白光编码', type: 'text',
-          hint: 'h264 或 h265。地址路径里带 /h264、/h265 时会自动填。' },
-        { key: 'ptz_ir_rtsp', label: '热成像 RTSP', type: 'text',
-          hint: '例如 rtsp://admin:密码@192.168.1.205/h264' },
-        { key: 'ptz_ir_codec', label: '热成像编码', type: 'text',
-          hint: 'h264 或 h265，须与相机一致。' },
-      ],
-    },
   ];
 
   const state = {
@@ -103,6 +103,7 @@
     current: null,      // 网关回来的那一份，用于算改动
     open: false,
     saving: false,
+    loading: false,
     waitingRestart: false,
   };
 
@@ -114,6 +115,15 @@
 
   function isAppNative() {
     return !!(window.X30Native && typeof window.X30Native.getGatewayHost === 'function');
+  }
+
+  function gatewayOpen() {
+    try {
+      if (window.app && typeof window.app.linkOpen === 'function') {
+        return !!window.app.linkOpen();
+      }
+    } catch (e) { /* 网页还没起来 */ }
+    return !!(window.app && window.app.ws && window.app.ws.readyState === 1);
   }
 
   // -------------------------------------------------------------------------
@@ -135,6 +145,12 @@
       }
 
       sec.fields.forEach((f) => {
+        if (f.hidden) {
+          const ghost = document.createElement('input');
+          ghost.type = 'hidden';
+          inputs[f.key] = ghost;
+          return;
+        }
         const row = document.createElement('label');
         row.className = 'set-row';
 
@@ -152,6 +168,7 @@
           input.className = 'set-input';
           input.autocomplete = 'off';
           input.spellcheck = false;
+          if (f.value) input.value = f.value;
         }
         inputs[f.key] = input;
         row.appendChild(input);
@@ -185,13 +202,29 @@
   // 读写表单
   // -------------------------------------------------------------------------
 
+  function rememberPtz(s) {
+    const v = (s && s.ptz_vis_rtsp) ? String(s.ptz_vis_rtsp).trim() : DEFAULT_PTZ_VIS;
+    try { window.localStorage.setItem('x30.ptz_vis.rtsp', v || DEFAULT_PTZ_VIS); }
+    catch (e) { /* 记不住就下次再写 */ }
+    if (window.X30DogCam && window.X30DogCam.setPtzUrl) {
+      window.X30DogCam.setPtzUrl(v || DEFAULT_PTZ_VIS);
+    }
+  }
+
   function fillForm(s) {
+    if (!s) return;
     Object.keys(inputs).forEach((key) => {
       const input = inputs[key];
+      if (!input) return;
       if (input.type === 'checkbox') {
         input.checked = !!s[key];
       } else {
-        input.value = s[key] || '';
+        const v = s[key];
+        if (v === undefined || v === null || v === '') {
+          input.value = (key === 'ptz_vis_rtsp') ? DEFAULT_PTZ_VIS : '';
+        } else {
+          input.value = String(v);
+        }
       }
       input.classList.remove('set-auto');
     });
@@ -222,11 +255,14 @@
 
   // 点云关着的时候那几项没有意义，灰掉但不隐藏 —— 隐藏会让人以为不能配。
   function updateCloudRows() {
+    if (!inputs.cloud_enabled) return;
     const on = inputs.cloud_enabled.checked;
     ['ros_master', 'ros_host', 'cloud_topic', 'cloud_hz', 'cloud_points']
       .forEach((key) => {
-        inputs[key].disabled = !on;
-        inputs[key].parentNode.classList.toggle('set-off', !on);
+        const input = inputs[key];
+        if (!input) return;
+        input.disabled = !on;
+        if (input.parentNode) input.parentNode.classList.toggle('set-off', !on);
       });
   }
 
@@ -265,6 +301,11 @@
     }
     if ($('set-app-radio-stat')) {
       $('set-app-radio-stat').textContent = radioTelemLine();
+    }
+    if ($('set-app-nets')) {
+      let nets = '—';
+      try { nets = window.X30Native.meshDiag() || '—'; } catch (e) { nets = '—'; }
+      $('set-app-nets').textContent = '本机网卡 ' + nets;
     }
   }
 
@@ -319,7 +360,6 @@
     // 语音开关是本机偏好，面板每次打开都要问一遍引擎起来没有（原生 TTS 初始化
     // 要一秒左右，开机就点开的话结论会变）。
     if (window.X30Voice) window.X30Voice.onSettingsOpen();
-    if (window.X30RcProbe && window.X30RcProbe.start) window.X30RcProbe.start();
     // 网关没开在线改配置时，这个面板里仍有本机能改的东西。以前这里直接 return，
     // 表现是点了标题什么都不发生 —— 「点了没反应」是最难查的一类。
     if (!state.available && !isAppNative()) {
@@ -345,7 +385,6 @@
     state.open = false;
     root.classList.add('hidden');
     setNote('');
-    if (window.X30RcProbe && window.X30RcProbe.stop) window.X30RcProbe.stop();
   }
 
   function readSavedToken() {
@@ -369,8 +408,21 @@
       return;
     }
     state.token = token;
-    setNote('正在读取当前配置…');
-    state.sendFn({ t: 'config_get', token: token });
+    // 先把表单露出来：双光 RTSP 在最上面。等网关时不再整页只剩一行「正在读取」。
+    setLocked(false);
+    if (state.current) fillForm(state.current);
+    if (!gatewayOpen()) {
+      setNote('网关还没连上。连上后会自动读配置。', 'warn');
+    } else {
+      setNote('正在读取当前配置…');
+    }
+    state.loading = true;
+    if (state.sendFn) state.sendFn({ t: 'config_get', token: token });
+    setTimeout(function () {
+      if (!state.open || !state.loading) return;
+      state.loading = false;
+      setNote('网关没有回配置。请确认已连上网关，并且网关以 --config 启动。', 'warn');
+    }, 4000);
   }
 
   function save() {
@@ -400,9 +452,16 @@
   // -------------------------------------------------------------------------
 
   function onConfig(msg) {
+    state.loading = false;
+    if (!msg || !msg.settings) {
+      setLocked(false);
+      setNote('网关回了空配置。', 'bad');
+      return;
+    }
     state.current = msg.settings;
     saveToken(state.token);
-    fillForm(msg.settings);
+    try { fillForm(msg.settings); } catch (e) { /* 个别字段对不上也不把表单藏回去 */ }
+    rememberPtz(msg.settings);
     setLocked(false);
 
     if (state.waitingRestart) {
@@ -410,11 +469,7 @@
       setNote('网关已带着新配置起来了。', 'ok');
       return;
     }
-    if (msg.auto_restart) {
-      setNote('改完保存，网关会自己重启并在一两秒后恢复。');
-    } else {
-      setNote('本机不是由 systemd 托管的，保存后需要自己重启网关才生效。', 'warn');
-    }
+    setNote('已读到当前配置。', 'ok');
   }
 
   function onConfigSaved(msg) {
@@ -422,6 +477,7 @@
     $('set-save').disabled = false;
     state.current = msg.settings;
     fillForm(msg.settings);
+    rememberPtz(msg.settings);
 
     // 端口变了的话这个页面连不回来，必须把新地址明确告诉人，
     // 否则只会看到一个永远在「重连中」的界面。
@@ -453,6 +509,7 @@
     if (!mine || !state.open) return false;
 
     state.saving = false;
+    state.loading = false;
     $('set-save').disabled = false;
     setNote(msg.msg, 'bad');
     if (msg.code === 'bad_admin_token' || msg.code === 'no_admin_token') {
@@ -479,8 +536,9 @@
   function onHello(msg) {
     state.available = !!msg.config;
     if (!state.available) {
-      if (state.open && !isAppNative()) {
-        setNote('本机未启用在线改配置（网关需要以 --config 启动）。', 'warn');
+      if (state.open) {
+        setLocked(false);
+        setNote('网关未启用在线改配置（需要以 --config 启动）。', 'warn');
       }
       return;
     }
@@ -500,9 +558,6 @@
 
     buildForm($('set-form'));
     fillAppGateway();
-    if (window.X30RcProbe && window.X30RcProbe.initRcProbe) {
-      window.X30RcProbe.initRcProbe();
-    }
     if ($('set-app-save')) {
       $('set-app-save').addEventListener('click', saveAppGateway);
     }

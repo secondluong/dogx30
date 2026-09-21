@@ -33,6 +33,7 @@ public class ControlActivity extends AppCompatActivity {
 
     private WebView web;
     private NativeVideo video;
+    private NativeWs nativeWs;
     private Tts tts;
     private LinearLayout overlay;
     private TextView overlayMsg;
@@ -67,6 +68,7 @@ public class ControlActivity extends AppCompatActivity {
         // 根布局是 #0D1117，与网页 --bg 同色，所以没画面时观感不变。
         web.setBackgroundColor(Color.TRANSPARENT);
         video = new NativeVideo(findViewById(R.id.native_video), this::pushVideoState);
+        nativeWs = new NativeWs(web);
         // 引擎初始化要一秒左右，越早开始越好：开机后第一次按键往往就在这一秒里。
         tts = new Tts(this);
 
@@ -224,6 +226,35 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public void wsOpen(String url) {
+            runOnUiThread(() -> {
+                if (nativeWs != null) nativeWs.open(url);
+            });
+        }
+
+        @JavascriptInterface
+        public void wsSend(String msg) {
+            if (nativeWs != null) nativeWs.send(msg);
+        }
+
+        @JavascriptInterface
+        public void wsClose() {
+            runOnUiThread(() -> {
+                if (nativeWs != null) nativeWs.close();
+            });
+        }
+
+        @JavascriptInterface
+        public boolean wsAlive() {
+            return nativeWs != null && nativeWs.isLive();
+        }
+
+        @JavascriptInterface
+        public String meshDiag() {
+            return RadioLink.get().meshDiag();
+        }
+
+        @JavascriptInterface
         public String getGatewayHost() {
             return GatewayStore.host(ControlActivity.this);
         }
@@ -341,7 +372,18 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public void videoStart(String url) {
             runOnUiThread(() -> {
-                if (video != null) video.start(url);
+                if (video != null) video.start(url, true);
+            });
+        }
+
+        /**
+         * bindRadio=true 绑 2.4G 网卡（直拉 1 网球/机身）。
+         * false 走 WiFi（MESH 上拉板上 MediaMTX 192.168.10.2:8554）。
+         */
+        @JavascriptInterface
+        public void videoStartOn(String url, boolean bindRadio) {
+            runOnUiThread(() -> {
+                if (video != null) video.start(url, bindRadio);
             });
         }
 
@@ -350,6 +392,17 @@ public class ControlActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 if (video != null) video.stop();
             });
+        }
+
+        /** 布控球 anv CGI。bindRadio 与拉双光 RTSP 同一张网卡。 */
+        @JavascriptInterface
+        public void cameraGetFire(String url, boolean bindRadio) {
+            CameraCgi.fire(url, bindRadio);
+        }
+
+        @JavascriptInterface
+        public String cameraGet(String url, boolean bindRadio) {
+            return CameraCgi.get(url, bindRadio);
         }
 
         /** 画面画在哪块矩形里，单位是设备像素，由网页按 devicePixelRatio 换算后给。 */
@@ -508,6 +561,7 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (nativeWs != null) nativeWs.close();
         if (video != null) video.stop();
         // 不 shutdown 的话引擎连接会一直挂着，下次进来再 new 一个就是泄漏。
         if (tts != null) tts.shutdown();

@@ -52,7 +52,7 @@ conf_defaults() {
   CLOUD_TOPIC="/lidar_points"
   CLOUD_HZ="2"
   CLOUD_POINTS="20000"
-  PTZ_VIS_RTSP=""
+  PTZ_VIS_RTSP="rtsp://192.168.1.168:554/11"
   PTZ_IR_RTSP=""
   PTZ_VIS_CODEC=""
   PTZ_IR_CODEC=""

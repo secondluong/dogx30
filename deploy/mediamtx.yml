@@ -21,12 +21,14 @@ playback: no
 
 rtsp: yes
 rtspTransports: [tcp]
-rtspAddress: 127.0.0.1:8554        # 仅本机，遥控端不经 RTSP
+# App 在 MESH 上用原生 ExoPlayer 拉这一口。只绑 127.0.0.1 的话平板永远黑屏。
+# 10.2 是后加的第二地址，写死 bind 会在地址还没挂上时启动失败。
+rtspAddress: :8554
 
 webrtc: yes
-webrtcAddress: 192.168.10.2:8889   # 只在 eth1 上听，4G 够不到
+webrtcAddress: :8889
 webrtcEncryption: no               # 内网链路，且 MESH 本身有加密
-webrtcLocalUDPAddress: 192.168.10.2:8189
+webrtcLocalUDPAddress: :8189
 
 # ICE 只用本地候选。这是个封闭内网，没有 NAT 要穿，
 # 配 STUN 服务器反而会在没有外网时拖慢建连。
@@ -49,9 +51,9 @@ pathDefaults:
 
 paths:
   ptz_vis_main:
-    source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/101
+    source: rtsp://192.168.1.168:554/11
   ptz_vis_sub:
-    source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/102
+    source: rtsp://192.168.1.168:554/11
 
   ptz_ir_main:
     source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/201

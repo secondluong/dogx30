@@ -230,28 +230,27 @@
     };
   }
 
-  // L1/L2/R1/HOME。SW1/SW2 是拨动，不走这里。
+  // L1/L2/HOME。R1/R2 先空着。SW1/SW2 是三档拨动，不走这里。
   var G20_BTN = {
     walk_cycle: { ch: 6 },   // L1 CH7 力控/起步
     pose_cycle: { ch: 7 },   // L2 CH8 起立/趴下/卸力
-    gas: { ch: 8 },          // R1 CH9
     talk: { ch: 9 },         // HOME CH10 按住说话
   };
 
-  // SW1 CH5：高=狗身点云，低=狗身视频。中位保持。
+  // SW1 CH5 上中下：狗身点云 / 狗身视频 / 双光视频。
   function ch5Toggle(v) {
-    if (typeof v !== 'number' || v !== v) return '';
-    if (v <= 1100) return 'dog_cam';
+    if (typeof v !== 'number' || v !== v || v < 900 || v > 2100) return '';
     if (v >= 1900) return 'cloud';
-    return '';
+    if (v <= 1100) return 'ptz_vis';
+    return 'dog_cam';
   }
 
-  // SW2 CH6：高=布控球白光，低=热成像。
+  // SW2 CH6 上中下：指标 / 开关 / 气体。
   function ch6Toggle(v) {
-    if (typeof v !== 'number' || v !== v) return '';
-    if (v <= 1100) return 'ptz_ir';
-    if (v >= 1900) return 'ptz_vis';
-    return '';
+    if (typeof v !== 'number' || v !== v || v < 900 || v > 2100) return '';
+    if (v >= 1900) return 'telem';
+    if (v <= 1100) return 'gas';
+    return 'switch';
   }
 
   function wheelDetent(v) {
@@ -706,7 +705,7 @@
       if (state.muted) {
         zero();
       }
-      // 大摇杆始终控狗。SW1/SW2 只切画面。
+      // 大摇杆始终控狗。SW1 切背景，SW2 切指标/开关/气体。
       state.stickTarget = 'dog';
       if (ev.ch.length > 4 && !state.muted) {
         var sw1 = ch5Toggle(ev.ch[4]);
@@ -715,8 +714,6 @@
         } else if (sw1 && sw1 !== state.g20Prev.sw1) {
           state.g20Prev.sw1 = sw1;
           if (getApp().selectView) getApp().selectView(sw1);
-        } else if (!sw1) {
-          state.g20Prev.sw1 = '';
         }
       }
       if (ev.ch.length > 5 && !state.muted) {
@@ -725,9 +722,7 @@
           state.g20Prev.sw2 = sw2;
         } else if (sw2 && sw2 !== state.g20Prev.sw2) {
           state.g20Prev.sw2 = sw2;
-          if (getApp().selectView) getApp().selectView(sw2);
-        } else if (!sw2) {
-          state.g20Prev.sw2 = '';
+          if (getApp().selectHud) getApp().selectHud(sw2);
         }
       }
       return true;

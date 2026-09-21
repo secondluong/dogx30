@@ -59,6 +59,11 @@ UdpEndpoint::~UdpEndpoint() {
 }
 
 bool UdpEndpoint::Open(uint16_t local_port, std::string* error) {
+  return Open(local_port, std::string(), error);
+}
+
+bool UdpEndpoint::Open(uint16_t local_port, const std::string& local_ip,
+                       std::string* error) {
   impl_->fd = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (impl_->fd == kInvalidSocket) {
     if (error) *error = "创建套接字失败: " + LastSocketError();
@@ -74,8 +79,14 @@ bool UdpEndpoint::Open(uint16_t local_port, std::string* error) {
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_port = htons(local_port);
+  if (local_ip.empty()) {
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  } else if (::inet_pton(AF_INET, local_ip.c_str(), &addr.sin_addr) != 1) {
+    if (error) *error = "非法的本地地址: " + local_ip;
+    Close();
+    return false;
+  }
   if (::bind(impl_->fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
     if (error) {
       *error = "绑定本地端口 " + std::to_string(local_port) +

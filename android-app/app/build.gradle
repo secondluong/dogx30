@@ -10,8 +10,8 @@ android {
         applicationId "com.dogx30.control"
         minSdk 24
         targetSdk 34
-        versionCode 58
-        versionName "0.4.43"
+        versionCode 73
+        versionName "0.4.58"
     }
 
     buildTypes {
@@ -54,4 +54,5 @@ dependencies {
     // annotation-experimental，虽然多半已被上面几个传递带进来，但它是否出现在
     // **编译**类路径上取决于别人怎么声明依赖，写明了才不会哪天忽然编不过。
     implementation 'androidx.annotation:annotation-experimental:1.4.1'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }

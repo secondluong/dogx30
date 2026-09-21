@@ -17,6 +17,10 @@ namespace x30 {
 
 class Json;
 
+// 现场双光球默认主码。设置里空着、新装配置文件都用这个。
+inline constexpr const char* kDefaultPtzVisRtsp =
+    "rtsp://192.168.1.168:554/11";
+
 // 可在线修改的参数全集。刻意不含 --web / --media / --prefix 这类文件路径：
 // 那些是装机时定的部署布局，从一个无 TLS 的网页去改服务端路径只会开出
 // 一条目录穿越的口子，收益却近乎零。
@@ -49,11 +53,12 @@ struct GatewaySettings {
   int cloud_hz = 2;
   uint32_t cloud_points = 20000;
 
-  // 双光布控球。空 = 沿用 mediamtx.yml / media.json 里现成的。
+  // 双光布控球。空 = 用 kDefaultPtzVisRtsp。
   // 填了就用这两条 RTSP 拉流，并从地址里取出主机和口令做云台。
-  std::string ptz_vis_rtsp;
+  std::string ptz_vis_rtsp = kDefaultPtzVisRtsp;
   std::string ptz_ir_rtsp;
-  // h264 / h265。空 = 从 RTSP 路径猜，再猜不到就用 media.json。
+  // h264 / h265。空 = 从 RTSP 路径猜；/11 这类短路径按 h264，
+  // 再猜不到才沿用 media.json（默认 h265）。
   std::string ptz_vis_codec;
   std::string ptz_ir_codec;
 };
@@ -103,7 +108,7 @@ std::string LoadAdminToken(const std::string& path);
 // 定长时间比较，不因首字节不同就提前返回。
 bool TokenMatches(const std::string& expected, const std::string& given);
 
-// 从 rtsp://user:pass@host:554/path 取出主机和口令，给海康 ISAPI 云台用。
+// 从 rtsp://user:pass@host:554/path 取出主机和口令，给布控球 anv CGI 云台用。
 bool ParseRtspAuthority(const std::string& url, std::string* host,
                         std::string* user, std::string* password,
                         std::string* error);
@@ -111,7 +116,8 @@ bool ParseRtspAuthority(const std::string& url, std::string* host,
 // media.json 旁边的 mediamtx.yml。
 std::string MediamtxPathBeside(const std::string& media_json);
 
-// 读 / 写 MediaMTX 某个 path 的 source。海康主码流 101/201 会顺带改子码流 102/202。
+// 读 / 写 MediaMTX 某个 path 的 source。海康 101/201、双光球 /11 /21
+// 会顺带改对应子码流 102/202、/12 /22。
 std::string ReadMediamtxSource(const std::string& yml_path,
                                const std::string& path_name);
 bool ApplyPtzRtspToMediamtx(const std::string& yml_path,
@@ -121,7 +127,8 @@ bool ApplyPtzRtspToMediamtx(const std::string& yml_path,
 // 路径里带 /h264、/h265、/hevc 时认出来；海康 Channels/101 这种认不出来。
 std::string InferRtspCodec(const std::string& url);
 
-// 设置里写了用设置的；否则从地址猜。仍为空表示别动 media.json。
+// 设置里写了用设置的；否则从地址猜。/11、/12 这类短数字路径按 h264。
+// 仍为空表示别动 media.json。
 std::string EffectivePtzCodec(const std::string& configured,
                               const std::string& rtsp_url);
 

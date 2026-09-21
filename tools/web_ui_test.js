@@ -110,7 +110,7 @@ function parseElements(html) {
 var css = parseCss(read('style.css'));
 var html = read('index.html');
 var els = parseElements(html);
-var js = ['app.js', 'settings.js', 'gamepad.js', 'rcprobe.js'].map(function (f) {
+var js = ['app.js', 'settings.js', 'gamepad.js'].map(function (f) {
   return { name: f, text: read(f) };
 });
 var jsAll = js.map(function (f) { return f.text; }).join('\n');
@@ -336,10 +336,9 @@ check('急停后同一按钮转卸力',
 check('网页仍有截图按钮', /data-capture="shot"/.test(html));
 check('App 壳去掉截图录屏按钮',
       /html\.shell-app[\s\S]*?\.pane-actions/.test(styleText));
-check('网页有指标按钮', !!htmlIds['btn-telem']);
+check('网页没有指标气体开关按钮',
+      !htmlIds['btn-telem'] && !htmlIds['btn-gas'] && !htmlIds['btn-sw']);
 check('网页有摇杆按钮', !!htmlIds['btn-sticks']);
-check('网页有气体按钮', !!htmlIds['btn-gas']);
-check('网页有开关按钮', !!htmlIds['btn-sw']);
 var swCards = (html.match(/data-sw="/g) || []).length;
 check('开关面板只有协议里的 5 路', swCards === 5, '实际 ' + swCards);
 check('开关不含开发板和自组网',
@@ -348,10 +347,14 @@ check('遥测 state 会刷新开关面板',
       /function renderSwitches/.test(appJs) &&
       /renderSwitches\(s\.switches\)/.test(appJs));
 check('网页没有手柄按钮', !htmlIds['btn-gp'] && html.indexOf('>手柄<') === -1);
-check('App 壳藏掉网页摇杆和指标按钮',
-      /html\.shell-app[\s\S]*?\.hud-sticks/.test(styleText) &&
-      /html\.shell-app[\s\S]*?\.hud-telem-btn/.test(styleText) &&
-      /html\.shell-app[\s\S]*?\.hud-gas-btn/.test(styleText));
+check('App 壳藏掉网页摇杆按钮',
+      /html\.shell-app[\s\S]*?\.hud-sticks/.test(styleText));
+check('解锁后先出示设置表单，双光 RTSP 在最上面',
+      /title: '双光布控球'/.test(read('settings.js')) &&
+      /setLocked\(false\)/.test(read('settings.js')) &&
+      /function gatewayOpen/.test(read('settings.js')) &&
+      /正在读取当前配置/.test(read('settings.js')) &&
+      /已读到当前配置/.test(read('settings.js')));
 check('趴下不锁死网页摇杆',
       !/\.dog-prone\s+\.hud-sticks/.test(styleText) &&
       /id="btn-sticks"/.test(html) &&
@@ -400,7 +403,7 @@ check('链路通没通看按钮颜色，不在顶栏挂状态串',
       /function radioLinkUp/.test(appJs) &&
       /btn\.classList\.toggle\('link-up', up\)/.test(appJs) &&
       /btn\.classList\.toggle\('link-down', !up\)/.test(appJs) &&
-      /const up = radio \? radioLinkUp\(st0\) : linkOpen\(\)/.test(appJs) &&
+      /const up = radio \? radioLinkUp\(st0\) : meshPaintUp\(\)/.test(appJs) &&
       /#btn-radio\.link-up/.test(styleText) &&
       /#btn-radio\.link-down/.test(styleText) &&
       /html\.radio-24 #chip-link \{ display: none/.test(styleText) &&
@@ -492,9 +495,33 @@ check('图传口不许抢走进程的默认出口',
       /registerNetworkCallback/.test(radioJava) &&
       /TRANSPORT_WIFI/.test(radioJava) &&
       /private synchronized void pinProcess/.test(radioJava) &&
-      /\(enabled && !udpBound\) \? null : findWifi\(\)/.test(radioJava) &&
+      /enabled && !udpBound/.test(radioJava) &&
+      /unpin for radio/.test(radioJava) &&
+      /短暂丢失时不要解钉/.test(radioJava) &&
+      /findMeshNet/.test(radioJava) &&
+      /isTenNet/.test(radioJava) &&
+      /NativeWs\.isAnyLive/.test(radioJava) &&
+      /pinnedIp/.test(radioJava) &&
+      /192\.168\.10\./.test(radioJava) &&
       /udpBound = true/.test(radioJava) &&
       !/bindProcessToNetwork\(net\)/.test(radioJava));
+var storeJava = fs.readFileSync(
+    path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+              'com', 'dogx30', 'control', 'GatewayStore.java'), 'utf8');
+check('旧包 1 网网关地址自动改到 10.2',
+      /DEFAULT_HOST = "192\.168\.10\.2"/.test(storeJava) &&
+      /isLegacyOneNetHost/.test(storeJava) &&
+      /192\.168\.1\.120/.test(storeJava) &&
+      /192\.168\.1\.101/.test(storeJava));
+check('运动 UDP 绑在跟狗同网段的地址上',
+      /LocalIpv4ForPeer/.test(motionCpp) &&
+      /Open\(cfg_\.local_port, bind_ip/.test(motionCpp));
+var addIpSh = fs.readFileSync(
+    path.join(__dirname, '..', 'deploy', 'add_remote_ip.sh'), 'utf8');
+check('加 10.2 时锁源地址且不重拨网卡',
+      /ip route replace/.test(addIpSh) &&
+      /src "\$DOG_SRC"/.test(addIpSh) &&
+      !/nmcli connection up "\$conn"/.test(addIpSh));
 // 狗一直在往遥控器发遥测（0x1009 那一包头后第一个字节就是 basic_state），
 // 以前 drainRx 只数包不看内容，姿态全靠「我发过什么」猜。别的遥控器动过狗、
 // 或者刚从 MESH 切回来，猜的和实际就是两回事。
@@ -931,13 +958,47 @@ var appGradle = fs.readFileSync(
 // 现场看到的就是「有时候从 RTSP 拉、有时候不」。
 var mediaText = read('media.js');
 check('机身相机不会被原生和网关同时拉两遍',
-      /function nativeOwnsDogCam/.test(mediaText) &&
-      /native-video-on/.test(mediaText) &&
-      /if \(own && main === 'dog_cam'\) return \[\];/.test(mediaText) &&
-      /tile\.id === 'dog_cam' && nativeOwnsDogCam\(\)/.test(mediaText) &&
+      /function nativeOwns/.test(mediaText) &&
+      /data-native-video/.test(mediaText) &&
+      /if \(nativeOwns\(main\)\) return \[\];/.test(mediaText) &&
       /resync/.test(mediaText) &&
       /function handOver/.test(dogCamJs) &&
       /X30Media\.resync/.test(dogCamJs));
+check('MESH 双光走板上 MediaMTX，不走 WebView WHEP',
+      /192\.168\.1\.168:554\/11/.test(dogCamJs) &&
+      /videoStartOn/.test(dogCamJs) &&
+      /void videoStartOn\(/.test(radioBridge) &&
+      /:8554\/ptz_vis_main/.test(dogCamJs) &&
+      /id === 'ptz_vis'/.test(dogCamJs));
+check('网关连上不依赖狗，芯片写网关已连',
+      /网关已连/.test(appJs) &&
+      !/把板子 eth0 网线插回机身口/.test(appJs));
+var nativeWsJava = fs.readFileSync(
+    path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+              'com', 'dogx30', 'control', 'NativeWs.java'), 'utf8');
+check('App 的网关 WebSocket 走原生并钉在 10 网',
+      /class NativeWs/.test(nativeWsJava) &&
+      /int gen/.test(nativeWsJava) &&
+      /boolean isLive/.test(nativeWsJava) &&
+      /static boolean isAnyLive/.test(nativeWsJava) &&
+      /void wsOpen\(/.test(radioBridge) &&
+      /boolean wsAlive/.test(radioBridge) &&
+      /function hasNativeWs/.test(appJs) &&
+      /function nativeWsLive/.test(appJs) &&
+      /meshDownSeq/.test(appJs) &&
+      /不退回 WebView/.test(appJs) &&
+      /X30NativeWs/.test(appJs) &&
+      /okhttp:4\.12\.0/.test(appGradle));
+var mtxYml = fs.readFileSync(
+    path.join(__dirname, '..', 'deploy', 'mediamtx.yml'), 'utf8');
+var mtxInstall = fs.readFileSync(
+    path.join(__dirname, '..', 'deploy', 'install_mediamtx.sh'), 'utf8');
+check('MediaMTX 的 RTSP 给平板听',
+      /rtspAddress: :8554/.test(mtxYml) &&
+      /192\.168\.1\.168:554\/11/.test(mtxYml) &&
+      /linux_arm64/.test(mtxInstall) &&
+      /x30-media/.test(mtxInstall) &&
+      /ptz_vis_main/.test(mtxInstall));
 check('2.4G 的机身相机走原生 RTSP',
       /rtsp:\/\/192\.168\.1\.105:8554/.test(dogCamJs) &&
       /videoStart/.test(dogCamJs) &&
@@ -983,9 +1044,9 @@ check('没画面时占位图说得出原因',
       /拉流失败/.test(dogCamJs) &&
       /RETRY_MS/.test(nativeVideo));
 // 布控球挂在网关那侧的 192.168.10.0/24，2.4G 到不了。不说清楚就像设备坏了。
-check('2.4G 下布控球如实标不可用',
-      /布控球在网关那侧/.test(dogCamJs) &&
-      /media-idle-ptz-vis/.test(dogCamJs));
+check('2.4G 下热成像如实标不可用',
+      /热成像在网关那侧/.test(dogCamJs) &&
+      /media-idle-ptz-ir/.test(dogCamJs));
 // 相机地址不该写死在包里：现场换过相机或改过端口，不能为此重新编包。
 check('机身相机地址能在设置里改',
       !!htmlIds['set-app-dogcam'] &&
@@ -1032,6 +1093,60 @@ check('App 壳只拉当前大屏那一路视频',
       /function wantedTiles/.test(mediaJs) &&
       /inAppShell\(\)/.test(mediaJs) &&
       /main === 'cloud'/.test(mediaJs));
+check('双光背景只拉一路拼接流',
+      /data-view-pick="ptz_vis">双光视频/.test(html) &&
+      html.indexOf('data-view-pick="ptz_ir"') === -1 &&
+      html.indexOf('data-view-pick="dual"') === -1 &&
+      /label: '双光视频'/.test(read('settings.js')));
+check('双光 RTSP 默认填现场球机地址',
+      /DEFAULT_PTZ_VIS = 'rtsp:\/\/192\.168\.1\.168:554\/11'/.test(read('settings.js')) &&
+      fs.readFileSync(path.join(__dirname, '..', 'rk3588', 'include', 'x30',
+        'gateway_config.hpp'), 'utf8').indexOf('192.168.1.168:554/11') !== -1);
+check('指标格子字号跟气体一样大',
+      /\.telemetry \.cell b \{ font-size: 22px/.test(read('style.css')) ||
+      /telemetry \.cell b \{ font-size: 22px/.test(read('style.css')));
+var gwCodec = fs.readFileSync(path.join(__dirname, '..', 'rk3588', 'src', 'gateway_config.cpp'), 'utf8');
+check('/11 短路径按 H.264 编排，避免沿用 media.json 的 H.265 把平板挡掉',
+      /LooksLikeShortStreamPath/.test(gwCodec) &&
+      /return "h264"/.test(gwCodec) &&
+      gwCodec.indexOf('"/11"') !== -1 &&
+      gwCodec.indexOf('+ "12"') !== -1);
+check('点屏幕其它地方收起指标开关气体',
+      /function hideHud/.test(appJs) &&
+      /#hud-info/.test(appJs) &&
+      /hudOpen\(\)/.test(appJs));
+var ptzCpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'src', 'ptz_client.cpp'), 'utf8');
+var ptzJs = read('ptzball.js');
+check('布控球云台走 anv CGI 而不是海康 ISAPI',
+      /cgi-bin\/anv\//.test(ptzCpp) &&
+      /ptz_cgi/.test(ptzCpp) &&
+      ptzCpp.indexOf('ISAPI/PTZCtrl') === -1 &&
+      /action=Stop/.test(ptzCpp) &&
+      /ZoomAdd/.test(ptzCpp));
+check('空口令或 PASSWORD 占位按 admin 登录球机',
+      /password == "PASSWORD"/.test(ptzCpp) &&
+      /pc.password == "PASSWORD"/.test(
+        fs.readFileSync(path.join(__dirname, '..', 'rk3588', 'src', 'robot_service.cpp'), 'utf8')));
+check('双光画面上能切画中画模式',
+      /id="btn-ptz-pip"/.test(html) &&
+      /ptzball\.js/.test(html) &&
+      /热像主图/.test(ptzJs) &&
+      /t: 'ptz_pip'/.test(ptzJs) &&
+      /X30PtzBall\.init/.test(appJs) &&
+      /X30PtzBall\.move/.test(appJs));
+check('App 直发球机 CGI，2.4G 小摇杆不依赖网关 ISAPI',
+      /cameraGetFire/.test(ptzJs) &&
+      /cameraGetFire/.test(radioBridge) &&
+      /class CameraCgi/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')));
+check('SW2 三档互斥切指标开关气体',
+      /function selectHud/.test(appJs) &&
+      /ch6Toggle/.test(read('gamepad.js')) &&
+      /return 'telem'/.test(read('gamepad.js')) &&
+      /return 'switch'/.test(read('gamepad.js')) &&
+      /gas: \{ ch: 8 \}/.test(read('gamepad.js')) === false);
 check('网页打开时指标默认隐藏',
       /telemetry[\s\S]*classList\.add\('hidden'\)/.test(appJs) &&
       /class="[^"]*\btelemetry\b[^"]*\bhidden\b/.test(html));
@@ -1114,15 +1229,10 @@ check('按住说话时闭嘴',
       /X30Media\.talking/.test(voiceJs));
 // 语音是本机偏好，网关没开在线改配置时也得够得着这个开关 ——
 // 以前那种情况下点标题什么都不发生。
-check('设置里有遥控器通道探测',
-      !!htmlIds['set-rcprobe-box'] &&
-      !!htmlIds['rc-probe-grid'] &&
-      !!htmlIds['rc-probe-log'] &&
-      /rcprobe\.js/.test(html) &&
-      /X30RcProbe\.start/.test(read('settings.js')) &&
-      /X30RcProbe\.stop/.test(read('settings.js')) &&
-      /setMuted\(true\)/.test(read('rcprobe.js')) &&
-      /key !== 'estop'/.test(read('gamepad.js')));
+check('设置里不再有遥控器探测',
+      !htmlIds['set-rcprobe-box'] &&
+      html.indexOf('rcprobe.js') === -1 &&
+      read('settings.js').indexOf('X30RcProbe') === -1);
 check('语音开关在设置面板里且够得着',
       !!htmlIds['set-voice'] &&
       !!htmlIds['set-voice-hint'] &&

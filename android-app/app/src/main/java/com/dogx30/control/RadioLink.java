@@ -217,6 +217,7 @@ final class RadioLink {
     private boolean udpBound;
     /** 当前钉住的进程默认网络，null 表示没钉、跟系统默认走。 */
     @Nullable private Network pinnedNet;
+    private String pinnedIp = "";
 
     private final Runnable loop = this::onTick;
     private final Runnable monitorLoop = this::pollBodyMonitor;
@@ -333,6 +334,15 @@ final class RadioLink {
 
     synchronized boolean isLinkReady() {
         return enabled && sentOk > 0;
+    }
+
+    @Nullable
+    Network meshNetwork() {
+        return findMeshNet();
+    }
+
+    synchronized String meshDiag() {
+        return "nets=" + allV4() + " ifaces=" + osIfaces();
     }
 
     synchronized String statusJson() {
@@ -1202,7 +1212,10 @@ final class RadioLink {
         netCb = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network network) {
-                onRadio(RadioLink.this::openUdp);
+                onRadio(() -> {
+                    openUdp();
+                    pinProcess();
+                });
             }
         };
         try {
@@ -1263,12 +1276,39 @@ final class RadioLink {
     private synchronized void pinProcess() {
         ConnectivityManager cm = connectivity();
         if (cm == null) return;
-        Network want = (enabled && !udpBound) ? null : findWifi();
-        if (want == null ? pinnedNet == null : want.equals(pinnedNet)) return;
+        // 2.4G 已开但 UDP 还没绑上网卡：必须把进程解钉，让系统走 ar_net0。
+        if (enabled && !udpBound) {
+            if (pinnedNet == null) return;
+            try {
+                cm.bindProcessToNetwork(null);
+                pinnedNet = null;
+                pinnedIp = "";
+                Log.i(TAG, "unpin for radio");
+            } catch (Exception e) {
+                Log.w(TAG, "unpin", e);
+            }
+            return;
+        }
+        Network want = findMeshNet();
+        if (want == null) {
+            // MESH 期间电台短暂丢失时不要解钉。解钉后默认路由会滑到还活着的
+            // ar_net0（1 网），去 10.2 的 WebSocket 立刻断，于是连上又断。
+            return;
+        }
+        // 只钉 10 网。findMeshNet 在 10 网眨眼时会退回其它 WiFi（常是 1 网），
+        // 改钉过去会把去 10.2 的 WebSocket 掐死，MESH 按钮就黄绿闪。
+        String ip = firstV4(cm.getLinkProperties(want));
+        if (!ip.startsWith("192.168.10.")) return;
+        if (want.equals(pinnedNet) || ip.equals(pinnedIp)) return;
+        // 网关 TCP 还活着时不要换 Network 对象。MESH 电台常每秒重报一次，
+        // 再 bind 就会拆掉 10.2 的 WebSocket，按钮看着绿、横幅却一直「MESH 已断」。
+        if (NativeWs.isAnyLive() && pinnedIp.startsWith("192.168.10.")) return;
+        if (isTenNet(pinnedNet)) return;
         try {
             cm.bindProcessToNetwork(want);
             pinnedNet = want;
-            Log.i(TAG, "pin " + want);
+            pinnedIp = ip;
+            Log.i(TAG, "pin " + want + " " + ip);
         } catch (Exception e) {
             Log.w(TAG, "pin", e);
         }
@@ -1276,34 +1316,60 @@ final class RadioLink {
 
     @Nullable
     private Network findWifi() {
+        return findMeshNet();
+    }
+
+    /**
+     * 遥控进程必须从 10 网出。板上 ping 192.168.10.200 通，只说明电台在；
+     * App 若被钉到 / 默认走到 ar_net0（1.11），去 10.2 的 WebSocket 就会连上又断。
+     * 10 网可能是 WiFi，也可能是 USB/以太网 MESH 电台，所以按地址选，不按网卡名。
+     */
+    @Nullable
+    private Network findMeshNet() {
         ConnectivityManager cm = connectivity();
         if (cm == null) return null;
         try {
             Network[] all = cm.getAllNetworks();
             if (all == null) return null;
+            Network wlan = null;
             Network fallback = null;
             for (Network n : all) {
                 NetworkCapabilities c = cm.getNetworkCapabilities(n);
-                if (c == null || !c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue;
                 LinkProperties lp = cm.getLinkProperties(n);
-                if (lp == null || firstV4(lp).isEmpty()) continue;
+                if (c == null || lp == null) continue;
+                String ip = firstV4(lp);
+                if (ip.isEmpty()) continue;
                 String iface = lp.getInterfaceName();
-                // MESH 是隔离局域网，通常故意没有 INTERNET capability。优先真正的
-                // wlan 客户端口；不能再用 INTERNET 过滤，否则切回 MESH 会解绑到
-                // Android 默认的 ar_net0，WebSocket/控制权随即全部失效。
-                if (iface != null && (iface.startsWith("wlan") || iface.startsWith("wifi"))) {
-                    return n;
+                if (iface != null && (iface.startsWith("ar_") || iface.startsWith("dummy"))) {
+                    continue;
                 }
-                if (fallback == null
+                if (ip.startsWith("192.168.10.")) return n;
+                if (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        && iface != null
+                        && (iface.startsWith("wlan") || iface.startsWith("wifi"))) {
+                    if (wlan == null) wlan = n;
+                } else if (fallback == null
+                        && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                         && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
                     fallback = n;
                 }
             }
-            return fallback;
+            return wlan != null ? wlan : fallback;
         } catch (Exception e) {
-            Log.w(TAG, "findWifi", e);
+            Log.w(TAG, "findMeshNet", e);
         }
         return null;
+    }
+
+    private boolean isTenNet(@Nullable Network n) {
+        if (n == null) return false;
+        ConnectivityManager cm = connectivity();
+        if (cm == null) return false;
+        try {
+            return firstV4(cm.getLinkProperties(n)).startsWith("192.168.10.");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static final class AirIf {

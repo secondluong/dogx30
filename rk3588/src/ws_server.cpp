@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -327,13 +328,27 @@ void WsServer::AcceptLoop() {
     if (ready <= 0) continue;
     if (!running_.load()) break;
 
-    const int fd = static_cast<int>(::accept(listen_fd_, nullptr, nullptr));
+    sockaddr_in peer{};
+#if defined(_WIN32)
+    int peer_len = sizeof(peer);
+#else
+    socklen_t peer_len = sizeof(peer);
+#endif
+    const int fd = static_cast<int>(
+        ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len));
     if (fd < 0) continue;
+
+    char peer_ip[INET_ADDRSTRLEN] = {};
+    ::inet_ntop(AF_INET, &peer.sin_addr, peer_ip, sizeof(peer_ip));
+    std::printf("[ws] 接入 %s:%u\n", peer_ip, ntohs(peer.sin_port));
 
     // 控制指令是小包高频，Nagle 会把它们攒起来，直接拉高遥控延迟。
     int nodelay = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
                  reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+    int keepalive = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE,
+                 reinterpret_cast<const char*>(&keepalive), sizeof(keepalive));
 
     // 发送超时。没有它，一个读得慢的客户端会把 send() 卡死，而 send() 持有
     // 该连接的发送锁 —— 后果是 10 Hz 遥测广播跟着卡住，所有人的界面一起冻。
@@ -484,7 +499,12 @@ void WsServer::SessionLoop(std::shared_ptr<Connection> conn) {
 
   while (running_.load() && conn->open.load()) {
     const ssize_t_compat n = ::recv(conn->fd, buf, sizeof(buf), 0);
-    if (n <= 0) break;
+    if (n <= 0) {
+      std::printf("[ws] 客户端 %llu 读结束 n=%zd errno=%d\n",
+                  static_cast<unsigned long long>(conn->id),
+                  static_cast<ssize_t>(n), errno);
+      break;
+    }
     rx.append(buf, static_cast<size_t>(n));
 
     // 一个 TCP 段里可能有多帧，也可能半帧，循环直到攒不出完整帧为止。
@@ -550,6 +570,8 @@ void WsServer::SessionLoop(std::shared_ptr<Connection> conn) {
           }
           break;
         case 0x8:  // close
+          std::printf("[ws] 客户端 %llu 发了关闭帧\n",
+                      static_cast<unsigned long long>(conn->id));
           conn->SendFrame(0x8, "");
           conn->open.store(false);
           break;

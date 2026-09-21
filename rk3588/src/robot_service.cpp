@@ -156,6 +156,9 @@ bool RobotService::Start(std::string* error) {
           if (!pass.empty()) pc.password = pass;
         }
       }
+      // 现场球机口令是 admin；media.json 里的 PASSWORD 是占位，不能当真去 MD5。
+      if (pc.user.empty()) pc.user = "admin";
+      if (pc.password.empty() || pc.password == "PASSWORD") pc.password = "admin";
       if (!pc.host.empty()) {
         ptz_ = std::make_unique<PtzClient>(std::move(pc));
         ptz_->Start();
@@ -423,6 +426,9 @@ void RobotService::HandleConfigGet(WsServer::ClientId id) {
   const std::string yml = MediamtxPathBeside(cfg_.media_config);
   if (shown.ptz_vis_rtsp.empty()) {
     shown.ptz_vis_rtsp = ReadMediamtxSource(yml, "ptz_vis_main");
+  }
+  if (shown.ptz_vis_rtsp.empty()) {
+    shown.ptz_vis_rtsp = kDefaultPtzVisRtsp;
   }
   if (shown.ptz_ir_rtsp.empty()) {
     shown.ptz_ir_rtsp = ReadMediamtxSource(yml, "ptz_ir_main");
@@ -825,6 +831,31 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
       SendError(id, "unknown_command", "未知指令");
       return;
     }
+    return;
+  }
+
+  if (t == "ptz_pip") {
+    if (!ptz_) {
+      SendError(id, "ptz_unconfigured", "布控球未配置，检查设置里的双光 RTSP");
+      return;
+    }
+    PtzPip pip;
+    if (msg.Has("mode")) {
+      pip = ptz_->SetPip(static_cast<int>(msg.Number("mode", 0)),
+                         static_cast<int>(msg.Number("size", -1)),
+                         static_cast<int>(msg.Number("pos", -1)));
+    } else {
+      pip = ptz_->GetPip();
+    }
+    JsonWriter w;
+    w.BeginObject()
+        .Key("t", "ptz_pip")
+        .Key("ok", pip.ok)
+        .Key("mode", pip.mode)
+        .Key("size", pip.size)
+        .Key("pos", pip.pos)
+        .EndObject();
+    server_.Send(id, w.Take());
     return;
   }
 

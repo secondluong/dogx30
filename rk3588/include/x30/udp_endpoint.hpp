@@ -19,7 +19,9 @@ class UdpEndpoint {
 
   // 绑定本地端口用于接收遥测。local_port 为 0 时由系统分配（此时收不到
   // 运动主机的单播遥测，因为 network.toml 里登记的是固定端口）。
+  // local_ip 非空时绑到该地址，避免双地址网卡用 10.2 去打狗。
   bool Open(uint16_t local_port, std::string* error);
+  bool Open(uint16_t local_port, const std::string& local_ip, std::string* error);
 
   // 设置默认发送目标，即运动主机 192.168.1.103:43893。
   bool SetPeer(const std::string& ip, uint16_t port, std::string* error);

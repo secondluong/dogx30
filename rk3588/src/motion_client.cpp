@@ -5,6 +5,12 @@
 #include <cstdio>
 #include <cstring>
 
+#if !defined(_WIN32)
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#endif
+
 namespace x30 {
 namespace {
 
@@ -24,6 +30,38 @@ bool Extract(const uint8_t* data, int len, T* out) {
   if (len < static_cast<int>(sizeof(CommandHead) + sizeof(T))) return false;
   std::memcpy(out, data + sizeof(CommandHead), sizeof(T));
   return true;
+}
+
+// 双地址网卡上内核可能用 10.2 去打 1.103。运动主机只给 network.toml
+// 里登记的 1 网地址回遥测，于是 App 上「已连接 / 狗未接通」来回闪。
+std::string LocalIpv4ForPeer(const std::string& peer) {
+#if defined(_WIN32)
+  (void)peer;
+  return {};
+#else
+  in_addr want{};
+  if (::inet_pton(AF_INET, peer.c_str(), &want) != 1) return {};
+  ifaddrs* ifs = nullptr;
+  if (::getifaddrs(&ifs) != 0) return {};
+  std::string found;
+  for (ifaddrs* p = ifs; p; p = p->ifa_next) {
+    if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET || !p->ifa_netmask) {
+      continue;
+    }
+    const auto* sin = reinterpret_cast<sockaddr_in*>(p->ifa_addr);
+    const auto mask =
+        reinterpret_cast<sockaddr_in*>(p->ifa_netmask)->sin_addr.s_addr;
+    if ((sin->sin_addr.s_addr & mask) != (want.s_addr & mask)) continue;
+    char buf[INET_ADDRSTRLEN] = {};
+    if (::inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf)) &&
+        std::strcmp(buf, "127.0.0.1") != 0) {
+      found = buf;
+      break;
+    }
+  }
+  ::freeifaddrs(ifs);
+  return found;
+#endif
 }
 
 }  // namespace
@@ -52,7 +90,8 @@ MotionClient::~MotionClient() { Stop(); }
 bool MotionClient::Start(std::string* error) {
   if (running_.load()) return true;
 
-  if (!tx_.Open(cfg_.local_port, error)) return false;
+  const std::string bind_ip = LocalIpv4ForPeer(cfg_.robot_ip);
+  if (!tx_.Open(cfg_.local_port, bind_ip, error)) return false;
   if (!tx_.SetPeer(cfg_.robot_ip, cfg_.robot_port, error)) return false;
 
   running_.store(true);

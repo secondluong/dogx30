@@ -275,6 +275,7 @@ ConfigLoad LoadGatewaySettings(const std::string& path, GatewaySettings* out,
     }
   }
 
+  if (s.ptz_vis_rtsp.empty()) s.ptz_vis_rtsp = kDefaultPtzVisRtsp;
   *out = s;
   return ConfigLoad::kOk;
 }
@@ -730,6 +731,14 @@ std::string DeriveHikSubRtsp(const std::string& main_url) {
   const std::string tail = main_url.substr(main_url.size() - 3);
   if (tail == "101") return main_url.substr(0, main_url.size() - 3) + "102";
   if (tail == "201") return main_url.substr(0, main_url.size() - 3) + "202";
+  // 不少双光球用 /11 主码、/12 子码，不是海康的 101/102。
+  // 必须看路径末尾的 "/11"，别把 rtsp://host:11 的端口改掉。
+  if (main_url.size() >= 3 && main_url.compare(main_url.size() - 3, 3, "/11") == 0) {
+    return main_url.substr(0, main_url.size() - 2) + "12";
+  }
+  if (main_url.size() >= 3 && main_url.compare(main_url.size() - 3, 3, "/21") == 0) {
+    return main_url.substr(0, main_url.size() - 2) + "22";
+  }
   return "";
 }
 
@@ -896,10 +905,33 @@ std::string InferRtspCodec(const std::string& url) {
   return "";
 }
 
+// /11、/12 这类一位或两位数字路径。海康 Channels/101 是三位，不走这里，
+// 继续沿用 media.json 的 h265 主码 + h264 子码。
+static bool LooksLikeShortStreamPath(const std::string& url) {
+  std::string rest = url;
+  if (rest.size() >= 7 && rest.compare(0, 7, "rtsp://") == 0) rest = rest.substr(7);
+  const size_t slash = rest.rfind('/');
+  if (slash == std::string::npos) return false;
+  std::string last = rest.substr(slash + 1);
+  const size_t q = last.find('?');
+  if (q != std::string::npos) last = last.substr(0, q);
+  if (last.empty() || last.size() > 2) return false;
+  for (char c : last) {
+    if (c < '0' || c > '9') return false;
+  }
+  return true;
+}
+
 std::string EffectivePtzCodec(const std::string& configured,
                               const std::string& rtsp_url) {
   if (!configured.empty()) return configured;
-  return InferRtspCodec(rtsp_url);
+  const std::string guessed = InferRtspCodec(rtsp_url);
+  if (!guessed.empty()) return guessed;
+  // 路径认不出编码时，media.json 默认主码是 h265。遥控端 WebView 普遍
+  // 报不支持 H.265，结果就是「不支持该源主码流的编码格式」然后黑屏。
+  // /11 这种短路径按 H.264 编排，让平板能拿到这一路。
+  if (LooksLikeShortStreamPath(rtsp_url)) return "h264";
+  return "";
 }
 
 }  // namespace x30

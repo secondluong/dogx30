@@ -142,11 +142,27 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 {"t":"media_select","id":"ptz_vis"}
 ```
 
-云台（需要控制权）。App 拨动开关向下时摇杆走这一路，不再发给狗。
+云台（需要控制权）。侦检模式下小摇杆 CH14/CH15 是水平俯仰，CH16 是变倍。
 各轴 -1..1：`pan` 右为正，`tilt` 上为正，`zoom` 拉近为正。
+网关转成球机 `/cgi-bin/anv/ptz_cgi`（账号默认 admin/admin 的 MD5），不是海康 ISAPI。
+App 在能直达球机时也会自己发同一条 CGI，所以 2.4G、没拿到控制权也能转。
 
 ```json
 {"t":"ptz","pan":0.4,"tilt":-0.2,"zoom":0}
+```
+
+画中画显示模式（不需要控制权）。`mode` 0..5：默认 / 变焦主图 / 热像主图 / 左右拼接 / 仅变焦 / 仅热像。
+不带 `mode` 就是读取当前值。副图尺寸、位置不传则沿用球机现有设置。
+
+```json
+{"t":"ptz_pip","mode":2}
+{"t":"ptz_pip"}
+```
+
+服务端回：
+
+```json
+{"t":"ptz_pip","ok":true,"mode":2,"size":0,"pos":0}
 ```
 
 水炮（需要控制权）。侦检模式下小摇杆走上面的 `ptz`；水炮模式下走这两条。
@@ -206,8 +222,8 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 | `cloud_enabled` | 布尔 | 点云开关 |
 | `ros_master` / `ros_host` / `cloud_topic` | 字符串 | 点云的 ROS 参数 |
 | `cloud_hz` / `cloud_points` | 数字 | 点云下行帧率与单帧点数上限 |
-| `ptz_vis_rtsp` / `ptz_ir_rtsp` | 字符串 | 双光布控球白光 / 热成像 RTSP。可空。口令写在地址里，云台从白光地址取主机 |
-| `ptz_vis_codec` / `ptz_ir_codec` | 字符串 | `h264` 或 `h265`。可空：路径含 `/h264`、`/h265` 时按地址猜 |
+| `ptz_vis_rtsp` | 字符串 | 双光布控球一路拼接画面的 RTSP。默认 `rtsp://192.168.1.168:554/11`。云台口令从地址里取主机 |
+| `ptz_vis_codec` / `ptz_ir_codec` | 字符串 | `h264` 或 `h265`。可空：路径含 `/h264`、`/h265` 时按地址猜；`/11` 这类短路径按 `h264`（避免沿用 media.json 的 h265 把旧 WebView 挡掉） |
 
 刻意**不含** `--web` / `--media` 这类文件路径：那些是装机时定的部署布局，
 从一个无 TLS 的网页去改服务端路径只会开出一条目录穿越的口子。

@@ -196,9 +196,11 @@ body {
 html.native-video-on,
 html.native-video-on body,
 html.native-video-on .stage-wrap,
-html.native-video-on #pane-video.is-main { background: transparent; }
+html.native-video-on #pane-video.is-main,
+html.native-video-on #pane-ptz-vis.is-main { background: transparent; }
 /* 这一路不走 <video>，留着只会在画面上盖一层黑。 */
-html.native-video-on #pane-video.is-main .media-video { display: none; }
+html.native-video-on #pane-video.is-main .media-video,
+html.native-video-on #pane-ptz-vis.is-main .media-video { display: none; }
 
 /* ---------- 全屏底图 ---------- */
 
@@ -269,6 +271,27 @@ html.native-video-on #pane-video.is-main .media-video { display: none; }
 .pane-actions .btn {
   background: rgba(28, 34, 48, .78);
   backdrop-filter: blur(6px);
+}
+.ptz-pip-btn {
+  display: none;
+  position: absolute;
+  top: 10px;
+  right: 88px;
+  z-index: 6;
+  max-width: 42vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+}
+.stage.layout-1x1 #pane-ptz-vis.is-main .ptz-pip-btn,
+.stage.layout-2x2 #pane-ptz-vis .ptz-pip-btn {
+  display: inline-flex;
+}
+html.shell-app #pane-ptz-vis.is-main .ptz-pip-btn {
+  display: inline-flex;
+  right: 16px;
 }
 .btn-rec.active {
   background: var(--danger);
@@ -681,14 +704,19 @@ html.native-video-on #pane-video.is-main .media-video { display: none; }
   min-width: 0;
   margin-top: 4px;
 }
-.gas-panel .grid { gap: 8px; }
-.gas-panel .cell {
+.gas-panel .grid,
+.telemetry .grid { gap: 8px; }
+.gas-panel .cell,
+.telemetry .cell {
   padding: 10px 12px;
   min-height: 68px;
   border-radius: 8px;
 }
-.gas-panel .cell b { font-size: 22px; line-height: 1.2; }
-.gas-panel .cell em { font-size: 13px; }
+.gas-panel .cell b,
+.telemetry .cell b { font-size: 22px; line-height: 1.2; }
+.gas-panel .cell em,
+.telemetry .cell em { font-size: 13px; }
+.telemetry .cell label { font-size: 13px; color: var(--muted); }
 .cell b { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1.25; }
 .cell em { font-size: 10px; color: var(--muted); font-style: normal; }
 
@@ -822,7 +850,12 @@ html.native-video-on #pane-video.is-main .media-video { display: none; }
   font-weight: 600;
 }
 
-.set-unlock, .set-form { padding: 14px 16px; overflow-y: auto; }
+.set-unlock, .set-form { padding: 14px 16px; }
+.set-form {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 .set-unlock p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 
 .set-sect {
@@ -1022,8 +1055,8 @@ html.shell-app .pane-actions { display: none !important; }
 html.shell-app .bar-view { display: block; }
 html.shell-app #btn-radio { display: inline-block; }
 html.shell-app #btn-control { display: none !important; }
-/* MESH 且一切正常时这颗芯片也不必占地方：网关通没通看 MESH 按钮的颜色，
-   它只在「重连中」「狗未接通」这些网关连上之后才知道的事情上才露出来。 */
+/* MESH 且网关已连时这颗芯片不必占地方：通没通看 MESH 按钮的颜色，
+   它只在「重连中」时才露出来。 */
 html.shell-app #chip-link.online,
 html.shell-app #chip-batt { display: none !important; }
 /* 顶栏窄，芯片换行会被裁掉，版本戳就凭空消失了。 */
@@ -1052,37 +1085,23 @@ html.shell-app .stage .pane:not(.is-main) { display: none !important; }
 html.shell-app .pip-hint { display: none !important; }
 html.shell-app .stage.layout-1x1 .pane.is-main .pane-actions { right: 16px; }
 
-/* 指标常显左上：四列压矮，避免被裁掉。 */
+/* 指标 / 开关 / 气体叠在画面正中，拨 SW2 时不用低头找角落。 */
 .hud-info {
   position: absolute;
   z-index: 14;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  top: 10px;
-  width: min(560px, calc(100% - 108px));
-  max-height: calc(100% - 24px);
-  overflow: visible;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(780px, calc(100% - 40px));
+  max-height: calc(100% - 80px);
+  overflow: auto;
   pointer-events: none;
 }
-.hud-info:has(#gas-panel:not(.hidden)) {
-  width: min(780px, calc(100% - 108px));
-}
-.stage-wrap:has(.layout-1x1) .hud-info {
-  left: calc(10px + min(220px, 28vw) + 8px);
-  top: 50px;
-}
-.stage-wrap:has(.layout-2x2) .hud-info {
-  left: 16px;
-  top: 50px;
-}
 html.shell-app .hud-info {
-  left: 10px;
-  top: 10px;
-  width: min(640px, calc(100% - 20px));
-}
-html.shell-app .hud-info:has(#gas-panel:not(.hidden)) {
-  width: min(800px, calc(100% - 20px));
+  width: min(800px, calc(100% - 40px));
 }
 .hud-info > .panel {
   pointer-events: auto;
@@ -1364,9 +1383,6 @@ html.radio-24.pose-known .dog-prone .hud-stand .hud-walk { display: none !import
   .acc-pop { left: 50%; right: auto; transform: translateX(-50%); }
   .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .sw-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .hud-info { width: min(520px, calc(100% - 20px)); }
-  .hud-info:has(#gas-panel:not(.hidden)) {
-    width: min(640px, calc(100% - 20px));
-  }
+  .hud-info { width: min(640px, calc(100% - 24px)); }
   .hud-gp { right: 16px; top: 88px; }
 }

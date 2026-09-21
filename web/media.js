@@ -197,8 +197,11 @@ function playTile(plan, tile, showBanner) {
       setIdle(tile.idle, true);
       stopSource(tile.id);
       playingPath.delete(tile.id);
-      if (tile.id === 'dog_cam' && showBanner) {
+      if (!showBanner) return;
+      if (tile.id === 'dog_cam') {
         showBanner(`机身相机拉流失败：${e.message}`, 6000);
+      } else if (tile.id === 'ptz_vis') {
+        showBanner(`双光视频拉流失败：${e.message}`, 6000);
       }
     });
 }
@@ -273,17 +276,22 @@ function onMediaPlan(plan, showBanner) {
 // 平板同时连着 WiFi 时网关那一路也够得到，于是同一只相机被拉两遍：白占本来就窄的
 // 链路，还要跟原生抢同一块占位图 —— 现场看到的就是「有时候从 RTSP 拉、有时候不」。
 // 这一路交给原生，网关那侧就别再要了。
-function nativeOwnsDogCam() {
+function nativeOwns(id) {
   return typeof document !== 'undefined' &&
-         document.documentElement.classList.contains('native-video-on');
+         document.documentElement.getAttribute('data-native-video') === id;
+}
+
+function nativeOwnsDogCam() {
+  return nativeOwns('dog_cam');
 }
 
 function wantedTiles(plan) {
-  const own = nativeOwnsDogCam();
-  if (!inAppShell()) return VIDEO_TILES.filter((t) => !(own && t.id === 'dog_cam'));
-  const main = (media.layout && media.layout.main) || plan.main;
+  if (!inAppShell()) return VIDEO_TILES.filter((t) => !nativeOwns(t.id));
+  const layout = media.layout || {};
+  const raw = layout.main || plan.main;
+  const main = raw === 'dual' ? 'ptz_vis' : raw;
   if (!main || main === 'cloud') return [];
-  if (own && main === 'dog_cam') return [];
+  if (nativeOwns(main)) return [];
   return VIDEO_TILES.filter((t) => t.id === main);
 }
 
@@ -295,7 +303,7 @@ function syncTiles(plan, showBanner) {
     } else {
       stopSource(tile.id);
       // 原生在放这一路时占位图归它管：它出画面后要收起来，这里再显就盖住画面了。
-      if (!(tile.id === 'dog_cam' && nativeOwnsDogCam())) setIdle(tile.idle, true);
+      if (!nativeOwns(tile.id)) setIdle(tile.idle, true);
     }
   }
 }
@@ -303,12 +311,13 @@ function syncTiles(plan, showBanner) {
 function onLayout(layout) {
   media.layout = layout || null;
   if (media.plan) syncTiles(media.plan, talkBanner);
-  if (!layout || !layout.main || layout.main === 'cloud') return;
+  const main = layout.main === 'dual' ? 'ptz_vis' : layout.main;
+  if (!layout || !main || main === 'cloud') return;
   // 桌面布控球只看 H.264 子码流，不要占掉全码率槽位，否则 App 反而拿不到 1080p。
-  if (!webH265Ok() && (layout.main === 'ptz_vis' || layout.main === 'ptz_ir')) {
+  if (!webH265Ok() && main === 'ptz_vis') {
     return;
   }
-  if (sendRef) sendRef({ t: 'media_select', id: layout.main });
+  if (sendRef) sendRef({ t: 'media_select', id: main });
 }
 
 let sendRef = null;

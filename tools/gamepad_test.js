@@ -86,11 +86,13 @@ var auxZCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
               1500, 1500, 1500, 1500, 1500, 2000];
 var auxZ = G.g20Channels(auxZCh, 0.12, 0.4);
 check('CH16 前推是放大', auxZ.auxZoom > 0.9, 'z=' + auxZ.auxZoom);
-check('CH5 低位是狗身视频', G.ch5Toggle(1050) === 'dog_cam');
-check('CH5 中位不动作', G.ch5Toggle(1500) === '');
-check('CH5 高位是点云', G.ch5Toggle(1950) === 'cloud');
-check('CH6 低位是热成像', G.ch6Toggle(1050) === 'ptz_ir');
-check('CH6 高位是白光', G.ch6Toggle(1950) === 'ptz_vis');
+check('CH5 上是点云', G.ch5Toggle(1950) === 'cloud');
+check('CH5 中是狗身视频', G.ch5Toggle(1500) === 'dog_cam');
+check('CH5 下是双光视频', G.ch5Toggle(1050) === 'ptz_vis');
+check('CH5 上电 0 不当成档位', G.ch5Toggle(0) === '');
+check('CH6 上是指标', G.ch6Toggle(1950) === 'telem');
+check('CH6 中是开关', G.ch6Toggle(1500) === 'switch');
+check('CH6 下是气体', G.ch6Toggle(1050) === 'gas');
 check('滚轮下是增加', G.wheelDetent(1050) === 'down');
 check('滚轮中位回弹不算动作', G.wheelDetent(1500) === 'mid');
 check('滚轮上是减少', G.wheelDetent(1950) === 'up');

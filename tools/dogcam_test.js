@@ -46,14 +46,20 @@ function harness() {
   }
 
   h.nodes['pane-video'] = node('');
+  h.nodes['pane-ptz-vis'] = node('');
   h.nodes['media-idle'] = node('等待拉流…');
   h.nodes['media-idle-ptz-vis'] = node('未接通时会停在这里');
   h.nodes['media-idle-ptz-ir'] = node('未接通时会停在这里');
   Object.keys(h.nodes).forEach(function (k) {
     h.nodes[k].classList.owner = h.nodes[k];
   });
-  // 平板壳里机身相机就是当前主画面。
-  h.nodes['pane-video'].classList.contains = function (c) { return c === 'is-main'; };
+  h.main = 'dog_cam';
+  h.nodes['pane-video'].classList.contains = function (c) {
+    return c === 'is-main' && h.main === 'dog_cam';
+  };
+  h.nodes['pane-ptz-vis'].classList.contains = function (c) {
+    return c === 'is-main' && h.main === 'ptz_vis';
+  };
 
   var store = {};
   var sandbox = {
@@ -72,7 +78,11 @@ function harness() {
         resync: function () { h.resyncs++; },
       },
       X30Native: {
+        getGatewayHost: function () { return '192.168.10.2'; },
         videoStart: function (u) { h.calls.push('start ' + u); },
+        videoStartOn: function (u, bind) {
+          h.calls.push('start ' + u + (bind ? ' radio' : ' lan'));
+        },
         videoStop: function () { h.calls.push('stop'); },
         videoRect: function (x, y, w, hh) {
           h.calls.push('rect ' + x + ',' + y + ',' + w + ',' + hh);
@@ -82,6 +92,7 @@ function harness() {
     document: {
       addEventListener: function () {},
       documentElement: {
+        attrs: {},
         classList: {
           add: function (c) { h.cls[c] = true; },
           remove: function (c) { delete h.cls[c]; },
@@ -89,6 +100,9 @@ function harness() {
             return c === 'radio-24' ? h.on24 : !!h.cls[c];
           },
         },
+        setAttribute: function (k, v) { this.attrs[k] = v; },
+        removeAttribute: function (k) { delete this.attrs[k]; },
+        getAttribute: function (k) { return this.attrs[k] || null; },
       },
       getElementById: function (id) { return h.nodes[id] || null; },
     },
@@ -103,27 +117,31 @@ function harness() {
   h.mod = sandbox.window.X30DogCam;
   h.idle = function () { return h.nodes['media-idle'].small.textContent; };
   h.ptz = function () { return h.nodes['media-idle-ptz-vis'].small.textContent; };
+  h.ir = function () { return h.nodes['media-idle-ptz-ir'].small.textContent; };
   return h;
 }
 
-// --- MESH 下必须完全不插手 ---------------------------------------------------
-console.log('\n== MESH 下不碰这一路 ==');
+// --- MESH 下原生拉板上 MediaMTX ---------------------------------------------
+console.log('\n== MESH 下拉板上转推 ==');
 
 var h = harness();
 h.mod.init();
-check('不去开原生播放器', h.calls.length === 0, JSON.stringify(h.calls));
-check('不改布控球那两格的说明', h.ptz() === '未接通时会停在这里', h.ptz());
-check('不把网页背景透掉', !h.cls['native-video-on']);
+check('MESH 上机身走板上 10.2:8554，不绑射频',
+      h.calls[0] === 'rect 0,128,2560,1200' &&
+      h.calls[1] === 'start rtsp://192.168.10.2:8554/dog_cam_main lan',
+      JSON.stringify(h.calls));
+check('把网页背景透出去', !!h.cls['native-video-on']);
 
 // --- 切到 2.4G ---------------------------------------------------------------
 console.log('\n== 切到 2.4G ==');
 
+h = harness();
 h.on24 = true;
-h.mod.onRadioPath();
+h.mod.init();
 // 先报矩形再开流：反过来的话原生会先按上一次（或整屏）的位置画一下，画面会跳。
 check('先报矩形，再开流',
       h.calls[0] === 'rect 0,128,2560,1200' &&
-      h.calls[1] === 'start rtsp://192.168.1.105:8554/test',
+      h.calls[1] === 'start rtsp://192.168.1.105:8554/test radio',
       JSON.stringify(h.calls));
 // 网页是 CSS 像素、原生是设备像素，中间差一个 devicePixelRatio（这里是 2）。
 check('矩形按 devicePixelRatio 换算成设备像素',
@@ -131,8 +149,10 @@ check('矩形按 devicePixelRatio 换算成设备像素',
 check('把网页背景透出去，否则看不到底下的画面', !!h.cls['native-video-on']);
 check('占位图说明正在拉哪个地址',
       h.idle().indexOf('rtsp://192.168.1.105:8554/test') !== -1, h.idle());
-check('布控球如实标成 2.4G 下不可用',
-      h.ptz().indexOf('布控球在网关那侧') !== -1, h.ptz());
+check('热成像如实标成 2.4G 下不可用',
+      h.ir().indexOf('热成像在网关那侧') !== -1, h.ir());
+check('双光不再标成没有（球在 192.168.1.x，能直拉）',
+      h.ptz() === '未接通时会停在这里', h.ptz());
 // 平板同时连着 WiFi 时网关那一路也够得到机身相机。接手时得让 media.js 重算，
 // 否则同一只相机被拉两遍：白占本来就窄的 2.4G，两边还抢同一块占位图。
 check('接手时通知 media.js 让出这一路', h.resyncs === 1, String(h.resyncs));
@@ -182,24 +202,21 @@ check('停流并把背景恢复成不透明',
 h.hidden = false;
 h.mod.onRadioPath();
 check('回前台重新开流',
-      h.calls.indexOf('start rtsp://192.168.1.105:8554/test') !== -1,
+      h.calls.indexOf('start rtsp://192.168.1.105:8554/test radio') !== -1,
       JSON.stringify(h.calls));
 
-// --- 切回 MESH --------------------------------------------------------------
+// --- 切回 MESH：换板上转推，不停原生 ---------------------------------------
 console.log('\n== 切回 MESH ==');
 
 h.calls.length = 0;
 h.resyncs = 0;
 h.on24 = false;
 h.mod.onRadioPath();
-check('停掉原生这一路', h.calls.length === 1 && h.calls[0] === 'stop',
+check('改拉板上 MediaMTX，仍不绑射频',
+      h.calls.indexOf('start rtsp://192.168.10.2:8554/dog_cam_main lan') !== -1,
       JSON.stringify(h.calls));
-check('交回时通知 media.js 接手', h.resyncs === 1, String(h.resyncs));
-check('背景恢复不透明，否则 MESH 的 WebRTC 画面会被黑底盖住',
-      !h.cls['native-video-on']);
-// 占位图交回 media.js 管，留着 2.4G 的话会让人以为还在走那条路。
-check('占位图说明还原', h.idle() === '等待拉流…', h.idle());
-check('布控球说明还原', h.ptz() === '未接通时会停在这里', h.ptz());
+check('同一路只换地址，不必再惊动 media.js', h.resyncs === 0, String(h.resyncs));
+check('MESH 原生画面仍把网页背景透掉', !!h.cls['native-video-on']);
 
 // --- 地址可改 ---------------------------------------------------------------
 console.log('\n== 相机地址 ==');
@@ -216,8 +233,19 @@ h.calls.length = 0;
 h.mod.setUrl('rtsp://192.168.1.200:8554/live');
 check('放着的时候改地址会按新地址重开',
       h.calls.indexOf('stop') !== -1 &&
-      h.calls.indexOf('start rtsp://192.168.1.200:8554/live') !== -1,
+      h.calls.indexOf('start rtsp://192.168.1.200:8554/live radio') !== -1,
       JSON.stringify(h.calls));
+
+// --- MESH 上双光也走板上转推 ------------------------------------------------
+console.log('\n== MESH 上双光走板上转推 ==');
+
+h = harness();
+h.main = 'ptz_vis';
+h.mod.init();
+check('MESH 双光拉 10.2:8554/ptz_vis_main，不绑射频',
+      h.calls.indexOf('start rtsp://192.168.10.2:8554/ptz_vis_main lan') !== -1,
+      JSON.stringify(h.calls));
+check('MESH 双光也把网页背景透掉', !!h.cls['native-video-on']);
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
 process.exit(fail === 0 ? 0 : 1);

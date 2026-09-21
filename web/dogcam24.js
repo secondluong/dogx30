@@ -1,52 +1,63 @@
-// 2.4G 链路下的机身相机画面。
-//
-// 为什么这一路不能和 MESH 共用同一套代码：2.4G 是**遥控器与狗直连** —— 接收机挂在
-// 机身交换机上，网关开发板根本不在这条链路上。所以拿不到网关下发的媒体计划，
-// 也够不到 MediaMTX，网页那条 WebRTC 整条链都不成立。狗自己只提供 RTSP
-// （感知主机 8554），而 WebView 放不了 RTSP —— 这就是 2.4G 下一直没画面的原因。
-//
-// 办法是让安卓原生解码，画面垫在 WebView 底下。网页这边只做三件事：
-// 决定什么时候要放、把画面格子的屏幕矩形报给原生、把那块区域的背景透出去。
-// 反过来原生把播放状态报回来，占位图上就能显示真实原因而不是干等。
+// App 原生 RTSP：只在 2.4G。射频占着 1 网，WiFi/MESH 必须用 10 网，
+// 平板 MESH 上够不到球机 192.168.1.168，双光改走网关 WebRTC（10.2:8889）。
+// 机身相机同样：2.4G 直拉 RTSP，MESH 走网关。
 
 'use strict';
 
-// 机身相机地址。厂家拓扑里感知主机是 192.168.1.105，RTSP 由它把 USB 相机转出来
-// （见 docs/media-architecture.md 第十、十一节）。允许在设置里改：现场换过相机或
-// 改过端口时，不该为此重新编包。
 const DOGCAM_KEY = 'x30.dogcam24.url';
 const DOGCAM_DEFAULT = 'rtsp://192.168.1.105:8554/test';
+const PTZ_KEY = 'x30.ptz_vis.rtsp';
+const PTZ_DEFAULT = 'rtsp://192.168.1.168:554/11';
 
-// 矩形有变化才下发。原生那边一次 setRect 会重排 SurfaceView，白扔没必要的重排
-// 会让画面闪。
 let lastRect = '';
 let playing = false;
 let lastErr = '';
 let lastBuf = 0;
 let wantedNow = false;
-let idleText = '';
+let playKeyNow = '';
+const idleOrig = {};
 
 function nativeVideo() {
   const n = window.X30Native;
   return n && typeof n.videoStart === 'function' ? n : null;
 }
 
-function url() {
+function stored(key, fallback) {
   try {
-    const v = window.localStorage.getItem(DOGCAM_KEY);
+    const v = window.localStorage.getItem(key);
     if (v) return v;
   } catch (e) { /* 存不了就用默认值 */ }
-  return DOGCAM_DEFAULT;
+  return fallback;
+}
+
+function url() {
+  return stored(DOGCAM_KEY, DOGCAM_DEFAULT);
+}
+
+function ptzUrl() {
+  return stored(PTZ_KEY, PTZ_DEFAULT);
+}
+
+function remember(key, fallback, next) {
+  const v = (next || '').trim();
+  try {
+    if (v && v !== fallback) window.localStorage.setItem(key, v);
+    else window.localStorage.removeItem(key);
+  } catch (e) { /* 记不住就当次有效 */ }
 }
 
 function setUrl(next) {
-  const v = (next || '').trim();
-  try {
-    if (v && v !== DOGCAM_DEFAULT) window.localStorage.setItem(DOGCAM_KEY, v);
-    else window.localStorage.removeItem(DOGCAM_KEY);
-  } catch (e) { /* 记不住就当次有效 */ }
-  // 地址变了要重开，否则还在放旧地址。
+  remember(DOGCAM_KEY, DOGCAM_DEFAULT, next);
   if (playing || wantedNow) {
+    stop();
+    sync();
+  }
+}
+
+function setPtzUrl(next) {
+  const prev = ptzUrl();
+  remember(PTZ_KEY, PTZ_DEFAULT, next);
+  if ((playing || wantedNow) && ptzUrl() !== prev) {
     stop();
     sync();
   }
@@ -56,21 +67,64 @@ function radio24() {
   return document.documentElement.classList.contains('radio-24');
 }
 
-function pane() {
+function gatewayHost() {
+  try {
+    const n = window.X30Native;
+    if (n && typeof n.getGatewayHost === 'function') {
+      const h = String(n.getGatewayHost() || '').trim();
+      if (h) return h;
+    }
+  } catch (e) { /* 用板上默认 10 网地址 */ }
+  return '192.168.10.2';
+}
+
+function visPane() {
+  return document.getElementById('pane-ptz-vis');
+}
+
+function dogPane() {
   return document.getElementById('pane-video');
 }
 
-// 只在「2.4G + 机身相机正当主画面」时放。切到布控球或点云就停 ——
-// 那两路在网关那侧，2.4G 下本来就没有。
-function wanted() {
-  if (!radio24() || !nativeVideo()) return false;
-  if (document.hidden) return false;
-  const p = pane();
-  return !!p && p.classList.contains('is-main');
+function mainId() {
+  const vis = visPane();
+  if (vis && vis.classList.contains('is-main')) return 'ptz_vis';
+  const dog = dogPane();
+  if (dog && dog.classList.contains('is-main')) return 'dog_cam';
+  return '';
 }
 
-// 报给原生的是**设备像素**下的矩形：网页这边一律 CSS 像素，原生那边是像素，
-// 中间差一个 devicePixelRatio。在这里换算掉，原生就不必去猜网页的缩放。
+function pane() {
+  return mainId() === 'ptz_vis' ? visPane() : dogPane();
+}
+
+function playUrl() {
+  if (!radio24()) {
+    const id = mainId();
+    if (id === 'ptz_vis') return 'rtsp://' + gatewayHost() + ':8554/ptz_vis_main';
+    if (id === 'dog_cam') return 'rtsp://' + gatewayHost() + ':8554/dog_cam_main';
+    return '';
+  }
+  return mainId() === 'ptz_vis' ? ptzUrl() : url();
+}
+
+function bindRadio() {
+  return radio24();
+}
+
+// 2.4G 直拉 1 网球/机身。MESH 上平板够不到 1.168，WebView 去拉 :8889 WHEP
+// 又经常 Failed to fetch，所以改成本机 ExoPlayer 拉板上 MediaMTX :8554。
+function wanted() {
+  if (!nativeVideo()) return false;
+  if (document.hidden) return false;
+  const id = mainId();
+  return id === 'ptz_vis' || id === 'dog_cam';
+}
+
+function playKey() {
+  return mainId() + '|' + playUrl() + '|' + (bindRadio() ? 'r' : 'l');
+}
+
 function rectOf(p) {
   const r = p.getBoundingClientRect();
   const s = window.devicePixelRatio || 1;
@@ -94,26 +148,39 @@ function pushRect() {
   n.videoRect(r.x, r.y, r.w, r.h);
 }
 
+function markNative(id) {
+  const root = document.documentElement;
+  if (id) {
+    root.classList.add('native-video-on');
+    root.setAttribute('data-native-video', id);
+  } else {
+    root.classList.remove('native-video-on');
+    root.removeAttribute('data-native-video');
+  }
+}
+
 function stop() {
   const n = nativeVideo();
   wantedNow = false;
+  playKeyNow = '';
   lastRect = '';
   if (n) n.videoStop();
   playing = false;
   lastErr = '';
-  document.documentElement.classList.remove('native-video-on');
-  // 先把占位图的话还原，否则切回 MESH 还挂着 2.4G 的提示；再交回 media.js，
-  // 它接手后自己会决定这一格是放画面还是继续显占位。
-  const small = idleSmall();
-  if (small && idleText) small.textContent = idleText;
+  markNative('');
+  restoreIdleText();
   handOver();
 }
 
-// 机身相机这一路归谁拉，是「原生」和「网关 WebRTC」二选一。归属一变就得让
-// media.js 重算，否则切到 2.4G 时它那条 WebRTC 还挂着：同一只相机两条流并行，
-// 白占本来就窄的 2.4G，还要抢同一块占位图。
 function handOver() {
   if (window.X30Media && window.X30Media.resync) window.X30Media.resync();
+}
+
+function startNative() {
+  const n = nativeVideo();
+  const u = playUrl();
+  if (typeof n.videoStartOn === 'function') n.videoStartOn(u, bindRadio());
+  else n.videoStart(u);
 }
 
 function sync() {
@@ -124,55 +191,68 @@ function sync() {
     return;
   }
   pushRect();
-  // 背景要立刻透出去：原生画面已经垫在下面，网页再铺一层黑就白拉了。
+  const id = mainId();
   const had = document.documentElement.classList.contains('native-video-on');
-  document.documentElement.classList.add('native-video-on');
-  if (!had) handOver();
-  // 只在状态翻转时开一次。切布局、切档都会走到这里，反复 videoStart
-  // 会把正在放的流打断。断流重试由原生自己带退避做，不靠这里轮询。
-  if (!wantedNow) {
+  const same = document.documentElement.getAttribute('data-native-video') === id;
+  markNative(id);
+  if (!had || !same) handOver();
+  const key = playKey();
+  if (!wantedNow || playKeyNow !== key) {
     wantedNow = true;
-    n.videoStart(url());
+    playKeyNow = key;
+    startNative();
   }
   paint();
 }
 
+function idleEl() {
+  return document.getElementById(
+    mainId() === 'ptz_vis' ? 'media-idle-ptz-vis' : 'media-idle');
+}
+
 function idleSmall() {
-  const idle = document.getElementById('media-idle');
+  const idle = idleEl();
   return idle ? idle.querySelector('small') : null;
 }
 
-// 布控球和热成像挂在网关那侧的 192.168.10.0/24，2.4G 根本到不了。
-// 不说清楚的话，那两格停在「未接通时会停在这里」，看着像设备坏了。
-const PTZ_IDLES = ['media-idle-ptz-vis', 'media-idle-ptz-ir'];
-const ptzText = new Map();
-
-function paintPtz(on) {
-  for (const id of PTZ_IDLES) {
-    const el = document.getElementById(id);
-    const small = el ? el.querySelector('small') : null;
-    if (!small) continue;
-    if (!ptzText.has(id)) ptzText.set(id, small.textContent);
-    const next = on ? '2.4G 下没有这一路：布控球在网关那侧，要看它请切 MESH'
-                    : ptzText.get(id);
-    if (small.textContent !== next) small.textContent = next;
-  }
+function rememberIdle(id) {
+  const el = document.getElementById(id);
+  const small = el ? el.querySelector('small') : null;
+  if (small && idleOrig[id] === undefined) idleOrig[id] = small.textContent;
 }
 
-// 占位图上写清楚卡在哪。2.4G 下画面这条链就三段（网卡绑定、RTSP、解码），
-// 原生把断在哪一段报回来就直接写上去，不用去翻日志。
+function restoreIdleText() {
+  ['media-idle', 'media-idle-ptz-vis', 'media-idle-ptz-ir'].forEach((id) => {
+    const el = document.getElementById(id);
+    const small = el ? el.querySelector('small') : null;
+    if (small && idleOrig[id]) small.textContent = idleOrig[id];
+  });
+}
+
+// 热成像仍在网关 192.168.10.x，2.4G 到不了。双光在 192.168.1.168，能直拉。
+function paintPtz(on) {
+  const id = 'media-idle-ptz-ir';
+  rememberIdle(id);
+  const el = document.getElementById(id);
+  const small = el ? el.querySelector('small') : null;
+  if (!small) return;
+  const next = on ? '2.4G 下没有这一路：热成像在网关那侧，要看它请切 MESH'
+                  : idleOrig[id];
+  if (next && small.textContent !== next) small.textContent = next;
+}
+
 function paint() {
-  const idle = document.getElementById('media-idle');
-  if (!idle || !wantedNow) return;   // 不该我管时交回 media.js
+  const idle = idleEl();
+  if (!idle || !wantedNow) return;
   idle.classList.toggle('hidden', playing);
   if (playing) return;
   const small = idleSmall();
   if (!small) return;
-  small.textContent = lastErr ? ('2.4G 直连拉流失败：' + lastErr)
-                             : ('正在从 ' + url() + ' 拉流…');
+  const prefix = bindRadio() ? '2.4G 直连拉流失败：' : '直连拉流失败：';
+  small.textContent = lastErr ? (prefix + lastErr)
+                             : ('正在从 ' + playUrl() + ' 拉流…');
 }
 
-// 原生回调：{playing:bool, err:string, buf:number}
 function onState(st) {
   const s = st || {};
   playing = !!s.playing;
@@ -181,13 +261,13 @@ function onState(st) {
   paint();
 }
 
-// 给设置面板看的一行。buf 是播放器里「已收到但还没放」的那段，也就是本机贡献的
-// 延迟：它接近 0 而画面仍然慢，说明慢在上游（相机转码、链路排队），
-// 调客户端没用。分清这两种情况，比继续猜有用得多。
 function status() {
   if (!nativeVideo()) return '';
-  if (!radio24()) return 'MESH 链路下这一路走网关，不用原生拉流。';
-  if (!wantedNow) return '未在拉流（机身相机不是当前主画面）。';
+  if (!wantedNow) {
+    if (mainId() === 'ptz_vis') return '未在拉流。';
+    if (!radio24()) return '未在拉流（MESH 下这一路不是当前主画面）。';
+    return '未在拉流（机身相机不是当前主画面）。';
+  }
   if (!playing) return lastErr ? ('拉流失败：' + lastErr) : '正在连接…';
   return '正在放，本机缓冲 ' + Math.round(lastBuf) + ' ms'
     + (lastBuf > 400 ? '（偏大，正在快放追）' : '（延迟主要在上游）');
@@ -198,23 +278,20 @@ function onStageLayout() {
 }
 
 function onRadioPath() {
-  // 这一条和主画面是谁无关：只要在 2.4G，布控球那两格就该如实说不可用。
   paintPtz(radio24() && !!nativeVideo());
   sync();
 }
 
 function init() {
   if (!nativeVideo()) return;
-  const small = idleSmall();
-  if (small) idleText = small.textContent;
+  rememberIdle('media-idle');
+  rememberIdle('media-idle-ptz-vis');
+  rememberIdle('media-idle-ptz-ir');
   window.addEventListener('resize', () => { lastRect = ''; pushRect(); });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) stop();
     else sync();
   });
-  // 矩形会因为横幅、菜单展开等原因变，而这些地方不会都去调 onStageLayout。
-  // 另外切档不一定经过 adoptRadioPath（开机时是直接 applyRadioPath 的）。
-  // 一秒看一次、只在真变了才下发，成本可以忽略。
   window.setInterval(() => {
     if (wantedNow) pushRect();
     else onRadioPath();
@@ -223,5 +300,6 @@ function init() {
 }
 
 window.X30DogCam = {
-  init, onStageLayout, onRadioPath, onState, url, setUrl, stop, status,
+  init, onStageLayout, onRadioPath, onState, url, setUrl, setPtzUrl, ptzUrl,
+  stop, status,
 };

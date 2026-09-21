@@ -14,7 +14,7 @@ const VIDEO_OF = {
 
 const NAME_OF = {
   dog_cam: '机身相机',
-  ptz_vis: '布控球白光',
+  ptz_vis: '双光视频',
   ptz_ir: '布控球热成像',
   cloud: '点云',
 };

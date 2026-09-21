@@ -89,6 +89,8 @@ final class NativeVideo {
     @Nullable private ExoPlayer player;
     private String url = "";
     private boolean wanted;
+    /** true：绑 2.4G 网卡。false：走 WiFi，拉板上 MediaMTX 的 10 网转推。 */
+    private boolean bindRadio = true;
     private boolean playing;
     /**
      * 先试强制 TCP（见类注释）。但个别 RTSP 服务不支持 TCP interleaved，只认 UDP，
@@ -126,15 +128,20 @@ final class NativeVideo {
 
     /** 反复调用同一个地址是空操作，页面切布局时会调很多次。 */
     void start(String rtspUrl) {
+        start(rtspUrl, true);
+    }
+
+    void start(String rtspUrl, boolean useRadio) {
         final String next = rtspUrl == null ? "" : rtspUrl.trim();
         if (next.isEmpty()) return;
-        if (wanted && next.equals(url) && player != null) return;
+        if (wanted && next.equals(url) && bindRadio == useRadio && player != null) return;
         url = next;
+        bindRadio = useRadio;
         wanted = true;
         forceTcp = true;
-        // 网卡是 RadioLink 找出来并绑上的，它没起来就没有 ifaceName 可绑，
-        // RTSP 会被路由到默认网络上去。只看画面不推杆时它可能还没被叫起来。
-        RadioLink.get().setEnabled(true);
+        // 2.4G 必须先把射频口拉起来再绑 socket。MESH 上看双光球不要去开射频，
+        // 否则默认路由会被 2.4G 虚口搅乱，192.168.1.168 反而够不到。
+        if (useRadio) RadioLink.get().setEnabled(true);
         open();
     }
 
@@ -220,11 +227,11 @@ final class NativeVideo {
                     .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
                     .build());
             view.setPlayer(p);
-            p.setMediaSource(new RtspMediaSource.Factory()
+            RtspMediaSource.Factory src = new RtspMediaSource.Factory()
                     .setForceUseRtpTcp(forceTcp)
-                    .setSocketFactory(new RadioSocketFactory())
-                    .setTimeoutMs(RTSP_TIMEOUT_MS)
-                    .createMediaSource(MediaItem.fromUri(url)));
+                    .setTimeoutMs(RTSP_TIMEOUT_MS);
+            if (bindRadio) src.setSocketFactory(new RadioSocketFactory());
+            p.setMediaSource(src.createMediaSource(MediaItem.fromUri(url)));
             p.prepare();
             p.setPlayWhenReady(true);
             player = p;

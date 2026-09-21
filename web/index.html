@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260910c">
+<link rel="stylesheet" href="style.css?v=20260921i">
 </head>
 <body>
 
@@ -46,10 +46,9 @@
     <div class="bar-view" id="bar-view">
       <button type="button" class="btn btn-ghost" id="btn-view">背景</button>
       <div id="hud-view-pop" class="bar-pop hidden">
-        <button type="button" class="btn" data-view-pick="dog_cam">机身相机</button>
-        <button type="button" class="btn" data-view-pick="ptz_vis">布控球 白光</button>
-        <button type="button" class="btn" data-view-pick="ptz_ir">布控球 热成像</button>
-        <button type="button" class="btn" data-view-pick="cloud">激光点云</button>
+        <button type="button" class="btn" data-view-pick="dog_cam">狗身视频</button>
+        <button type="button" class="btn" data-view-pick="ptz_vis">双光视频</button>
+        <button type="button" class="btn" data-view-pick="cloud">狗身点云</button>
       </div>
     </div>
     <button class="btn btn-ghost" id="btn-control">控制权</button>
@@ -74,7 +73,8 @@
 
     <div id="set-app-box" class="set-form hidden">
       <div class="set-sect">本机连接网关</div>
-      <p class="set-sect-note">App 打开时连这个地址。WiFi 不通时摇杆走 2.4G，不经过这里。</p>
+      <p class="set-sect-note">MESH 路径：平板 10 网 → 狗端 MESH 电台 → 主板交换机 → 板子 <b>192.168.10.2:8080</b>。不要填 1.101。板上日志：<code>journalctl -u x30-gateway -f</code></p>
+      <p class="set-sect-note" id="set-app-nets">—</p>
       <label class="set-row">
         <span class="set-label">服务 IP</span>
         <input class="set-input" id="set-app-host" autocomplete="off" spellcheck="false">
@@ -99,23 +99,6 @@
 
     <!-- 语音是本机偏好，与网关配置无关，所以放在解锁之外：网页和 App 都改得了，
          网关没开在线改配置时也够得着（见 settings.js 的 open）。 -->
-    <!-- 换 G30 后通道会整表重排。这一节只记键值，不派发指令。 -->
-    <div id="set-rcprobe-box" class="set-form">
-      <div class="set-sect">遥控器按键探测</div>
-      <p class="set-sect-note">G30 的摇杆和大部分按键不进安卓手柄接口，只走云卓通道。一次只按一颗，看哪路 CH 跳变、松开和按下各是多少。打开本页时摇杆和按键不会控狗（急停除外）。</p>
-      <p class="set-sect-note" id="rc-probe-stat">—</p>
-      <div id="rc-probe-grid" class="rc-grid"></div>
-      <p class="set-sect-note" id="rc-probe-hint"></p>
-      <div class="set-sect">刚才按下</div>
-      <pre class="rc-log" id="rc-probe-log"></pre>
-      <div class="row wrap" style="margin-top:8px">
-        <button type="button" class="btn sm" id="rc-probe-rest">记下松开值</button>
-        <button type="button" class="btn sm" id="rc-probe-clear">清空记录</button>
-        <button type="button" class="btn sm" id="rc-probe-copy">复制报告</button>
-      </div>
-      <p class="set-sect-note" id="rc-probe-copy-note"></p>
-    </div>
-
     <div id="set-voice-box" class="set-form">
       <div class="set-sect">按键语音</div>
       <label class="gp-check">
@@ -172,10 +155,11 @@
       <video id="media-video-ptz-vis" class="media-video" autoplay playsinline muted></video>
       <div class="placeholder media-idle" id="media-idle-ptz-vis">
         <div class="ph-icon">▣</div>
-        <p>布控球 白光</p>
+        <p>双光视频</p>
         <small>未接通时会停在这里</small>
       </div>
-      <div class="pane-label">布控球 白光</div>
+      <div class="pane-label">双光视频</div>
+      <button type="button" class="btn sm ptz-pip-btn" id="btn-ptz-pip">画中画 · 热像主图</button>
       <div class="pane-actions">
         <button type="button" class="btn sm" data-capture="shot">截图</button>
         <button type="button" class="btn sm btn-rec" data-capture="rec">录屏</button>
@@ -273,7 +257,7 @@
     <div id="media-list" class="media-list hud-media-list"></div>
   </div>
 
-  <!-- 指标、气体网页和 App 都默认藏。网页靠按钮，App 靠 G20 R1/R2。 -->
+  <!-- 指标、开关、气体默认藏。网页靠按钮，App 靠 SW2。 -->
   <div class="hud-info" id="hud-info">
     <section id="telemetry" class="panel telemetry hidden">
       <div class="panel-head"><span>指标</span><span class="tag" id="tag-holder">观察者</span></div>
@@ -341,9 +325,6 @@
   </div>
 
   <button type="button" class="btn sm hud-sticks-btn" id="btn-sticks">摇杆</button>
-  <button type="button" class="btn sm hud-telem-btn" id="btn-telem">指标</button>
-  <button type="button" class="btn sm hud-gas-btn" id="btn-gas">气体</button>
-  <button type="button" class="btn sm hud-sw-btn" id="btn-sw">开关</button>
   <div id="gp-panel" class="panel hud-gp hidden">
     <div class="gp-bar">
       <div class="gp-line">
@@ -447,13 +428,13 @@
 
 <!-- voice.js 要排在最前：后面几个模块都会调它念结果。 -->
 <script src="voice.js?v=20260826y"></script>
-<script src="media.js?v=20260826y"></script>
+<script src="media.js?v=20260921k"></script>
 <script src="capture.js?v=20260826y"></script>
 <script src="cloud.js?v=20260921b"></script>
-<script src="gamepad.js?v=20260921a"></script>
-<script src="rcprobe.js?v=20260921a"></script>
-<script src="settings.js?v=20260921a"></script>
-<script src="dogcam24.js?v=20260826y"></script>
-<script src="app.js?v=20260921b"></script>
+<script src="gamepad.js?v=20260921d"></script>
+<script src="settings.js?v=20260921p"></script>
+<script src="dogcam24.js?v=20260921k"></script>
+<script src="ptzball.js?v=20260921k"></script>
+<script src="app.js?v=20260921p"></script>
 </body>
 </html>

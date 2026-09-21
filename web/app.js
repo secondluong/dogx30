@@ -8,6 +8,7 @@
 const SEND_HZ = 20;
 const HEARTBEAT_MS = 500;
 const RECONNECT_MS = 1000;
+let meshDownSeq = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0921a';
+const WEB_BUILD = '0921p';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -81,6 +82,10 @@ function loadRadioPath() {
 
 const app = {
   ws: null,
+  wsNativeOpen: false,
+  wsNativeOpening: false,
+  nativeWsFails: 0,
+  useBrowserWs: false,
   clientId: 0,
   holder: 0,
   hasControl: false,
@@ -207,8 +212,81 @@ function meshWsUrl() {
 // 2.4G 只接管运动指令（见 send 里的过滤），网关连接照旧要建：机身相机和布控球的
 // 拉流地址由网关下发（media_plan），遥测、电量、点云也都走它。曾经在 2.4G 下直接
 // 不连网关，结果控制正常但整块画面是空的 —— 视频和操控本来就是两条独立的链路。
+function hasNativeWs() {
+  try {
+    return isAppShell && window.X30Native && 'wsOpen' in window.X30Native;
+  } catch (e) { return false; }
+}
+
+function onWsOpen() {
+  meshDownSeq += 1;
+  setLink(true);
+  app.wsWasOpen = true;
+  app.nativeWsFails = 0;
+  app.wsNativeOpen = hasNativeWs() && !app.useBrowserWs;
+  app.wsNativeOpening = false;
+  // App 壳不自动订点云：MESH 上一上来就推大帧，WebSocket 会被撑断，看着像闪断。
+  if (!isAppShell && window.X30Cloud && window.X30Cloud.resubscribe) {
+    window.X30Cloud.resubscribe();
+  }
+  if (window.X30Media && window.X30Media.onLinkOpen) {
+    window.X30Media.onLinkOpen();
+  }
+}
+
+function onWsClose() {
+  const dropFromLive = !!app.wsWasOpen;
+  // 不退回 WebView 通道：它不认 bindProcessToNetwork，会从图传口 1 网出去，
+  // 10.2 的 TCP 连上又断，MESH 按钮就黄绿闪。原生通道自己重连。
+  if (!dropFromLive && hasNativeWs() && !app.useBrowserWs) {
+    app.nativeWsFails = (app.nativeWsFails || 0) + 1;
+  }
+  app.wsWasOpen = false;
+  app.wsNativeOpen = false;
+  app.wsNativeOpening = false;
+  if (dropFromLive && !isAppShell) app.radioFallback = true;
+  app.hasControl = false;
+  app.modePick = null;
+  app.holder = 0;
+  app.gwPoseAdopt = false;
+  if (!radioDirect()) {
+    app.stateValid = false;
+    app.axisMode = 'none';
+    app.motionState = 'unavailable';
+    app.posture = 'unknown';
+  }
+  setLink(false);
+  renderControl();
+  if (dropFromLive) {
+    const seq = ++meshDownSeq;
+    // 电台重报 Network 时 TCP 会断 1–2 秒。立刻弹「MESH 已断」是误报。
+    setTimeout(() => {
+      if (seq !== meshDownSeq || linkOpen()) return;
+      showBanner(isAppShell
+        ? (app.radioPath === 'radio'
+          ? '网关已断，当前仍是 2.4G 直达'
+          : 'MESH 已断。要控狗请切 2.4G，或等网关重连')
+        : 'WiFi 已断，网关已放手。请用原厂 2.4G 手柄直达（无画面）', 8000);
+    }, 2500);
+  }
+  setTimeout(connect, RECONNECT_MS);
+}
+
 function connect() {
   syncNativeRadioPath();
+  if (hasNativeWs() && !app.useBrowserWs) {
+    if (app.wsNativeOpen || app.wsNativeOpening) return;
+    const url = meshWsUrl();
+    if (!url) {
+      setLink(false);
+      renderControl();
+      setTimeout(connect, RECONNECT_MS);
+      return;
+    }
+    app.wsNativeOpening = true;
+    window.X30Native.wsOpen(url);
+    return;
+  }
   if (app.ws && (app.ws.readyState === WebSocket.OPEN
       || app.ws.readyState === WebSocket.CONNECTING)) {
     return;
@@ -223,44 +301,9 @@ function connect() {
   const ws = new WebSocket(url);
   app.ws = ws;
 
-  ws.onopen = () => {
-    setLink(true);
-    app.wsWasOpen = true;
-    // 重连后网关不记得订阅。本机还标着已订的话要重新发一次，
-    // 不然 2×2 左上角会停在「未订阅」，画布上却还留着上一帧。
-    if (window.X30Cloud && window.X30Cloud.resubscribe) {
-      window.X30Cloud.resubscribe();
-    }
-    if (window.X30Media && window.X30Media.onLinkOpen) {
-      window.X30Media.onLinkOpen();
-    }
-  };
+  ws.onopen = onWsOpen;
 
-  ws.onclose = () => {
-    const dropFromLive = !!app.wsWasOpen;
-    app.wsWasOpen = false;
-    if (dropFromLive && !isAppShell) app.radioFallback = true;
-    app.hasControl = false;
-    app.modePick = null;
-    app.holder = 0;
-    app.gwPoseAdopt = false;
-    if (!radioDirect()) {
-      app.stateValid = false;
-      app.axisMode = 'none';
-      app.motionState = 'unavailable';
-      app.posture = 'unknown';
-    }
-    setLink(false);
-    renderControl();
-    if (dropFromLive) {
-      showBanner(isAppShell
-        ? (app.radioPath === 'radio'
-          ? '网关已断，当前仍是 2.4G 直达'
-          : 'MESH 已断。要控狗请切 2.4G，或等网关重连')
-        : 'WiFi 已断，网关已放手。请用原厂 2.4G 手柄直达（无画面）', 8000);
-    }
-    setTimeout(connect, RECONNECT_MS);
-  };
+  ws.onclose = onWsClose;
 
   ws.onerror = () => ws.close();
 
@@ -273,9 +316,14 @@ function connect() {
       if (window.X30Cloud) window.X30Cloud.onCloudFrame(ev.data);
       return;
     }
-    let msg;
-    try { msg = JSON.parse(ev.data); } catch (e) { return; }
-    switch (msg.t) {
+    handleWsText(ev.data);
+  };
+}
+
+function handleWsText(raw) {
+  let msg;
+  try { msg = JSON.parse(raw); } catch (e) { return; }
+  switch (msg.t) {
       case 'hello':
         app.clientId = msg.client_id;
         app.holder = msg.holder || 0;
@@ -330,6 +378,11 @@ function connect() {
       case 'switch_result':
         applySwitchResult(msg);
         break;
+      case 'ptz_pip':
+        if (window.X30PtzBall && window.X30PtzBall.onPipMsg) {
+          window.X30PtzBall.onPipMsg(msg);
+        }
+        break;
       case 'error':
         // 配置相关的报错归设置面板显示在表单旁边，横幅四秒就没了，
         // 而人这时正盯着表单等结果。
@@ -337,8 +390,13 @@ function connect() {
         showBanner(msg.msg);
         break;
     }
-  };
 }
+
+window.X30NativeWs = {
+  onWsOpen: onWsOpen,
+  onWsClose: onWsClose,
+  handleWsText: handleWsText,
+};
 
 // 切之前是哪一档。网关说切不成时要退回它，见 onGaitResult。
 let gaitBefore = '';
@@ -398,6 +456,10 @@ function send(obj) {
   // 走网关发过起立/趴下之后，网关那份记忆就是它自己刚写的，比我们从 2.4G 带过来
   // 的旧认知新。不在这里放手，操作员在 MESH 下按趴下之后界面还会显示站立。
   if (obj.t === 'cmd' && POSE_CMDS[obj.name]) app.poseHandoff = null;
+  if (hasNativeWs() && !app.useBrowserWs) {
+    try { window.X30Native.wsSend(JSON.stringify(obj)); } catch (e) { /* 原生通道还没开 */ }
+    return;
+  }
   if (app.ws && app.ws.readyState === WebSocket.OPEN) {
     app.ws.send(JSON.stringify(obj));
   }
@@ -409,7 +471,17 @@ const POSE_CMDS = {
   unload: true, estop: true,
 };
 
+function nativeWsLive() {
+  try {
+    if (window.X30Native && typeof window.X30Native.wsAlive === 'function') {
+      return !!window.X30Native.wsAlive();
+    }
+  } catch (e) { /* 桥还没挂上 */ }
+  return !!app.wsNativeOpen;
+}
+
 function linkOpen() {
+  if (hasNativeWs() && !app.useBrowserWs) return nativeWsLive();
   return !!(app.ws && app.ws.readyState === WebSocket.OPEN);
 }
 app.linkOpen = linkOpen;
@@ -684,9 +756,20 @@ function paintRadioBtn(st0) {
   if (!btn) return;
   const radio = app.radioPath === 'radio';
   btn.textContent = radio ? '2.4G' : 'MESH';
-  const up = radio ? radioLinkUp(st0) : linkOpen();
+  const up = radio ? radioLinkUp(st0) : meshPaintUp();
   btn.classList.toggle('link-up', up);
   btn.classList.toggle('link-down', !up);
+}
+
+// MESH 电台重报 Network 时 TCP 会断 1 秒再连上。按钮立刻跟着黄会看起来像闪断。
+let meshPaintDownAt = 0;
+function meshPaintUp() {
+  if (linkOpen()) {
+    meshPaintDownAt = 0;
+    return true;
+  }
+  if (!meshPaintDownAt) meshPaintDownAt = Date.now();
+  return Date.now() - meshPaintDownAt < 1200;
 }
 
 // 2.4G 通的判据是「指令到得了运动主机」，不是「射频起来了」。
@@ -965,11 +1048,10 @@ function setLink(online) {
   if (radioDirect()) {
     paintRadioLink();
   } else {
-    chip.classList.toggle('online', online && app.alive);
-    // 「网关通」这件事现在由 MESH 按钮的颜色说，这里只留网关连上之后才知道的事：
-    // 狗到底接没接通。
+    chip.classList.toggle('online', online);
+    // 布控/气体只靠网关，不靠狗。狗没上线时仍显示网关已连，别把整屏说成断了。
     $('link-text').textContent = online
-        ? (app.alive ? '已连接' : '狗未接通')
+        ? (app.alive ? '已连接' : '网关已连')
         : (app.radioFallback ? '2.4G' : '重连中');
     paintRadioBtn();
   }
@@ -1016,10 +1098,6 @@ function renderState(s) {
     app.axisMode = s.axis_mode || 'none';
   }
   setLink(linkOpen());
-  if (linkOpen() && !s.alive && !app.warnedRobotDown && !radioDirect()) {
-    app.warnedRobotDown = true;
-    showBanner('网关在，但够不着狗。把板子 eth0 网线插回机身口，并确认狗已开机', 15000);
-  }
   if (s.alive) app.warnedRobotDown = false;
   // 2.4G 直达后运动遥测改回平板，网关会一直报坐下。不能再用它改口。
   if (!radioDirect()) {
@@ -1181,6 +1259,8 @@ app.paintModes = paintModes;
 app.paintStandButton = paintStandButton;
 app.toggleGas = toggleGas;
 app.toggleTelem = toggleTelem;
+app.toggleSwitchPanel = toggleSwitchPanel;
+app.selectHud = selectHud;
 app.cycleView = cycleView;
 app.selectView = selectView;
 app.cycleWalk = cycleWalk;
@@ -1246,7 +1326,7 @@ function renderGas(gas) {
 }
 
 // 开关类的按钮上只有名字，没有「现在是开还是关」。屏幕上看一眼就知道，
-// 但这两个在 App 上是 G20 的 R1/R2 按的，人根本没在看屏幕。
+// App 上改由 SW2 三档互斥显示，人不必盯屏幕。
 const SW_TEXT = {
   unknown: '未知',
   on: '开',
@@ -1297,7 +1377,6 @@ function toggleSwitchPanel() {
   if (!el) return;
   el.classList.toggle('hidden');
   const shown = !el.classList.contains('hidden');
-  if ($('btn-sw')) $('btn-sw').classList.toggle('active', shown);
   speak(shown ? '开关已开' : '开关已关');
 }
 
@@ -1315,7 +1394,6 @@ function toggleGas() {
   if (!el) return;
   el.classList.toggle('hidden');
   const shown = !el.classList.contains('hidden');
-  if ($('btn-gas')) $('btn-gas').classList.toggle('active', shown);
   speak(shown ? '气体已开' : '气体已关');
 }
 
@@ -1323,16 +1401,41 @@ function toggleTelem() {
   if (!$('telemetry')) return;
   $('telemetry').classList.toggle('hidden');
   const shown = !$('telemetry').classList.contains('hidden');
-  if ($('btn-telem')) $('btn-telem').classList.toggle('active', shown);
   speak(shown ? '指标已开' : '指标已关');
+}
+
+// SW2 三档互斥：上指标、中开关、下气体。
+function selectHud(which) {
+  const showT = which === 'telem';
+  const showS = which === 'switch';
+  const showG = which === 'gas';
+  if ($('telemetry')) $('telemetry').classList.toggle('hidden', !showT);
+  if ($('switch-panel')) $('switch-panel').classList.toggle('hidden', !showS);
+  if ($('gas-panel')) $('gas-panel').classList.toggle('hidden', !showG);
+  speak(showT ? '指标' : (showS ? '开关' : (showG ? '气体' : '')));
+}
+
+function hideHud() {
+  if ($('telemetry')) $('telemetry').classList.add('hidden');
+  if ($('switch-panel')) $('switch-panel').classList.add('hidden');
+  if ($('gas-panel')) $('gas-panel').classList.add('hidden');
+}
+
+function hudOpen() {
+  const ids = ['telemetry', 'switch-panel', 'gas-panel'];
+  for (let i = 0; i < ids.length; i++) {
+    const el = $(ids[i]);
+    if (el && !el.classList.contains('hidden')) return true;
+  }
+  return false;
 }
 
 function selectView(view) {
   if (!view) return;
-  viewLayout.main = view;
+  viewLayout.main = view === 'dual' ? 'ptz_vis' : view;
   viewLayout.mode = '1x1';
   applyLayout();
-  speak(viewLabel(view));
+  speak(viewLabel(viewLayout.main));
 }
 
 // L1：没力控先出力控，出力控后再起步，走着再按就停步。
@@ -1596,8 +1699,14 @@ function sendAuxPayload(c, viaGateway) {
       window.X30Cloud && window.X30Cloud.nudgeZoom) {
     window.X30Cloud.nudgeZoom(zoom * 0.35);
   }
+  const pan = -ax;
+  const tilt = ay;
+  // 球机 CGI 由 App 直发：2.4G 不走网关，而且不依赖控制权。
+  if (window.X30PtzBall && window.X30PtzBall.move) {
+    window.X30PtzBall.move(pan, tilt, zoom);
+  }
   if (viaGateway && app.hasControl && moving) {
-    send({ t: 'ptz', pan: -ax, tilt: ay, zoom: zoom });
+    send({ t: 'ptz', pan: pan, tilt: tilt, zoom: zoom });
   }
 }
 
@@ -1855,19 +1964,6 @@ $('btn-media').addEventListener('click', () => {
   speak(shown ? '画面列表已开' : '画面列表已关');
 });
 
-$('btn-telem').addEventListener('click', () => {
-  toggleTelem();
-});
-
-$('btn-gas').addEventListener('click', () => {
-  toggleGas();
-});
-
-if ($('btn-sw')) {
-  $('btn-sw').addEventListener('click', () => {
-    toggleSwitchPanel();
-  });
-}
 if ($('switch-grid')) {
   $('switch-grid').addEventListener('click', (ev) => {
     let el = ev.target;
@@ -1933,8 +2029,7 @@ function applyLayout() {
   }
   syncViewPick();
   // 点小窗放大布控球时，摇杆跟着改控云台。芯片仍可再切回控狗。
-  if (!g20Live() &&
-      (viewLayout.main === 'ptz_vis' || viewLayout.main === 'ptz_ir')) {
+  if (!g20Live() && viewLayout.main === 'ptz_vis') {
     webStickTarget = 'ptz';
     if (!app.hasControl) requestControl();
   }
@@ -1956,7 +2051,7 @@ $('btn-swap').addEventListener('click', (e) => {
   speak(viewLayout.mode === '2x2' ? '四宫格' : '单画面');
 });
 
-const VIEW_CYCLE = ['dog_cam', 'ptz_vis', 'ptz_ir', 'cloud'];
+const VIEW_CYCLE = ['dog_cam', 'ptz_vis', 'cloud'];
 
 // 画面的中文名只在顶栏那几颗切背景的按钮上写着一份，不再抄第二份 ——
 // 抄了就一定会有一处忘了改。
@@ -2018,10 +2113,8 @@ $('btn-view').addEventListener('click', (e) => {
 document.querySelectorAll('[data-view-pick]').forEach((b) => {
   b.addEventListener('click', (e) => {
     e.stopPropagation();
-    viewLayout.main = b.dataset.viewPick;
-    viewLayout.mode = '1x1';
+    selectView(b.dataset.viewPick);
     closeBarPops();
-    applyLayout();
   });
 });
 
@@ -2077,6 +2170,8 @@ document.querySelectorAll('.acc-btn').forEach((btn) => {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.acc')) closeAccordions();
   if (!e.target.closest('#bar-mode, #bar-view, .bar-pop')) closeBarPops();
+  // SW2 打开的指标/开关/气体，点画面其它地方收起。点盒子本身不收，免得按开关被误关。
+  if (hudOpen() && !e.target.closest('#hud-info')) hideHud();
 });
 
 document.querySelectorAll('[data-stair]').forEach((b) => {
@@ -2116,19 +2211,10 @@ document.addEventListener('visibilitychange', () => {
 function bootstrap() {
   if (booted) return;
   booted = true;
-  // 网页、App 指标和气体都默认藏。网页靠按钮打开，App 靠 G20 R1/R2。
-  if ($('telemetry')) {
-    $('telemetry').classList.add('hidden');
-    if ($('btn-telem')) $('btn-telem').classList.remove('active');
-  }
-  if ($('gas-panel')) {
-    $('gas-panel').classList.add('hidden');
-    if ($('btn-gas')) $('btn-gas').classList.remove('active');
-  }
-  if ($('switch-panel')) {
-    $('switch-panel').classList.add('hidden');
-    if ($('btn-sw')) $('btn-sw').classList.remove('active');
-  }
+  // 指标/开关/气体默认藏，由 SW2 打开。
+  if ($('telemetry')) $('telemetry').classList.add('hidden');
+  if ($('gas-panel')) $('gas-panel').classList.add('hidden');
+  if ($('switch-panel')) $('switch-panel').classList.add('hidden');
   if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
   paintVerChip();
   syncNativeRadioPath();
@@ -2144,6 +2230,10 @@ function bootstrap() {
   if (window.X30Voice) window.X30Voice.initVoice();
   if (window.X30Media) window.X30Media.initMedia(send, showBanner);
   if (window.X30DogCam) window.X30DogCam.init();
+  if (window.X30PtzBall) {
+    window.X30PtzBallSend = send;
+    window.X30PtzBall.init(send, speak, showBanner);
+  }
   if (window.X30Capture) window.X30Capture.initCapture(showBanner);
   if (window.X30Cloud) window.X30Cloud.initCloud(send);
   if (window.X30Gamepad) window.X30Gamepad.initGamepad(send, showBanner, () => app);
