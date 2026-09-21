@@ -110,7 +110,7 @@ const app = {
   modePick: null,         // 狗本体：manual | auto。菜单不再露这两档，默认手动。
   workMode: 'inspect',    // 侦检 | 水炮，只管小摇杆用途
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
-  right: { x: 0, y: 0 },  // 右摇杆：x=转向/偏航, y=俯仰
+  right: { x: 0, y: 0 },  // 右摇杆：x=转向；y 仅在控布控球时为俯仰
 };
 app.radioFallback = app.radioPath === 'radio';
 try {
@@ -123,7 +123,7 @@ window.app = app;
 let booted = false;
 setTimeout(bootstrap, 0);
 
-// 踏步态才走速度通道，力控站立走姿态通道。其余状态下摇杆无意义，直接禁用，
+// 只有踏步态走速度通道。当前机器未开放姿态扭身，力控/停步时摇杆禁用，
 // 免得用户对着没反应的摇杆反复推。
 const STATE_STEPPING = 4;
 const STATE_TORQUE_STANDING = 3;
@@ -156,8 +156,7 @@ app.isStandingUi = isStandingUi;
 app.notePoseCmd = notePoseCmd;
 
 function controlChannel() {
-  return app.axisMode === 'vel' || app.axisMode === 'pose'
-    ? app.axisMode : null;
+  return app.axisMode === 'vel' ? 'vel' : null;
 }
 
 function effectiveWalk() {
@@ -1413,7 +1412,7 @@ function updateStickHints(ptz) {
   const left = document.querySelector('#stick-left .stick-hint');
   const right = document.querySelector('#stick-right .stick-hint');
   if (left) left.textContent = ptz ? '变倍' : '前后 / 平移';
-  if (right) right.textContent = ptz ? '水平 / 俯仰' : '转向 / 俯仰';
+  if (right) right.textContent = ptz ? '水平 / 俯仰' : '转向';
 }
 
 function paintStickChip() {
@@ -1513,11 +1512,6 @@ setInterval(() => {
     }
     // 网关的速度接口收的是机体系：Y 左为正、偏航逆时针为正，与通道约定一致。
     send({ t: 'vel', vx: c.fwd, vy: c.lat, wz: c.turn });
-  } else if (channel === 'pose') {
-    // 姿态接口收的是原始轴语义：向右为正，与通道约定相反，故取负。
-    const pitch = (typeof c.tilt === 'number' && c.tilt) ? c.tilt
-      : (typeof c.look === 'number' ? c.look : 0);
-    send({ t: 'pose', h: c.fwd, roll: -c.lat, pitch: pitch, yaw: -c.turn });
   }
 }, 1000 / SEND_HZ);
 
