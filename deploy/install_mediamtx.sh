@@ -4,7 +4,7 @@
 set -euo pipefail
 
 PREFIX="${PREFIX:-/opt/x30}"
-VER="${MEDIAMTX_VER:-v1.11.3}"
+VER="${MEDIAMTX_VER:-v1.20.1}"
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH=linux_arm64
 FILE="mediamtx_${VER}_${ARCH}.tar.gz"

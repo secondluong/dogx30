@@ -1000,6 +1000,7 @@ check('MediaMTX 的 RTSP 给平板听',
       /rtspAddress: :8554/.test(mtxYml) &&
       /192\.168\.1\.168:554\/11/.test(mtxYml) &&
       /linux_arm64/.test(mtxInstall) &&
+      /v1\.20\.1/.test(mtxInstall) &&
       /x30-media/.test(mtxInstall) &&
       /ptz_vis_main/.test(mtxInstall));
 check('2.4G 的机身相机走原生 RTSP',
