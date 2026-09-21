@@ -1,6 +1,5 @@
-// App 原生 RTSP：只在 2.4G。射频占着 1 网，WiFi/MESH 必须用 10 网，
-// 平板 MESH 上够不到球机 192.168.1.168，双光改走网关 WebRTC（10.2:8889）。
-// 机身相机同样：2.4G 直拉 RTSP，MESH 走网关。
+// App 原生 RTSP：2.4G 绑 ar_net0，MESH 绑 wlan。整机统一 1 网，
+// 双光直拉 192.168.1.168:554/11，机身直拉设置里的地址。
 
 'use strict';
 
@@ -67,17 +66,6 @@ function radio24() {
   return document.documentElement.classList.contains('radio-24');
 }
 
-function gatewayHost() {
-  try {
-    const n = window.X30Native;
-    if (n && typeof n.getGatewayHost === 'function') {
-      const h = String(n.getGatewayHost() || '').trim();
-      if (h) return h;
-    }
-  } catch (e) { /* 用板上默认 10 网地址 */ }
-  return '192.168.10.2';
-}
-
 function visPane() {
   return document.getElementById('pane-ptz-vis');
 }
@@ -99,21 +87,16 @@ function pane() {
 }
 
 function playUrl() {
-  if (!radio24()) {
-    const id = mainId();
-    if (id === 'ptz_vis') return 'rtsp://' + gatewayHost() + ':8554/ptz_vis_main';
-    if (id === 'dog_cam') return 'rtsp://' + gatewayHost() + ':8554/dog_cam_main';
-    return '';
-  }
-  return mainId() === 'ptz_vis' ? ptzUrl() : url();
+  if (mainId() === 'ptz_vis') return ptzUrl();
+  if (mainId() === 'dog_cam') return url();
+  return '';
 }
 
 function bindRadio() {
   return radio24();
 }
 
-// 2.4G 直拉 1 网球/机身。MESH 上平板够不到 1.168，WebView 去拉 :8889 WHEP
-// 又经常 Failed to fetch，所以改成本机 ExoPlayer 拉板上 MediaMTX :8554。
+// 2.4G / MESH 都直拉 1 网球/机身。只是绑的网卡不同。
 function wanted() {
   if (!nativeVideo()) return false;
   if (document.hidden) return false;
@@ -229,7 +212,7 @@ function restoreIdleText() {
   });
 }
 
-// 热成像仍在网关 192.168.10.x，2.4G 到不了。双光在 192.168.1.168，能直拉。
+// 热成像仍在网关那侧，2.4G 到不了。双光在 192.168.1.168，能直拉。
 function paintPtz(on) {
   const id = 'media-idle-ptz-ir';
   rememberIdle(id);
@@ -248,11 +231,6 @@ function paint() {
   if (playing) return;
   const small = idleSmall();
   if (!small) return;
-  if (!bindRadio() && lastErr &&
-      /8554|Connection refused|Failed to connect|ECONNREFUSED/i.test(lastErr)) {
-    small.textContent = '板上 8554 没在听。开发板执行：sudo bash deploy/install_mediamtx.sh';
-    return;
-  }
   const prefix = bindRadio() ? '2.4G 直连拉流失败：' : '直连拉流失败：';
   small.textContent = lastErr ? (prefix + lastErr)
                              : ('正在从 ' + playUrl() + ' 拉流…');

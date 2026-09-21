@@ -233,8 +233,8 @@ final class NativeVideo {
             if (bindRadio) {
                 src.setSocketFactory(new RadioSocketFactory());
             } else {
-                // MESH：电脑 VLC 能拉 10.2:8554，平板却常从图传口 1.11 出去。
-                // 播放器 socket 钉在 10 网上，不跟系统默认路由走。
+                // MESH：系统默认路由常滑到图传口 ar_net0。播放器 socket 钉在
+                // WiFi 上，直拉球机 / 机身，不跟系统 ping 走。
                 Network mesh = RadioLink.get().meshNetwork();
                 if (mesh != null) src.setSocketFactory(mesh.getSocketFactory());
             }

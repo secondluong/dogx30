@@ -9,7 +9,7 @@ final class GatewayStore {
     static final String KEY_HOST = "host";
     static final String KEY_PORT = "port";
     static final String KEY_RADIO = "radioPath";
-    static final String DEFAULT_HOST = "192.168.10.2";
+    static final String DEFAULT_HOST = "192.168.1.101";
     static final int DEFAULT_PORT = 8080;
 
     static SharedPreferences prefs(Context ctx) {
@@ -18,18 +18,18 @@ final class GatewayStore {
 
     static String host(Context ctx) {
         String h = prefs(ctx).getString(KEY_HOST, DEFAULT_HOST);
-        // 旧包默认过 1.32 / 1.120 / 现场板子 1.101。平板 WiFi 必须走 10 网，
-        // 再填 1 网就会和 2.4G 的 ar_net0 抢路由，表现为连上又断。
-        if (isLegacyOneNetHost(h)) {
+        // 旧包走过 10.2（当时想跟 2.4G 错开网段）。整机已回到 1 网，
+        // 再填 10.2 会连不上。1.32 / 1.120 也是更早的默认，一并迁到现场板子。
+        if (isLegacyTenNetHost(h)) {
             prefs(ctx).edit().putString(KEY_HOST, DEFAULT_HOST).apply();
             return DEFAULT_HOST;
         }
         return h;
     }
 
-    static boolean isLegacyOneNetHost(String host) {
-        return "192.168.1.32".equals(host)
-                || "192.168.1.101".equals(host)
+    static boolean isLegacyTenNetHost(String host) {
+        return "192.168.10.2".equals(host)
+                || "192.168.1.32".equals(host)
                 || "192.168.1.120".equals(host);
     }
 

@@ -78,7 +78,7 @@ function harness() {
         resync: function () { h.resyncs++; },
       },
       X30Native: {
-        getGatewayHost: function () { return '192.168.10.2'; },
+        getGatewayHost: function () { return '192.168.1.101'; },
         videoStart: function (u) { h.calls.push('start ' + u); },
         videoStartOn: function (u, bind) {
           h.calls.push('start ' + u + (bind ? ' radio' : ' lan'));
@@ -121,14 +121,14 @@ function harness() {
   return h;
 }
 
-// --- MESH 下原生拉板上 MediaMTX ---------------------------------------------
-console.log('\n== MESH 下拉板上转推 ==');
+// --- MESH 下原生直拉 1 网 ---------------------------------------------------
+console.log('\n== MESH 下直拉 1 网 ==');
 
 var h = harness();
 h.mod.init();
-check('MESH 上机身走板上 10.2:8554，不绑射频',
+check('MESH 上机身直拉设置地址，不绑射频',
       h.calls[0] === 'rect 0,128,2560,1200' &&
-      h.calls[1] === 'start rtsp://192.168.10.2:8554/dog_cam_main lan',
+      h.calls[1] === 'start rtsp://192.168.1.105:8554/test lan',
       JSON.stringify(h.calls));
 check('把网页背景透出去', !!h.cls['native-video-on']);
 
@@ -205,15 +205,15 @@ check('回前台重新开流',
       h.calls.indexOf('start rtsp://192.168.1.105:8554/test radio') !== -1,
       JSON.stringify(h.calls));
 
-// --- 切回 MESH：换板上转推，不停原生 ---------------------------------------
+// --- 切回 MESH：仍直拉机身，只换绑网卡 -------------------------------------
 console.log('\n== 切回 MESH ==');
 
 h.calls.length = 0;
 h.resyncs = 0;
 h.on24 = false;
 h.mod.onRadioPath();
-check('改拉板上 MediaMTX，仍不绑射频',
-      h.calls.indexOf('start rtsp://192.168.10.2:8554/dog_cam_main lan') !== -1,
+check('改绑 WiFi，地址仍是机身',
+      h.calls.indexOf('start rtsp://192.168.1.105:8554/test lan') !== -1,
       JSON.stringify(h.calls));
 check('同一路只换地址，不必再惊动 media.js', h.resyncs === 0, String(h.resyncs));
 check('MESH 原生画面仍把网页背景透掉', !!h.cls['native-video-on']);
@@ -236,14 +236,14 @@ check('放着的时候改地址会按新地址重开',
       h.calls.indexOf('start rtsp://192.168.1.200:8554/live radio') !== -1,
       JSON.stringify(h.calls));
 
-// --- MESH 上双光也走板上转推 ------------------------------------------------
-console.log('\n== MESH 上双光走板上转推 ==');
+// --- MESH 上双光直拉球机 ----------------------------------------------------
+console.log('\n== MESH 上双光直拉球机 ==');
 
 h = harness();
 h.main = 'ptz_vis';
 h.mod.init();
-check('MESH 双光拉 10.2:8554/ptz_vis_main，不绑射频',
-      h.calls.indexOf('start rtsp://192.168.10.2:8554/ptz_vis_main lan') !== -1,
+check('MESH 双光直拉 1.168:554/11，不绑射频',
+      h.calls.indexOf('start rtsp://192.168.1.168:554/11 lan') !== -1,
       JSON.stringify(h.calls));
 check('MESH 双光也把网页背景透掉', !!h.cls['native-video-on']);
 

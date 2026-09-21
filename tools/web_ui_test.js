@@ -499,20 +499,20 @@ check('图传口不许抢走进程的默认出口',
       /unpin for radio/.test(radioJava) &&
       /短暂丢失时不要解钉/.test(radioJava) &&
       /findMeshNet/.test(radioJava) &&
-      /isTenNet/.test(radioJava) &&
+      /isMeshIface/.test(radioJava) &&
       /NativeWs\.isAnyLive/.test(radioJava) &&
       /pinnedIp/.test(radioJava) &&
-      /192\.168\.10\./.test(radioJava) &&
+      /ar_/.test(radioJava) &&
       /udpBound = true/.test(radioJava) &&
       !/bindProcessToNetwork\(net\)/.test(radioJava));
 var storeJava = fs.readFileSync(
     path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
               'com', 'dogx30', 'control', 'GatewayStore.java'), 'utf8');
-check('旧包 1 网网关地址自动改到 10.2',
-      /DEFAULT_HOST = "192\.168\.10\.2"/.test(storeJava) &&
-      /isLegacyOneNetHost/.test(storeJava) &&
-      /192\.168\.1\.120/.test(storeJava) &&
-      /192\.168\.1\.101/.test(storeJava));
+check('旧包 10.2 网关地址自动改回 1.101',
+      /DEFAULT_HOST = "192\.168\.1\.101"/.test(storeJava) &&
+      /isLegacyTenNetHost/.test(storeJava) &&
+      /192\.168\.10\.2/.test(storeJava) &&
+      /192\.168\.1\.120/.test(storeJava));
 check('运动 UDP 绑在跟狗同网段的地址上',
       /LocalIpv4ForPeer/.test(motionCpp) &&
       /Open\(cfg_\.local_port, bind_ip/.test(motionCpp));
@@ -964,11 +964,10 @@ check('机身相机不会被原生和网关同时拉两遍',
       /resync/.test(mediaText) &&
       /function handOver/.test(dogCamJs) &&
       /X30Media\.resync/.test(dogCamJs));
-check('MESH 双光走板上 MediaMTX，不走 WebView WHEP',
+check('MESH 双光直拉球机，不走 WebView WHEP',
       /192\.168\.1\.168:554\/11/.test(dogCamJs) &&
       /videoStartOn/.test(dogCamJs) &&
       /void videoStartOn\(/.test(radioBridge) &&
-      /:8554\/ptz_vis_main/.test(dogCamJs) &&
       /id === 'ptz_vis'/.test(dogCamJs));
 check('网关连上不依赖狗，芯片写网关已连',
       /网关已连/.test(appJs) &&
@@ -976,8 +975,10 @@ check('网关连上不依赖狗，芯片写网关已连',
 var nativeWsJava = fs.readFileSync(
     path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
               'com', 'dogx30', 'control', 'NativeWs.java'), 'utf8');
-check('App 的网关 WebSocket 走原生并钉在 10 网',
+check('App 的网关 WebSocket 走原生并钉在 WiFi',
       /class NativeWs/.test(nativeWsJava) &&
+      /meshNetwork\(\)/.test(nativeWsJava) &&
+      /getSocketFactory/.test(nativeWsJava) &&
       /int gen/.test(nativeWsJava) &&
       /boolean isLive/.test(nativeWsJava) &&
       /static boolean isAnyLive/.test(nativeWsJava) &&

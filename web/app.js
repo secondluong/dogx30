@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0921q';
+const WEB_BUILD = '0921r';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -236,8 +236,8 @@ function onWsOpen() {
 
 function onWsClose() {
   const dropFromLive = !!app.wsWasOpen;
-  // 不退回 WebView 通道：它不认 bindProcessToNetwork，会从图传口 1 网出去，
-  // 10.2 的 TCP 连上又断，MESH 按钮就黄绿闪。原生通道自己重连。
+  // 不退回 WebView 通道：它不认 bindProcessToNetwork，会从图传口 ar_net0
+  // 出去。原生通道自己重连，socket 钉在 wlan 上。
   if (!dropFromLive && hasNativeWs() && !app.useBrowserWs) {
     app.nativeWsFails = (app.nativeWsFails || 0) + 1;
   }

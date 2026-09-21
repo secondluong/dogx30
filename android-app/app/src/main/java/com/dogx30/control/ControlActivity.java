@@ -383,7 +383,7 @@ public class ControlActivity extends AppCompatActivity {
 
         /**
          * bindRadio=true 绑 2.4G 网卡（直拉 1 网球/机身）。
-         * false 走 WiFi（MESH 上拉板上 MediaMTX 192.168.10.2:8554）。
+         * false 走 WiFi（MESH 上直拉同一 1 网的球机 / 机身）。
          */
         @JavascriptInterface
         public void videoStartOn(String url, boolean bindRadio) {

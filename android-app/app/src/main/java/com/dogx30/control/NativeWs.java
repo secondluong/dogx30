@@ -1,5 +1,6 @@
 package com.dogx30.control;
 
+import android.net.Network;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -20,8 +21,7 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 /**
- * App → 网关的 WebSocket。进程出口由 RadioLink.pinProcess 钉在 10 网。
- * 不用 Network.getSocketFactory：选错 Network 时 10.2 会彻底连不上（MESH 一直黄）。
+ * App → 网关的 WebSocket。socket 钉在 WiFi / MESH 电台上，避开 2.4G 的 ar_net0。
  * 下行不走 evaluateJavascript 拼 JSON：10 Hz 遥测把整段塞进 JS 源会卡住 WebView，
  * 连接看着就像 1–2 秒断一次。消息进队列，由网页 wsPoll 取。
  */
@@ -74,8 +74,13 @@ final class NativeWs {
             synchronized (inbox) { inbox.clear(); }
             Log.i(TAG, "open " + want);
             try {
+                OkHttpClient c = client;
+                Network mesh = RadioLink.get().meshNetwork();
+                if (mesh != null) {
+                    c = client.newBuilder().socketFactory(mesh.getSocketFactory()).build();
+                }
                 Request req = new Request.Builder().url(want).build();
-                socket = client.newWebSocket(req, new WebSocketListener() {
+                socket = c.newWebSocket(req, new WebSocketListener() {
                     @Override
                     public void onOpen(WebSocket ws, Response response) {
                         if (my != gen) return;

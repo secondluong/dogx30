@@ -1292,18 +1292,15 @@ final class RadioLink {
         Network want = findMeshNet();
         if (want == null) {
             // MESH 期间电台短暂丢失时不要解钉。解钉后默认路由会滑到还活着的
-            // ar_net0（1 网），去 10.2 的 WebSocket 立刻断，于是连上又断。
+            // ar_net0，网关 WebSocket 立刻断，于是连上又断。
             return;
         }
-        // 只钉 10 网。findMeshNet 在 10 网眨眼时会退回其它 WiFi（常是 1 网），
-        // 改钉过去会把去 10.2 的 WebSocket 掐死，MESH 按钮就黄绿闪。
         String ip = firstV4(cm.getLinkProperties(want));
-        if (!ip.startsWith("192.168.10.")) return;
         if (want.equals(pinnedNet) || ip.equals(pinnedIp)) return;
         // 网关 TCP 还活着时不要换 Network 对象。MESH 电台常每秒重报一次，
-        // 再 bind 就会拆掉 10.2 的 WebSocket，按钮看着绿、横幅却一直「MESH 已断」。
-        if (NativeWs.isAnyLive() && pinnedIp.startsWith("192.168.10.")) return;
-        if (isTenNet(pinnedNet)) return;
+        // 再 bind 就会拆掉 WebSocket，按钮看着绿、横幅却一直「MESH 已断」。
+        if (NativeWs.isAnyLive() && isMeshIface(pinnedNet)) return;
+        if (isMeshIface(pinnedNet)) return;
         try {
             cm.bindProcessToNetwork(want);
             pinnedNet = want;
@@ -1320,9 +1317,9 @@ final class RadioLink {
     }
 
     /**
-     * 遥控进程必须从 10 网出。板上 ping 192.168.10.200 通，只说明电台在；
-     * App 若被钉到 / 默认走到 ar_net0（1.11），去 10.2 的 WebSocket 就会连上又断。
-     * 10 网可能是 WiFi，也可能是 USB/以太网 MESH 电台，所以按地址选，不按网卡名。
+     * 遥控进程从 WiFi / MESH 电台出，绝不走 2.4G 的 ar_net0。
+     * 整机统一 1 网时两口都是 192.168.1.0/24，系统默认路由会滑到图传口，
+     * ping 看起来就断了；所以按网卡名选，不按地址。
      */
     @Nullable
     private Network findMeshNet() {
@@ -1343,14 +1340,13 @@ final class RadioLink {
                 if (iface != null && (iface.startsWith("ar_") || iface.startsWith("dummy"))) {
                     continue;
                 }
-                if (ip.startsWith("192.168.10.")) return n;
                 if (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                         && iface != null
                         && (iface.startsWith("wlan") || iface.startsWith("wifi"))) {
                     if (wlan == null) wlan = n;
                 } else if (fallback == null
-                        && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                        && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                        && (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                                || c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
                     fallback = n;
                 }
             }
@@ -1361,12 +1357,17 @@ final class RadioLink {
         return null;
     }
 
-    private boolean isTenNet(@Nullable Network n) {
+    private boolean isMeshIface(@Nullable Network n) {
         if (n == null) return false;
         ConnectivityManager cm = connectivity();
         if (cm == null) return false;
         try {
-            return firstV4(cm.getLinkProperties(n)).startsWith("192.168.10.");
+            LinkProperties lp = cm.getLinkProperties(n);
+            if (lp == null) return false;
+            String iface = lp.getInterfaceName();
+            return iface != null
+                    && !iface.startsWith("ar_")
+                    && !iface.startsWith("dummy");
         } catch (Exception e) {
             return false;
         }
