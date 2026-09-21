@@ -302,6 +302,14 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
   "temp": {"cpu": 52.0, "motor_max": 44.2},
   "limits": {"forward": 1.2, "lateral": 0.8, "yaw": 1.2},
   "mileage_cm": 165,
+  "gas": {
+    "alive": true,
+    "heard": true,
+    "slots": [
+      {"port": 1, "id": 2, "key": "o2", "name": "氧气 O₂", "unit": "%VOL", "status": "ok", "value": 20.90},
+      {"port": 3, "id": 6, "key": "h2s", "name": "硫化氢 H₂S", "unit": "ppm", "status": "offline"}
+    ]
+  },
   "errors": ["电机过温"],
   "emergency_source": 0
 }
@@ -327,6 +335,69 @@ WebSocket，端点 `ws://<RK3588_IP>:8080/ws`，全部消息是 UTF-8 的扁平 
 
 `gait_text` 是给人看的中文名，会变；判断当前步态请一律用 `gait_key`，
 它与 `cmd/gait` 的 `value` 取值一致。
+
+`gas` 是 10 路气体监测。主板约每 2 秒经 UDP 上报一帧（`3A 02`，65 字节），
+打到本机 `gas_port`（默认 1000）。`alive` 表示最近一帧还在 6 秒窗口内；
+`heard` 表示曾经解析成功过。`slots` 固定 10 项，按端口 1→10：
+
+- `status=ok` 时带 `value`（浓度，单位见 `unit`）
+- `status=empty` 是空槽（类型 ID=0）
+- `status=offline` 是该路通讯中断 / 探头掉线（浓度 `FF FF FF FF`）
+- `port` 是 1–10，`board` 是传感器板号（端口 1–5 为 1，6–10 为 2）
+
+`key` 取 `empty|ch4|o2|co|nh3|no2|h2s|lel|h2|voc|so2`。VOC 已是苯当量，
+遥控端不要再乘系数。没接到主板时 `alive` 和 `heard` 都是 false。
+
+`uwb` 是单兵标签，和气体同一条 UDP（`3A 56`，约 1 秒一帧）。坐标已经是
+以狗为原点的毫米值，下发前换成米。`tags` 固定两项，白名单 ID **15** / **11**。
+`valid=false` 时不要用 XYZ（协议要求丢弃）。`alive` 表示至少一只有效标签
+还在 4 秒窗口内。
+
+### 载荷开关
+
+不需要控制权。点一次开、再点一次关。只覆盖协议已给出的五路：
+`light` 条纹灯、`pump` 气泵、`uwb` UWB、`fan` 风扇、`camera` 摄像头。
+
+```json
+{"t":"switch","name":"pump","on":true}
+```
+
+完成后回：
+
+```json
+{"t":"switch_result","name":"pump","ok":true,"on":true,"status":"on","msg":""}
+```
+
+`status` 取 `unknown|on|off|busy|error`。`ok=false` 时 `msg` 是给人看的原因
+（无应答、未配置灯板地址、上一条还在等）。`state.switches` 带同一组
+`items`，10 Hz 跟着遥测推。
+
+条纹灯只打灯板 `light_ip:light_port`（现场 `192.168.1.200:9000`）。
+STM32 不处理 `0x02`，走载荷口会回失败。其余四路从气体口 `:1000` 回源到
+串口服务器（`payload_ip:payload_port`，现场 `.201:2000`）。
+
+### 载荷开关
+
+不需要控制权。点一次开、再点一次关。只覆盖协议已给出的五路：
+`light` 条纹灯、`pump` 气泵、`uwb` UWB、`fan` 风扇、`camera` 摄像头。
+
+```json
+{"t":"switch","name":"pump","on":true}
+```
+
+完成后回：
+
+```json
+{"t":"switch_result","name":"pump","ok":true,"on":true,"status":"on","msg":""}
+```
+
+`status` 取 `unknown|on|off|busy|error`。`ok=false` 时 `msg` 是给人看的原因
+（无应答、未配置灯板地址、上一条还在等）。`state.switches` 带同一组
+`items`，10 Hz 跟着遥测推。
+
+条纹灯只打灯板 `light_ip:light_port`（现场 `192.168.1.200:9000`）。
+STM32 不处理 `0x02`，走载荷口会回失败。其余四路从气体口 `:1000` 回源到
+串口服务器（`payload_ip:payload_port`，现场 `.201:2000`）。
 
 ### 媒体计划
 

@@ -18,7 +18,9 @@
 #include "x30/cloud_bridge.hpp"
 #include "x30/body_monitor.hpp"
 #include "x30/gait_coordinator.hpp"
+#include "x30/gas_client.hpp"
 #include "x30/gateway_config.hpp"
+#include "x30/payload_switch.hpp"
 #include "x30/localizer.hpp"
 #include "x30/media_registry.hpp"
 #include "x30/motion_client.hpp"
@@ -111,6 +113,7 @@ class RobotService {
   bool CheckAdminToken(WsServer::ClientId id, const Json& msg);
   void HandleConfigGet(WsServer::ClientId id);
   void HandleConfigSet(WsServer::ClientId id, const Json& msg);
+  void HandleSwitch(WsServer::ClientId id, const Json& msg);
 
   // 有没有人正持有控制权（含未过期的租约）。改配置要重启，重启会中断遥控，
   // 所以只在没人操控时才允许。
@@ -137,6 +140,8 @@ class RobotService {
   // 未开启点云时为空，cloud_* 消息一律回「未启用」。
   std::unique_ptr<CloudBridge> cloud_;
   std::unique_ptr<RosClient> battery_ros_;
+  std::unique_ptr<GasClient> gas_;
+  std::unique_ptr<PayloadSwitch> switches_;
   Localizer localizer_;
   std::chrono::steady_clock::time_point last_scan_{};
   mutable std::mutex lio_mutex_;

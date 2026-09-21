@@ -196,6 +196,61 @@ bool RobotService::Start(std::string* error) {
                 cfg_.cloud.registered_topic.c_str());
   }
 
+  // 气体是附加能力：口被占或绑不上不能让整个网关起不来，面板保持「未接入」。
+  gas_ = std::make_unique<GasClient>(GasClientConfig{cfg_.settings.gas_port});
+  {
+    std::string gas_err;
+    if (!gas_->Start(&gas_err)) {
+      std::fprintf(stderr, "气体通道未打开（面板保持未接入）: %s\n",
+                   gas_err.c_str());
+    } else {
+      std::printf("气体通道 UDP :%u\n", cfg_.settings.gas_port);
+    }
+  }
+
+  PayloadSwitchConfig sw_cfg;
+  sw_cfg.payload_ip = cfg_.settings.payload_ip;
+  sw_cfg.payload_port = cfg_.settings.payload_port;
+  sw_cfg.light_ip = cfg_.settings.light_ip;
+  sw_cfg.light_port = cfg_.settings.light_port;
+  switches_ = std::make_unique<PayloadSwitch>(std::move(sw_cfg));
+  if (gas_) {
+    switches_->SetPayloadSender(
+        [this](const std::string& ip, uint16_t port, const void* data,
+               size_t len) { return gas_->SendTo(ip, port, data, len); });
+    gas_->SetSwitchAckHandler(
+        [this](const SwitchAck& ack) { switches_->OnPayloadAck(ack); });
+    gas_->SetPayloadPeerHandler([this](const std::string& ip, uint16_t port) {
+      switches_->NotePayloadPeer(ip, port);
+    });
+  }
+  switches_->SetResultHandler(
+      [this](const std::string& key, bool ok, bool on, const char* status,
+             const char* msg) {
+        JsonWriter w;
+        w.BeginObject()
+            .Key("t", "switch_result")
+            .Key("name", key)
+            .Key("ok", ok)
+            .Key("on", on)
+            .Key("status", status)
+            .Key("msg", msg ? msg : "")
+            .EndObject();
+        server_.Broadcast(w.Take());
+        if (ok) {
+          std::printf("开关 %s 已%s\n", key.c_str(), on ? "开" : "关");
+        } else {
+          std::fprintf(stderr, "开关 %s 失败：%s\n", key.c_str(),
+                       msg ? msg : "");
+        }
+      });
+  {
+    std::string sw_err;
+    if (!switches_->Start(&sw_err)) {
+      std::fprintf(stderr, "开关通道未打开：%s\n", sw_err.c_str());
+    }
+  }
+
   server_.SetStaticRoot(cfg_.static_root);
   server_.SetHandlers([this](WsServer::ClientId id) { OnConnect(id); },
                       [this](WsServer::ClientId id, const std::string& text) {
@@ -221,6 +276,8 @@ void RobotService::Stop() {
   StopBatteryRos();
   if (body_monitor_) body_monitor_->Stop();
   if (cloud_) cloud_->Stop();
+  if (switches_) switches_->Stop();
+  if (gas_) gas_->Stop();
   gaits_.Stop();
   server_.Stop();
 }
@@ -272,6 +329,28 @@ void RobotService::TouchLease(WsServer::ClientId id) {
   // 否则一条迟到的消息会把刚被别人接管的控制权抢回来。
   if (controller_ != id || Clock::now() > lease_expiry_) return;
   lease_expiry_ = Clock::now() + std::chrono::milliseconds(cfg_.control_lease_ms);
+}
+
+void RobotService::HandleSwitch(WsServer::ClientId id, const Json& msg) {
+  if (!switches_) {
+    SendError(id, "no_switch", "开关通道未启用");
+    return;
+  }
+  const std::string name = msg.String("name");
+  if (name.empty()) {
+    SendError(id, "bad_request", "开关缺少 name");
+    return;
+  }
+  if (!msg.Has("on")) {
+    SendError(id, "bad_request", "开关缺少 on");
+    return;
+  }
+  const bool on = msg["on"].AsBool(false);
+  std::string error;
+  if (!switches_->Request(name, on, &error)) {
+    SendError(id, "switch_rejected", error.c_str());
+    return;
+  }
 }
 
 void RobotService::BroadcastControlState() {
@@ -510,6 +589,11 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
   const std::string t = msg.String("t");
 
   TouchLease(id);
+
+  if (t == "switch") {
+    HandleSwitch(id, msg);
+    return;
+  }
 
   if (t == "ping") {
     JsonWriter w;
@@ -1332,6 +1416,12 @@ std::string RobotService::BuildStateJson() const {
       .Key("lateral", limits.max_lateral_mps, 2)
       .Key("yaw", limits.max_yaw_radps, 2)
       .EndObject();
+
+  if (gas_) {
+    w.Raw("gas", gas_->Json());
+    w.Raw("uwb", gas_->UwbJson());
+  }
+  if (switches_) w.Raw("switches", switches_->Json());
 
   w.BeginArray("errors");
   const std::string errors = DescribeErrors(s.error_state);

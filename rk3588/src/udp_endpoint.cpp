@@ -68,6 +68,9 @@ bool UdpEndpoint::Open(uint16_t local_port, std::string* error) {
   int reuse = 1;
   ::setsockopt(impl_->fd, SOL_SOCKET, SO_REUSEADDR,
                reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+  int bcast = 1;
+  ::setsockopt(impl_->fd, SOL_SOCKET, SO_BROADCAST,
+               reinterpret_cast<const char*>(&bcast), sizeof(bcast));
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
@@ -107,7 +110,25 @@ bool UdpEndpoint::Send(const void* data, size_t len) {
   return sent >= 0 && static_cast<size_t>(sent) == len;
 }
 
+bool UdpEndpoint::SendTo(const std::string& ip, uint16_t port, const void* data,
+                         size_t len) {
+  if (impl_->fd == kInvalidSocket) return false;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) != 1) return false;
+  const auto sent =
+      ::sendto(impl_->fd, static_cast<const char*>(data), static_cast<int>(len),
+               0, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+  return sent >= 0 && static_cast<size_t>(sent) == len;
+}
+
 int UdpEndpoint::Recv(void* buffer, size_t capacity, int timeout_ms) {
+  return RecvFrom(buffer, capacity, timeout_ms, nullptr, nullptr);
+}
+
+int UdpEndpoint::RecvFrom(void* buffer, size_t capacity, int timeout_ms,
+                          std::string* src_ip, uint16_t* src_port) {
   if (impl_->fd == kInvalidSocket) return -1;
 
   fd_set read_set;
@@ -123,9 +144,23 @@ int UdpEndpoint::Recv(void* buffer, size_t capacity, int timeout_ms) {
   if (ready < 0) return -1;
   if (ready == 0) return 0;
 
+  sockaddr_in from{};
+#if defined(_WIN32)
+  int from_len = sizeof(from);
+#else
+  socklen_t from_len = sizeof(from);
+#endif
   const auto received =
       ::recvfrom(impl_->fd, static_cast<char*>(buffer),
-                 static_cast<int>(capacity), 0, nullptr, nullptr);
+                 static_cast<int>(capacity), 0,
+                 reinterpret_cast<sockaddr*>(&from), &from_len);
+  if (received > 0) {
+    if (src_port) *src_port = ntohs(from.sin_port);
+    if (src_ip) {
+      char ip[INET_ADDRSTRLEN] = {};
+      if (::inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip))) *src_ip = ip;
+    }
+  }
   return static_cast<int>(received);
 }
 

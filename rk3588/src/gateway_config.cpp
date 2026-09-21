@@ -226,6 +226,19 @@ ConfigLoad LoadGatewaySettings(const std::string& path, GatewaySettings* out,
     } else if (key == "perception_port") {
       if (!ParseLong(val, &num) || !ValidPort(num)) return bad("不是合法端口");
       s.perception_port = static_cast<uint16_t>(num);
+    } else if (key == "gas_port") {
+      if (!ParseLong(val, &num) || !ValidPort(num)) return bad("不是合法端口");
+      s.gas_port = static_cast<uint16_t>(num);
+    } else if (key == "payload_ip") {
+      s.payload_ip = val;
+    } else if (key == "payload_port") {
+      if (!ParseLong(val, &num) || !ValidPort(num)) return bad("不是合法端口");
+      s.payload_port = static_cast<uint16_t>(num);
+    } else if (key == "light_ip") {
+      s.light_ip = val;
+    } else if (key == "light_port") {
+      if (!ParseLong(val, &num) || !ValidPort(num)) return bad("不是合法端口");
+      s.light_port = static_cast<uint16_t>(num);
     } else if (key == "http_port") {
       if (!ParseLong(val, &num) || !ValidPort(num)) return bad("不是合法端口");
       s.http_port = static_cast<uint16_t>(num);
@@ -288,6 +301,11 @@ bool SaveGatewaySettings(const std::string& path, const GatewaySettings& s,
   std::fprintf(f, "\n");
   std::fprintf(f, "perception_ip = %s\n", s.perception_ip.c_str());
   std::fprintf(f, "perception_port = %u\n", s.perception_port);
+  std::fprintf(f, "gas_port = %u\n", s.gas_port);
+  std::fprintf(f, "payload_ip = %s\n", s.payload_ip.c_str());
+  std::fprintf(f, "payload_port = %u\n", s.payload_port);
+  std::fprintf(f, "light_ip = %s\n", s.light_ip.c_str());
+  std::fprintf(f, "light_port = %u\n", s.light_port);
   std::fprintf(f, "\n");
   std::fprintf(f, "http_port = %u\n", s.http_port);
   std::fprintf(f, "bind_address = %s\n", s.bind_address.c_str());
@@ -345,7 +363,9 @@ bool MergeGatewaySettings(const Json& obj, GatewaySettings* inout,
   // 「改了、保存了、没生效、也没报错」，那是最难查的一类。
   static const char* kKnown[] = {
       "robot_ip",      "robot_port",      "local_port",   "perception_ip",
-      "perception_port", "http_port",     "bind_address", "cloud_enabled",
+      "perception_port", "gas_port",      "payload_ip",   "payload_port",
+      "light_ip",        "light_port",    "http_port",    "bind_address",
+      "cloud_enabled",
       "ros_master",    "ros_host",        "cloud_topic",  "cloud_hz",
       "cloud_points",  "ptz_vis_rtsp",    "ptz_ir_rtsp",
       "ptz_vis_codec", "ptz_ir_codec"};
@@ -378,6 +398,17 @@ bool MergeGatewaySettings(const Json& obj, GatewaySettings* inout,
   num = s.perception_port;
   if (!TakeLong(obj, "perception_port", 1, 65535, &num, error)) return false;
   s.perception_port = static_cast<uint16_t>(num);
+  num = s.gas_port;
+  if (!TakeLong(obj, "gas_port", 1, 65535, &num, error)) return false;
+  s.gas_port = static_cast<uint16_t>(num);
+  if (!TakeOptionalString(obj, "payload_ip", &s.payload_ip, error)) return false;
+  num = s.payload_port;
+  if (!TakeLong(obj, "payload_port", 1, 65535, &num, error)) return false;
+  s.payload_port = static_cast<uint16_t>(num);
+  if (!TakeOptionalString(obj, "light_ip", &s.light_ip, error)) return false;
+  num = s.light_port;
+  if (!TakeLong(obj, "light_port", 1, 65535, &num, error)) return false;
+  s.light_port = static_cast<uint16_t>(num);
 
   num = s.http_port;
   if (!TakeLong(obj, "http_port", 1, 65535, &num, error)) return false;
@@ -418,6 +449,11 @@ std::string GatewaySettingsJson(const GatewaySettings& s) {
       .Key("local_port", static_cast<int>(s.local_port))
       .Key("perception_ip", s.perception_ip)
       .Key("perception_port", static_cast<int>(s.perception_port))
+      .Key("gas_port", static_cast<int>(s.gas_port))
+      .Key("payload_ip", s.payload_ip)
+      .Key("payload_port", static_cast<int>(s.payload_port))
+      .Key("light_ip", s.light_ip)
+      .Key("light_port", static_cast<int>(s.light_port))
       .Key("http_port", static_cast<int>(s.http_port))
       .Key("bind_address", s.bind_address)
       .Key("cloud_enabled", s.cloud_enabled)
@@ -513,6 +549,24 @@ bool ValidateGatewaySettings(const GatewaySettings& s,
   if (s.local_port == s.http_port) {
     *error = "遥测接收端口与服务端口撞了（都是 " +
              std::to_string(s.http_port) + "）";
+    return false;
+  }
+  if (s.gas_port == s.http_port) {
+    *error = "气体接收端口与服务端口撞了（都是 " +
+             std::to_string(s.http_port) + "）";
+    return false;
+  }
+  if (s.gas_port == s.local_port) {
+    *error = "气体接收端口与遥测接收端口撞了（都是 " +
+             std::to_string(s.gas_port) + "）";
+    return false;
+  }
+  if (!s.payload_ip.empty() && !IsIpv4(s.payload_ip)) {
+    *error = "载荷主板地址不是合法的 IPv4：" + s.payload_ip;
+    return false;
+  }
+  if (!s.light_ip.empty() && !IsIpv4(s.light_ip)) {
+    *error = "灯板地址不是合法的 IPv4：" + s.light_ip;
     return false;
   }
 

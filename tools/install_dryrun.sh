@@ -147,6 +147,7 @@ ROBOT_IP="192.168.1.106"
 ROBOT_PORT="43894"
 LOCAL_PORT="43898"
 PERCEPTION_PORT="43900"
+GAS_PORT="2000"
 HTTP_PORT="9090"
 CLOUD_TOPIC="/points_raw"
 CLOUD_HZ="5"
@@ -156,6 +157,7 @@ check_conf "全部参数都非默认" \
   "robot_port = 43894" \
   "local_port = 43898" \
   "perception_port = 43900" \
+  "gas_port = 2000" \
   "http_port = 9090" \
   "cloud_topic = /points_raw" \
   "cloud_hz = 5" \

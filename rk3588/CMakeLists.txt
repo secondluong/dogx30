@@ -27,6 +27,8 @@ add_library(x30_core
   src/point_cloud.cpp
   src/cloud_bridge.cpp
   src/localizer.cpp
+  src/gas_client.cpp
+  src/payload_switch.cpp
   src/robot_service.cpp
 )
 target_include_directories(x30_core PUBLIC include)
@@ -50,6 +52,9 @@ target_link_libraries(x30_gateway PRIVATE x30_core)
 
 add_executable(x30_localizer_test src/localizer_test.cpp)
 target_link_libraries(x30_localizer_test PRIVATE x30_core)
+
+add_executable(x30_gas_test src/gas_client_test.cpp)
+target_link_libraries(x30_gas_test PRIVATE x30_core)
 if(MSVC)
   target_compile_options(x30_gateway PRIVATE /utf-8)
 endif()

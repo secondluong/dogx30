@@ -40,6 +40,7 @@ run "遥控器通道探测测试" tools/rcprobe_test.js
 run "按键语音播报测试"   tools/voice_test.js
 run "2.4G 画面测试"      tools/dogcam_test.js
 run "控制台一致性检查"   tools/web_ui_test.js
+run "气体帧解析"         tools/gas_test.sh
 run "运动控制冒烟测试"   tools/smoke_test.sh
 run "在线改配置测试"     tools/config_test.sh
 run "遥控服务端到端测试" tools/serve_test.sh

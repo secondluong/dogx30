@@ -295,6 +295,12 @@ void ApplySettings(const GatewaySettings& s, MotionClientConfig* motion,
   terrain->perception_ip = s.perception_ip;
   terrain->perception_port = s.perception_port;
 
+  svc->settings.gas_port = s.gas_port;
+  svc->settings.payload_ip = s.payload_ip;
+  svc->settings.payload_port = s.payload_port;
+  svc->settings.light_ip = s.light_ip;
+  svc->settings.light_port = s.light_port;
+
   svc->port = s.http_port;
   svc->bind_address = s.bind_address;
 
@@ -323,6 +329,11 @@ GatewaySettings SettingsOf(const MotionClientConfig& motion,
 
   s.perception_ip = terrain.perception_ip;
   s.perception_port = terrain.perception_port;
+  s.gas_port = svc.settings.gas_port;
+  s.payload_ip = svc.settings.payload_ip;
+  s.payload_port = svc.settings.payload_port;
+  s.light_ip = svc.settings.light_ip;
+  s.light_port = svc.settings.light_port;
 
   s.http_port = svc.port;
   s.bind_address = svc.bind_address;
@@ -359,6 +370,8 @@ void PrintUsage() {
   --perception-ip <IP> 感知主机地址，默认 192.168.1.105
   --perception-port <端口>  地形图模块端口，默认 43899
                        楼梯步态必须靠这条通道配合，不通则楼梯步态不可用
+  --gas-port <端口>    本机接收气体帧的 UDP 口，默认 1000
+                       串口服务器「目的端口」必须填同一个数
 
 运行模式（三选一，默认为状态监视）:
   --serve              启动遥控服务：HTTP 控制台 + WebSocket，供平板接入
@@ -505,6 +518,9 @@ int main(int argc, char** argv) {
       terrain_cfg.perception_ip = next();
     } else if (arg == "--perception-port") {
       terrain_cfg.perception_port =
+          static_cast<uint16_t>(std::atoi(next().c_str()));
+    } else if (arg == "--gas-port") {
+      svc_cfg.settings.gas_port =
           static_cast<uint16_t>(std::atoi(next().c_str()));
     } else if (arg == "--bind") {
       svc_cfg.bind_address = next();

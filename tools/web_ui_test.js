@@ -339,6 +339,14 @@ check('App 壳去掉截图录屏按钮',
 check('网页有指标按钮', !!htmlIds['btn-telem']);
 check('网页有摇杆按钮', !!htmlIds['btn-sticks']);
 check('网页有气体按钮', !!htmlIds['btn-gas']);
+check('网页有开关按钮', !!htmlIds['btn-sw']);
+var swCards = (html.match(/data-sw="/g) || []).length;
+check('开关面板只有协议里的 5 路', swCards === 5, '实际 ' + swCards);
+check('开关不含开发板和自组网',
+      html.indexOf('开发板') === -1 && html.indexOf('自组网') === -1);
+check('遥测 state 会刷新开关面板',
+      /function renderSwitches/.test(appJs) &&
+      /renderSwitches\(s\.switches\)/.test(appJs));
 check('网页没有手柄按钮', !htmlIds['btn-gp'] && html.indexOf('>手柄<') === -1);
 check('App 壳藏掉网页摇杆和指标按钮',
       /html\.shell-app[\s\S]*?\.hud-sticks/.test(styleText) &&
@@ -1035,6 +1043,19 @@ check('2×2 时点云保持订阅',
       /cloudVisible/.test(appJs) && /mode === '2x2'/.test(appJs));
 var gasCells = (html.match(/id="g-[a-z0-9]+"/g) || []).length;
 check('气体面板有 10 个指标', gasCells === 10, '实际 ' + gasCells);
+check('气体格按协议类型而不是 CO₂/Cl₂',
+      /id="g-ch4"/.test(html) && /id="g-h2"/.test(html) &&
+      !/id="g-co2"/.test(html) && !/id="g-cl2"/.test(html));
+check('遥测 state 会刷新气体面板',
+      /function renderGas/.test(appJs) && /renderGas\(s\.gas\)/.test(appJs));
+check('气体格显示端口和板号',
+      /class="g-loc"/.test(html) &&
+      /端口' \+ sl\.port \+ '-板'/.test(appJs));
+check('点云上显示单兵相对狗的坐标',
+      /id="uwb-hud"/.test(html) &&
+      /function setSoldiers/.test(read('cloud.js')) &&
+      /X30Cloud\.setSoldiers/.test(appJs) &&
+      /相对狗/.test(read('cloud.js')));
 
 // ---------------------------------------------------------------------------
 console.log('\n== 按键语音播报 ==');

@@ -37,6 +37,11 @@ conf_defaults() {
   LOCAL_PORT="43897"
   PERCEPTION_IP="192.168.1.105"
   PERCEPTION_PORT="43899"
+  GAS_PORT="1000"
+  PAYLOAD_IP="192.168.1.201"
+  PAYLOAD_PORT="2000"
+  LIGHT_IP="192.168.1.200"
+  LIGHT_PORT="9000"
   HTTP_PORT="8080"
   BIND_ADDR="0.0.0.0"
   # 点云默认关闭：感知主机的 ROS 可达性没有现场验证过之前，
@@ -63,6 +68,11 @@ conf_load() {
   v=$(conf_get "$file" local_port);      [[ -n $v ]] && LOCAL_PORT=$v
   v=$(conf_get "$file" perception_ip);   [[ -n $v ]] && PERCEPTION_IP=$v
   v=$(conf_get "$file" perception_port); [[ -n $v ]] && PERCEPTION_PORT=$v
+  v=$(conf_get "$file" gas_port);        [[ -n $v ]] && GAS_PORT=$v
+  v=$(conf_get "$file" payload_ip);      [[ -n $v ]] && PAYLOAD_IP=$v
+  v=$(conf_get "$file" payload_port);    [[ -n $v ]] && PAYLOAD_PORT=$v
+  v=$(conf_get "$file" light_ip);        [[ -n $v ]] && LIGHT_IP=$v
+  v=$(conf_get "$file" light_port);      [[ -n $v ]] && LIGHT_PORT=$v
   v=$(conf_get "$file" http_port);       [[ -n $v ]] && HTTP_PORT=$v
   v=$(conf_get "$file" bind_address);    [[ -n $v ]] && BIND_ADDR=$v
   v=$(conf_get "$file" cloud_enabled);   [[ -n $v ]] && CLOUD=$v
@@ -140,6 +150,11 @@ local_port = $LOCAL_PORT
 
 perception_ip = $PERCEPTION_IP
 perception_port = $PERCEPTION_PORT
+gas_port = $GAS_PORT
+payload_ip = $PAYLOAD_IP
+payload_port = $PAYLOAD_PORT
+light_ip = $LIGHT_IP
+light_port = $LIGHT_PORT
 
 http_port = $HTTP_PORT
 bind_address = $BIND_ADDR

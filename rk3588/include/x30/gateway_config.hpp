@@ -28,6 +28,17 @@ struct GatewaySettings {
   std::string perception_ip = "192.168.1.105";
   uint16_t perception_port = 43899;
 
+  // 气体监测主板把 3A 02 帧 UDP 打到本机这个口。串口服务器「目的端口」要一致。
+  uint16_t gas_port = 1000;
+
+  // 载荷主板（气泵 / UWB / 风扇 / 摄像头）。空 = 用气体口学到的对端。
+  std::string payload_ip = "192.168.1.201";
+  uint16_t payload_port = 2000;
+  // 条纹灯板 ESP8684，自组网 UDP :9000。现场是 192.168.1.200。
+  // 这条不能走载荷主板：STM32 不处理 0x02，会回失败。
+  std::string light_ip = "192.168.1.200";
+  uint16_t light_port = 9000;
+
   uint16_t http_port = 8080;
   std::string bind_address = "0.0.0.0";
 

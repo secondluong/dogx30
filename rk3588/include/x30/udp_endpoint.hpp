@@ -26,8 +26,16 @@ class UdpEndpoint {
 
   bool Send(const void* data, size_t len);
 
+  // 发到指定地址，不改默认 peer。载荷开关回源、灯板 :9000 都走这条。
+  bool SendTo(const std::string& ip, uint16_t port, const void* data,
+              size_t len);
+
   // 阻塞接收，超时返回 0，出错返回 -1。
   int Recv(void* buffer, size_t capacity, int timeout_ms);
+
+  // 同上，并带回源地址。src_ip / src_port 可为空。
+  int RecvFrom(void* buffer, size_t capacity, int timeout_ms,
+               std::string* src_ip, uint16_t* src_port);
 
   void Close();
 

@@ -37,6 +37,18 @@
           hint: '上下楼地形图、点云、机身相机都在这台上。' },
         { key: 'perception_port', label: '地形图端口', type: 'number',
           hint: '官方默认 43899。' },
+        { key: 'gas_port', label: '本机气体接收端口', type: 'number',
+          hint: '气体主板每 2 秒往这个 UDP 口推 10 路浓度。串口服务器' +
+                '「目的端口」必须填同一个数，默认 1000。' },
+        { key: 'payload_ip', label: '载荷主板 IP', type: 'text',
+          hint: '气泵、UWB、风扇、摄像头走这台。空则用气体口学到的对端。' },
+        { key: 'payload_port', label: '载荷主板端口', type: 'number',
+          hint: '串口服务器本机端口，现场是 2000。' },
+        { key: 'light_ip', label: '条纹灯板 IP', type: 'text',
+          hint: '灯板 ESP8684 听 UDP 9000，现场是 192.168.1.200。' +
+                '不能填载荷主板，STM32 不处理条纹灯。' },
+        { key: 'light_port', label: '条纹灯板端口', type: 'number',
+          hint: '默认 9000。' },
       ],
     },
     {

@@ -30,6 +30,8 @@
   const pose = { x: 0, y: 0, yaw: 0 };
   const frames = [];
   const trail = [];
+  // 单兵 UWB，单位米，已经是以狗为原点的机体系。
+  let soldiers = [];
   const persistMap = new Map();
   const est = {
     x: 0, y: 0, yaw: 0, t: 0, mile: null,
@@ -500,6 +502,65 @@
     ]);
   }
 
+  function soldierRing(x, y, z) {
+    const out = [x, y, z + 0.10];
+    const n = 10;
+    const r = 0.20;
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      out.push(x + Math.cos(a) * r, y + Math.sin(a) * r, z + 0.10);
+    }
+    return new Float32Array(out);
+  }
+
+  function soldierPin(x, y, z) {
+    return new Float32Array([
+      x, y, z + 0.48,
+      x + 0.16, y, z,
+      x - 0.16, y, z,
+    ]);
+  }
+
+  function paintUwbHud(uwb) {
+    const el = document.getElementById('uwb-hud');
+    if (!el) return;
+    const tags = uwb && uwb.tags ? uwb.tags : [];
+    if (!uwb || !uwb.heard || !tags.length) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
+    }
+    let html = '';
+    for (let i = 0; i < tags.length; i++) {
+      const t = tags[i];
+      const id = t.id;
+      const stale = !t.valid;
+      const xyz = t.valid
+        ? (t.x.toFixed(2) + '  ' + t.y.toFixed(2) + '  ' + t.z.toFixed(2) + ' m')
+        : '无效';
+      html += '<div class="uwb-card' + (stale ? ' stale' : '') +
+              '" data-id="' + id + '">' +
+              '<div class="uwb-top"><span><span class="uwb-dot"></span>单兵 ' +
+              id + '</span><span>相对狗</span></div>' +
+              '<div class="uwb-xyz">' + xyz + '</div></div>';
+    }
+    el.innerHTML = html;
+    el.classList.remove('hidden');
+  }
+
+  function setSoldiers(uwb) {
+    const next = [];
+    const tags = uwb && uwb.tags ? uwb.tags : [];
+    for (let i = 0; i < tags.length; i++) {
+      const t = tags[i];
+      if (!t || !t.valid) continue;
+      next.push({ id: t.id, x: t.x, y: t.y, z: t.z });
+    }
+    soldiers = next;
+    paintUwbHud(uwb);
+    if (gl) draw();
+  }
+
   function draw() {
     if (!gl || !program) return;
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -520,7 +581,7 @@
       gl.drawArrays(gl.POINTS, 0, pointCount);
     }
 
-    if (!opts.trail) return;
+    if (!opts.trail && !soldiers.length) return;
 
     gl.disable(gl.DEPTH_TEST);
     gl.useProgram(lineProgram);
@@ -529,14 +590,16 @@
     gl.uniformMatrix4fv(gl.getUniformLocation(lineProgram, 'u_mvp'), false, mvp);
     gl.uniform1f(gl.getUniformLocation(lineProgram, 'u_size'), 10.0);
 
-    const ribbon = trailRibbonVerts();
-    const nRibbon = ribbon.length / 3;
-    if (nRibbon >= 4) {
-      gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.12, 0.12);
-      gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, ribbon, gl.DYNAMIC_DRAW);
-      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, nRibbon);
+    if (opts.trail) {
+      const ribbon = trailRibbonVerts();
+      const nRibbon = ribbon.length / 3;
+      if (nRibbon >= 4) {
+        gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.12, 0.12);
+        gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, ribbon, gl.DYNAMIC_DRAW);
+        gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, nRibbon);
+      }
     }
 
     const mark = markerVerts();
@@ -552,6 +615,24 @@
     gl.bufferData(gl.ARRAY_BUFFER, head, gl.DYNAMIC_DRAW);
     gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    for (let i = 0; i < soldiers.length; i++) {
+      const s = soldiers[i];
+      if (s.id === 11) {
+        gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 0.25, 0.83, 1.0);
+      } else {
+        gl.uniform3f(gl.getUniformLocation(lineProgram, 'u_color'), 1.0, 0.48, 0.16);
+      }
+      const ring = soldierRing(s.x, s.y, s.z);
+      gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, ring, gl.DYNAMIC_DRAW);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_FAN, 0, ring.length / 3);
+      const pin = soldierPin(s.x, s.y, s.z);
+      gl.bufferData(gl.ARRAY_BUFFER, pin, gl.DYNAMIC_DRAW);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
     gl.enable(gl.DEPTH_TEST);
   }
 
@@ -1071,6 +1152,6 @@
 
   window.X30Cloud = {
     initCloud, onCloudFrame, onCloudStatus, onPose, stop, resize, resubscribe,
-    setWanted, nudgeZoom,
+    setWanted, nudgeZoom, setSoldiers,
   };
 })();

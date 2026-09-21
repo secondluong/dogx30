@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260826y">
+<link rel="stylesheet" href="style.css?v=20260910c">
 </head>
 <body>
 
@@ -201,6 +201,7 @@
     <div id="pane-cloud" class="pane" data-view="cloud">
       <div class="cloud-wrap">
         <canvas id="cloud-canvas" class="cloud-canvas"></canvas>
+        <div id="uwb-hud" class="uwb-hud hidden"></div>
         <div class="placeholder cloud-idle" id="cloud-idle">
           <div class="ph-icon">⁘</div>
           <p>点云未订阅</p>
@@ -293,18 +294,48 @@
     <div class="errors" id="t-errors"></div>
     </section>
     <section id="gas-panel" class="panel gas-panel hidden">
-      <div class="panel-head"><span>气体</span><span class="tag">未接入</span></div>
+      <div class="panel-head"><span>气体</span><span class="tag" id="gas-tag">未接入</span></div>
       <div class="grid" id="gas-grid">
-        <div class="cell"><label>氧气 O₂</label><b id="g-o2">—</b><em>%VOL</em></div>
-        <div class="cell"><label>一氧化碳 CO</label><b id="g-co">—</b><em>ppm</em></div>
-        <div class="cell"><label>硫化氢 H₂S</label><b id="g-h2s">—</b><em>ppm</em></div>
-        <div class="cell"><label>可燃气 LEL</label><b id="g-lel">—</b><em>%LEL</em></div>
-        <div class="cell"><label>二氧化碳 CO₂</label><b id="g-co2">—</b><em>ppm</em></div>
-        <div class="cell"><label>二氧化硫 SO₂</label><b id="g-so2">—</b><em>ppm</em></div>
-        <div class="cell"><label>二氧化氮 NO₂</label><b id="g-no2">—</b><em>ppm</em></div>
-        <div class="cell"><label>氨气 NH₃</label><b id="g-nh3">—</b><em>ppm</em></div>
-        <div class="cell"><label>氯气 Cl₂</label><b id="g-cl2">—</b><em>ppm</em></div>
-        <div class="cell"><label>VOC</label><b id="g-voc">—</b><em>ppm</em></div>
+        <div class="cell" data-gas="o2"><div class="g-head"><label>氧气 O₂</label><span class="g-loc"></span></div><div class="g-read"><b id="g-o2">—</b><em>%VOL</em></div></div>
+        <div class="cell" data-gas="ch4"><div class="g-head"><label>甲烷 CH₄</label><span class="g-loc"></span></div><div class="g-read"><b id="g-ch4">—</b><em>%LEL</em></div></div>
+        <div class="cell" data-gas="co"><div class="g-head"><label>一氧化碳 CO</label><span class="g-loc"></span></div><div class="g-read"><b id="g-co">—</b><em>ppm</em></div></div>
+        <div class="cell" data-gas="h2s"><div class="g-head"><label>硫化氢 H₂S</label><span class="g-loc"></span></div><div class="g-read"><b id="g-h2s">—</b><em>ppm</em></div></div>
+        <div class="cell" data-gas="lel"><div class="g-head"><label>可燃气 LEL</label><span class="g-loc"></span></div><div class="g-read"><b id="g-lel">—</b><em>%LEL</em></div></div>
+        <div class="cell" data-gas="nh3"><div class="g-head"><label>氨气 NH₃</label><span class="g-loc"></span></div><div class="g-read"><b id="g-nh3">—</b><em>ppm</em></div></div>
+        <div class="cell" data-gas="no2"><div class="g-head"><label>二氧化氮 NO₂</label><span class="g-loc"></span></div><div class="g-read"><b id="g-no2">—</b><em>ppm</em></div></div>
+        <div class="cell" data-gas="so2"><div class="g-head"><label>二氧化硫 SO₂</label><span class="g-loc"></span></div><div class="g-read"><b id="g-so2">—</b><em>ppm</em></div></div>
+        <div class="cell" data-gas="h2"><div class="g-head"><label>氢气 H₂</label><span class="g-loc"></span></div><div class="g-read"><b id="g-h2">—</b><em>ppm</em></div></div>
+        <div class="cell" data-gas="voc"><div class="g-head"><label>VOC</label><span class="g-loc"></span></div><div class="g-read"><b id="g-voc">—</b><em>ppm</em></div></div>
+      </div>
+    </section>
+    <section id="switch-panel" class="panel switch-panel hidden">
+      <div class="panel-head"><span>开关</span><span class="tag" id="switch-tag">载荷</span></div>
+      <div class="sw-grid" id="switch-grid">
+        <button type="button" class="sw-card" data-sw="light">
+          <span class="sw-ico sw-ico-light"></span>
+          <span class="sw-name">条纹灯</span>
+          <span class="sw-state" id="sw-light">未知</span>
+        </button>
+        <button type="button" class="sw-card" data-sw="pump">
+          <span class="sw-ico sw-ico-pump"></span>
+          <span class="sw-name">气泵</span>
+          <span class="sw-state" id="sw-pump">未知</span>
+        </button>
+        <button type="button" class="sw-card" data-sw="uwb">
+          <span class="sw-ico sw-ico-uwb"></span>
+          <span class="sw-name">UWB</span>
+          <span class="sw-state" id="sw-uwb">未知</span>
+        </button>
+        <button type="button" class="sw-card" data-sw="fan">
+          <span class="sw-ico sw-ico-fan"></span>
+          <span class="sw-name">风扇</span>
+          <span class="sw-state" id="sw-fan">未知</span>
+        </button>
+        <button type="button" class="sw-card" data-sw="camera">
+          <span class="sw-ico sw-ico-cam"></span>
+          <span class="sw-name">摄像头</span>
+          <span class="sw-state" id="sw-camera">未知</span>
+        </button>
       </div>
     </section>
   </div>
@@ -312,6 +343,7 @@
   <button type="button" class="btn sm hud-sticks-btn" id="btn-sticks">摇杆</button>
   <button type="button" class="btn sm hud-telem-btn" id="btn-telem">指标</button>
   <button type="button" class="btn sm hud-gas-btn" id="btn-gas">气体</button>
+  <button type="button" class="btn sm hud-sw-btn" id="btn-sw">开关</button>
   <div id="gp-panel" class="panel hud-gp hidden">
     <div class="gp-bar">
       <div class="gp-line">
@@ -417,11 +449,11 @@
 <script src="voice.js?v=20260826y"></script>
 <script src="media.js?v=20260826y"></script>
 <script src="capture.js?v=20260826y"></script>
-<script src="cloud.js?v=20260826y"></script>
+<script src="cloud.js?v=20260921b"></script>
 <script src="gamepad.js?v=20260921a"></script>
 <script src="rcprobe.js?v=20260921a"></script>
 <script src="settings.js?v=20260921a"></script>
 <script src="dogcam24.js?v=20260826y"></script>
-<script src="app.js?v=20260921a"></script>
+<script src="app.js?v=20260921b"></script>
 </body>
 </html>

@@ -327,6 +327,9 @@ function connect() {
       case 'cloud_status':
         if (window.X30Cloud) window.X30Cloud.onCloudStatus(msg);
         break;
+      case 'switch_result':
+        applySwitchResult(msg);
+        break;
       case 'error':
         // 配置相关的报错归设置面板显示在表单旁边，横幅四秒就没了，
         // 而人这时正盯着表单等结果。
@@ -1135,6 +1138,11 @@ function renderState(s) {
 
   paintModes();
 
+  renderGas(s.gas);
+  renderSwitches(s.switches);
+  if (window.X30Cloud && window.X30Cloud.setSoldiers) {
+    window.X30Cloud.setSoldiers(s.uwb);
+  }
   updateStickAvailability();
 }
 
@@ -1187,8 +1195,121 @@ function paintModes() {
   }
 }
 
+// 气体类型格是固定的 10 路。空槽不占格；掉线把对应类型标成「掉线」。
+function renderGas(gas) {
+  const panel = $('gas-panel');
+  const tag = $('gas-tag');
+  if (!panel) return;
+  const cells = panel.querySelectorAll('#gas-grid .cell[data-gas]');
+  for (let i = 0; i < cells.length; i++) {
+    cells[i].classList.remove('offline', 'empty');
+    const val = cells[i].querySelector('b');
+    const loc = cells[i].querySelector('.g-loc');
+    if (val) val.textContent = '—';
+    if (loc) loc.textContent = '';
+  }
+  if (!gas) {
+    if (tag) tag.textContent = '未接入';
+    panel.classList.add('stale');
+    return;
+  }
+  if (gas.alive) {
+    if (tag) tag.textContent = '在线';
+    panel.classList.remove('stale');
+  } else if (gas.heard) {
+    if (tag) tag.textContent = '超时';
+    panel.classList.add('stale');
+  } else {
+    if (tag) tag.textContent = '未接入';
+    panel.classList.add('stale');
+  }
+  const slots = gas.slots || [];
+  for (let i = 0; i < slots.length; i++) {
+    const sl = slots[i];
+    if (!sl || sl.status === 'empty' || sl.key === 'empty' || !sl.key) continue;
+    const cell = panel.querySelector('#gas-grid .cell[data-gas="' + sl.key + '"]');
+    if (!cell) continue;
+    const val = cell.querySelector('b');
+    if (!val) continue;
+    const loc = cell.querySelector('.g-loc');
+    if (loc && sl.port) {
+      const board = sl.board || (sl.port <= 5 ? 1 : 2);
+      loc.textContent = '端口' + sl.port + '-板' + board;
+    }
+    if (sl.status === 'offline') {
+      val.textContent = '掉线';
+      cell.classList.add('offline');
+    } else if (typeof sl.value === 'number') {
+      val.textContent = fmt(sl.value, 1);
+    }
+  }
+}
+
 // 开关类的按钮上只有名字，没有「现在是开还是关」。屏幕上看一眼就知道，
 // 但这两个在 App 上是 G20 的 R1/R2 按的，人根本没在看屏幕。
+const SW_TEXT = {
+  unknown: '未知',
+  on: '开',
+  off: '关',
+  busy: '发送中',
+  error: '失败',
+};
+const SW_NAME = {
+  light: '条纹灯',
+  pump: '气泵',
+  uwb: 'UWB',
+  fan: '风扇',
+  camera: '摄像头',
+};
+
+function paintSwitchCard(key, status) {
+  const card = document.querySelector('.sw-card[data-sw="' + key + '"]');
+  const el = $('sw-' + key);
+  if (!card || !el) return;
+  const st = status || 'unknown';
+  el.textContent = SW_TEXT[st] || '未知';
+  card.classList.toggle('on', st === 'on');
+  card.classList.toggle('busy', st === 'busy');
+  card.classList.toggle('err', st === 'error');
+  card.dataset.status = st;
+}
+
+function renderSwitches(sw) {
+  const items = sw && sw.items ? sw.items : [];
+  for (let i = 0; i < items.length; i++) {
+    paintSwitchCard(items[i].key, items[i].status);
+  }
+}
+
+function applySwitchResult(msg) {
+  if (!msg || !msg.name) return;
+  paintSwitchCard(msg.name, msg.status || (msg.ok ? (msg.on ? 'on' : 'off') : 'error'));
+  const title = SW_NAME[msg.name] || msg.name;
+  if (msg.ok) {
+    speak(title + (msg.on ? '已开' : '已关'));
+  } else {
+    showBanner(msg.msg || (title + '失败'));
+  }
+}
+
+function toggleSwitchPanel() {
+  const el = $('switch-panel');
+  if (!el) return;
+  el.classList.toggle('hidden');
+  const shown = !el.classList.contains('hidden');
+  if ($('btn-sw')) $('btn-sw').classList.toggle('active', shown);
+  speak(shown ? '开关已开' : '开关已关');
+}
+
+function clickSwitch(key) {
+  const card = document.querySelector('.sw-card[data-sw="' + key + '"]');
+  if (!card) return;
+  if (card.dataset.status === 'busy') return;
+  const turnOn = card.dataset.status !== 'on';
+  paintSwitchCard(key, 'busy');
+  send({ t: 'switch', name: key, on: turnOn });
+}
+
 function toggleGas() {
   const el = $('gas-panel');
   if (!el) return;
@@ -1742,6 +1863,24 @@ $('btn-gas').addEventListener('click', () => {
   toggleGas();
 });
 
+if ($('btn-sw')) {
+  $('btn-sw').addEventListener('click', () => {
+    toggleSwitchPanel();
+  });
+}
+if ($('switch-grid')) {
+  $('switch-grid').addEventListener('click', (ev) => {
+    let el = ev.target;
+    while (el && el !== $('switch-grid')) {
+      if (el.getAttribute && el.getAttribute('data-sw')) {
+        clickSwitch(el.getAttribute('data-sw'));
+        return;
+      }
+      el = el.parentNode;
+    }
+  });
+}
+
 $('btn-sticks').addEventListener('click', () => {
   $('hud-sticks').classList.toggle('hidden');
   const shown = !$('hud-sticks').classList.contains('hidden');
@@ -1985,6 +2124,10 @@ function bootstrap() {
   if ($('gas-panel')) {
     $('gas-panel').classList.add('hidden');
     if ($('btn-gas')) $('btn-gas').classList.remove('active');
+  }
+  if ($('switch-panel')) {
+    $('switch-panel').classList.add('hidden');
+    if ($('btn-sw')) $('btn-sw').classList.remove('active');
   }
   if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
   paintVerChip();

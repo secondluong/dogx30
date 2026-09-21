@@ -77,6 +77,7 @@ conf_defaults
 ROBOT_PORT="43894"
 LOCAL_PORT="43898"
 PERCEPTION_PORT="43900"
+GAS_PORT="2000"
 CLOUD="yes"
 ROS_MASTER="http://10.1.2.3:11400"
 ROS_HOST="10.9.9.9"
@@ -99,6 +100,7 @@ check_get() {   # check_get <键> <期望值>
 check_get robot_port 43894
 check_get local_port 43898
 check_get perception_port 43900
+check_get gas_port 2000
 check_get ros_master "http://10.1.2.3:11400"
 check_get ros_host 10.9.9.9
 check_get cloud_topic /points_raw
