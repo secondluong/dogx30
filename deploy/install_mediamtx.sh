@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 板上装 MediaMTX：把布控球 192.168.1.168 转成平板能拉的 rtsp://192.168.10.2:8554/ptz_vis_main。
-# 平板在 10 网，打不到 1 网的球，所以这一步不能省。
+# 板上装 MediaMTX：把布控球 192.168.10.168 转成平板能拉的 rtsp://192.168.10.120:8554/ptz_vis_main。
+# 平板在 10 网，和球同一段，但出口仍走板子，方便码率控制和 WebRTC。
 set -euo pipefail
 
 PREFIX="${PREFIX:-/opt/x30}"
@@ -90,5 +90,5 @@ if ! systemctl is-active --quiet x30-media; then
 fi
 
 echo "MediaMTX 已启动。平板拉双光："
-echo "  rtsp://192.168.10.2:8554/ptz_vis_main"
+echo "  rtsp://192.168.10.120:8554/ptz_vis_main"
 ss -lnt | grep -E '8554|8889' || true

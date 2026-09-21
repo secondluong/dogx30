@@ -26,9 +26,9 @@
   function host() {
     const u = (window.X30DogCam && window.X30DogCam.ptzUrl)
       ? window.X30DogCam.ptzUrl()
-      : 'rtsp://192.168.1.168:554/11';
+      : 'rtsp://192.168.10.168:554/11';
     const m = /rtsp:\/\/(?:[^/?#@]*@)?([^:/?#]+)/i.exec(String(u || ''));
-    return (m && m[1]) || '192.168.1.168';
+    return (m && m[1]) || '192.168.10.168';
   }
 
   function radioBound() {

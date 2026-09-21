@@ -2,7 +2,7 @@
 // 摇杆量由遥控端按 10 Hz 送来，本类在独立线程里发给球机，
 // 避免卡在 WebSocket 回调里拖死急停。
 //
-// 现场球机 https://192.168.1.168 账号 admin/admin：
+// 现场球机 https://192.168.10.168 账号 admin/admin：
 //   /cgi-bin/anv/ptz_cgi?action=Left|Right|Up|Down|ZoomAdd|ZoomSub|Stop&user=MD5&pwd=MD5&Speed=1..8
 //   /cgi-bin/anv/pip_cgi?action=get|set&mode=&SmallPicSize=&SmallPicPos=
 

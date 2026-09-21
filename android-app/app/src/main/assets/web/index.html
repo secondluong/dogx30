@@ -73,7 +73,7 @@
 
     <div id="set-app-box" class="set-form hidden">
       <div class="set-sect">本机连接网关</div>
-      <p class="set-sect-note">MESH 路径：平板 1 网 WiFi → 狗端 MESH 电台 → 主板交换机 → 板子 <b>192.168.1.101:8080</b>。2.4G 开着时系统 ping 可能不通，App 钉在 wlan 上。板上日志：<code>journalctl -u x30-gateway -f</code></p>
+      <p class="set-sect-note">MESH 路径：遥控器 192.168.10.100 → 狗端 MESH → 交换机 → 板子 eth1 <b>192.168.10.120:8080</b>。板上日志：<code>journalctl -u x30-gateway -f</code></p>
       <p class="set-sect-note" id="set-app-nets">—</p>
       <label class="set-row">
         <span class="set-label">服务 IP</span>

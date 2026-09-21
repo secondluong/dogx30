@@ -44,7 +44,7 @@ struct SwitchAck {
 };
 
 struct PayloadSwitchConfig {
-  std::string payload_ip = "192.168.1.201";
+  std::string payload_ip = "192.168.10.201";
   uint16_t payload_port = 2000;
   std::string light_ip = "192.168.1.200";
   uint16_t light_port = 9000;

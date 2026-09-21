@@ -38,12 +38,12 @@ conf_defaults() {
   PERCEPTION_IP="192.168.1.105"
   PERCEPTION_PORT="43899"
   GAS_PORT="1000"
-  PAYLOAD_IP="192.168.1.201"
+  PAYLOAD_IP="192.168.10.201"
   PAYLOAD_PORT="2000"
   LIGHT_IP="192.168.1.200"
   LIGHT_PORT="9000"
   HTTP_PORT="8080"
-  BIND_ADDR="0.0.0.0"
+  BIND_ADDR="192.168.10.120"
   # 点云默认关闭：感知主机的 ROS 可达性没有现场验证过之前，
   # 不该在开机时就去连一台生产设备。
   CLOUD="no"
@@ -52,7 +52,7 @@ conf_defaults() {
   CLOUD_TOPIC="/lidar_points"
   CLOUD_HZ="2"
   CLOUD_POINTS="20000"
-  PTZ_VIS_RTSP="rtsp://192.168.1.168:554/11"
+  PTZ_VIS_RTSP="rtsp://192.168.10.168:554/11"
   PTZ_IR_RTSP=""
   PTZ_VIS_CODEC=""
   PTZ_IR_CODEC=""

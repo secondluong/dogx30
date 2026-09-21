@@ -21,7 +21,7 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 /**
- * App → 网关的 WebSocket。socket 钉在 WiFi / MESH 电台上，避开 2.4G 的 ar_net0。
+ * App → 网关的 WebSocket。socket 走 WiFi / MESH 电台。
  * 下行不走 evaluateJavascript 拼 JSON：10 Hz 遥测把整段塞进 JS 源会卡住 WebView，
  * 连接看着就像 1–2 秒断一次。消息进队列，由网页 wsPoll 取。
  */

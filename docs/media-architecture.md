@@ -159,7 +159,7 @@ MediaMTX 拉流。网关不碰视频数据本身。
   ],
   "budget_kbps": 3800,
   "total_kbps": 3400,
-  "webrtc_base": "http://192.168.10.2:8889"
+  "webrtc_base": "http://192.168.10.120:8889"
 }
 ```
 

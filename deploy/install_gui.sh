@@ -4,7 +4,7 @@
 #   sudo bash deploy/install_gui.sh                    # 交互，一路回车即可
 #   sudo bash deploy/install_gui.sh --yes              # 全用默认值，不问
 #   sudo bash deploy/install_gui.sh --yes --cloud \
-#        --robot-ip 192.168.1.103 --bind 192.168.10.2  # 脚本化调用
+#        --robot-ip 192.168.1.103 --bind 192.168.10.120  # 脚本化调用
 #
 # 存在的意义不是少敲几条命令，而是**少漏一步**。装机当天人蹲在狗旁边，
 # 顺序记错、参数填错都很常见，而其中几种错法的现场症状一模一样。

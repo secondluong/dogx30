@@ -20,7 +20,7 @@
   'use strict';
 
   const TOKEN_KEY = 'x30.admin.token';
-  const DEFAULT_PTZ_VIS = 'rtsp://192.168.1.168:554/11';
+  const DEFAULT_PTZ_VIS = 'rtsp://192.168.10.168:554/11';
 
   const SECTIONS = [
     {
@@ -30,7 +30,7 @@
       fields: [
         { key: 'ptz_vis_rtsp', label: '双光视频', type: 'text',
           value: DEFAULT_PTZ_VIS,
-          hint: '默认 rtsp://192.168.1.168:554/11 。路径带 /h264、/h265 时按地址认编码。' },
+          hint: '默认 rtsp://192.168.10.168:554/11 。路径带 /h264、/h265 时按地址认编码。' },
         { key: 'ptz_vis_codec', label: '双光编码', type: 'text',
           hint: 'h264 或 h265。/11 这类短路径空着按 h264。相机主码请开 H.264，旧平板解不了 H.265。' },
         { key: 'ptz_ir_rtsp', label: '热成像 RTSP', type: 'text', hidden: true },
@@ -73,7 +73,7 @@
         { key: 'http_port', label: '服务端口', type: 'number',
           hint: '控制台与 WebSocket 都在这个端口上。' },
         { key: 'bind_address', label: '监听地址', type: 'text',
-          hint: '0.0.0.0 表示全部网卡。现场板子可填 192.168.1.101。接了 4G 不要留 0.0.0.0。' },
+          hint: '0.0.0.0 表示全部网卡。现场板子填 192.168.10.120（eth1）。接了 4G 不要留 0.0.0.0。' },
       ],
     },
     {

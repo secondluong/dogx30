@@ -139,8 +139,7 @@ final class NativeVideo {
         bindRadio = useRadio;
         wanted = true;
         forceTcp = true;
-        // 2.4G 必须先把射频口拉起来再绑 socket。MESH 上看双光球不要去开射频，
-        // 否则默认路由会被 2.4G 虚口搅乱，192.168.1.168 反而够不到。
+        // 2.4G 必须先把射频口拉起来再绑 socket。MESH 上看球不要去开射频。
         if (useRadio) RadioLink.get().setEnabled(true);
         open();
     }
@@ -233,8 +232,7 @@ final class NativeVideo {
             if (bindRadio) {
                 src.setSocketFactory(new RadioSocketFactory());
             } else {
-                // MESH：系统默认路由常滑到图传口 ar_net0。播放器 socket 钉在
-                // WiFi 上，直拉球机 / 机身，不跟系统 ping 走。
+                // MESH：播放器走 WiFi / MESH 网卡，直拉球机或机身。
                 Network mesh = RadioLink.get().meshNetwork();
                 if (mesh != null) src.setSocketFactory(mesh.getSocketFactory());
             }

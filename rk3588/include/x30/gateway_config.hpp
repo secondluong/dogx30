@@ -19,7 +19,7 @@ class Json;
 
 // 现场双光球默认主码。设置里空着、新装配置文件都用这个。
 inline constexpr const char* kDefaultPtzVisRtsp =
-    "rtsp://192.168.1.168:554/11";
+    "rtsp://192.168.10.168:554/11";
 
 // 可在线修改的参数全集。刻意不含 --web / --media / --prefix 这类文件路径：
 // 那些是装机时定的部署布局，从一个无 TLS 的网页去改服务端路径只会开出
@@ -36,7 +36,7 @@ struct GatewaySettings {
   uint16_t gas_port = 1000;
 
   // 载荷主板（气泵 / UWB / 风扇 / 摄像头）。空 = 用气体口学到的对端。
-  std::string payload_ip = "192.168.1.201";
+  std::string payload_ip = "192.168.10.201";
   uint16_t payload_port = 2000;
   // 条纹灯板 ESP8684，自组网 UDP :9000。现场是 192.168.1.200。
   // 这条不能走载荷主板：STM32 不处理 0x02，会回失败。
@@ -44,7 +44,7 @@ struct GatewaySettings {
   uint16_t light_port = 9000;
 
   uint16_t http_port = 8080;
-  std::string bind_address = "0.0.0.0";
+  std::string bind_address = "192.168.10.120";
 
   bool cloud_enabled = false;
   std::string ros_master = "http://192.168.1.105:11311";

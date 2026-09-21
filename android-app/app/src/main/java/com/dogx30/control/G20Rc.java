@@ -176,7 +176,6 @@ public final class G20Rc {
         RadioLink.get().setEnabled(on);
         // 用过 2.4G 后切 MESH 只停运动心跳，不拆射频网卡。拆掉再立即重建时
         // ar_net0/SDK UDP 管道经常回不来，表现为再切回 2.4G 后所有按钮失效。
-        // MESH 期间进程出口由 RadioLink 钉在 WiFi，保留射频网卡不会抢控制权。
         if (on) {
             radioActivatedThisSession = true;
             enableRf(true);

@@ -1,12 +1,12 @@
 // App 原生 RTSP：2.4G 绑 ar_net0，MESH 绑 wlan。整机统一 1 网，
-// 双光直拉 192.168.1.168:554/11，机身直拉设置里的地址。
+// 双光直拉 192.168.10.168:554/11，机身直拉设置里的地址。
 
 'use strict';
 
 const DOGCAM_KEY = 'x30.dogcam24.url';
 const DOGCAM_DEFAULT = 'rtsp://192.168.1.105:8554/test';
 const PTZ_KEY = 'x30.ptz_vis.rtsp';
-const PTZ_DEFAULT = 'rtsp://192.168.1.168:554/11';
+const PTZ_DEFAULT = 'rtsp://192.168.10.168:554/11';
 
 let lastRect = '';
 let playing = false;
@@ -212,7 +212,7 @@ function restoreIdleText() {
   });
 }
 
-// 热成像仍在网关那侧，2.4G 到不了。双光在 192.168.1.168，能直拉。
+// 热成像仍在网关那侧，2.4G 到不了。双光在 192.168.10.168，MESH/LAN 能直拉。
 function paintPtz(on) {
   const id = 'media-idle-ptz-ir';
   rememberIdle(id);

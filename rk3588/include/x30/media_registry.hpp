@@ -39,7 +39,7 @@ struct MediaSource {
 struct MediaConfig {
   // 遥控端访问 MediaMTX 的基地址。注意这里要填**遥控端能访问到的地址**，
   // 不是 127.0.0.1 —— 这个串会原样下发给遥控端浏览器。
-  std::string webrtc_base = "http://192.168.10.2:8889";
+  std::string webrtc_base = "http://192.168.10.120:8889";
 
   // 视频总码率上限。留给控制报文的余量已经扣掉，见带宽预算。
   int budget_kbps = 3800;

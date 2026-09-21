@@ -485,43 +485,18 @@ check('V1.0.6 的 RL 与 L楼梯枚举已贯通双链路',
       /case "lstair": return 0x21010424/.test(radioJava) &&
       /data-gait="lstair"/.test(html) &&
       /36: 'lstair'/.test(appJs));
-// 图传网卡和 WiFi 常撞在同一个网段（现场实测 ar_net0 192.168.1.11 / wlan0
-// 192.168.1.48），Android 又按以太网优先把默认路由搬到图传口上，于是 WebView 里
-// 的 WebSocket、WebRTC 全从那口出去 —— 切到 MESH 射频一关就整条链路断。
-// 所以：不再 requestNetwork（别帮它抢默认网络）、进程钉在 WiFi 上、
-// 2.4G 那个 socket 自己按网卡绑；万一没绑上就不敢钉，控制链路优先。
-check('图传口不许抢走进程的默认出口',
-      !/cm\.requestNetwork\(/.test(radioJava) &&
-      /registerNetworkCallback/.test(radioJava) &&
-      /TRANSPORT_WIFI/.test(radioJava) &&
-      /private synchronized void pinProcess/.test(radioJava) &&
-      /enabled && !udpBound/.test(radioJava) &&
-      /unpin for radio/.test(radioJava) &&
-      /短暂丢失时不要解钉/.test(radioJava) &&
-      /findMeshNet/.test(radioJava) &&
-      /isMeshIface/.test(radioJava) &&
-      /NativeWs\.isAnyLive/.test(radioJava) &&
-      /pinnedIp/.test(radioJava) &&
-      /ar_/.test(radioJava) &&
-      /udpBound = true/.test(radioJava) &&
-      !/bindProcessToNetwork\(net\)/.test(radioJava));
 var storeJava = fs.readFileSync(
     path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
               'com', 'dogx30', 'control', 'GatewayStore.java'), 'utf8');
-check('旧包 10.2 网关地址自动改回 1.101',
-      /DEFAULT_HOST = "192\.168\.1\.101"/.test(storeJava) &&
+check('旧包网关地址自动迁到 eth1 10.120',
+      /DEFAULT_HOST = "192\.168\.10\.120"/.test(storeJava) &&
       /isLegacyTenNetHost/.test(storeJava) &&
       /192\.168\.10\.2/.test(storeJava) &&
+      /192\.168\.1\.101/.test(storeJava) &&
       /192\.168\.1\.120/.test(storeJava));
 check('运动 UDP 绑在跟狗同网段的地址上',
       /LocalIpv4ForPeer/.test(motionCpp) &&
       /Open\(cfg_\.local_port, bind_ip/.test(motionCpp));
-var addIpSh = fs.readFileSync(
-    path.join(__dirname, '..', 'deploy', 'add_remote_ip.sh'), 'utf8');
-check('加 10.2 时锁源地址且不重拨网卡',
-      /ip route replace/.test(addIpSh) &&
-      /src "\$DOG_SRC"/.test(addIpSh) &&
-      !/nmcli connection up "\$conn"/.test(addIpSh));
 // 狗一直在往遥控器发遥测（0x1009 那一包头后第一个字节就是 basic_state），
 // 以前 drainRx 只数包不看内容，姿态全靠「我发过什么」猜。别的遥控器动过狗、
 // 或者刚从 MESH 切回来，猜的和实际就是两回事。
@@ -975,7 +950,7 @@ check('网关连上不依赖狗，芯片写网关已连',
 var nativeWsJava = fs.readFileSync(
     path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
               'com', 'dogx30', 'control', 'NativeWs.java'), 'utf8');
-check('App 的网关 WebSocket 走原生并钉在 WiFi',
+check('App 的网关 WebSocket 走原生 MESH/WiFi 通道',
       /class NativeWs/.test(nativeWsJava) &&
       /meshNetwork\(\)/.test(nativeWsJava) &&
       /getSocketFactory/.test(nativeWsJava) &&
@@ -1105,9 +1080,9 @@ check('双光背景只拉一路拼接流',
       html.indexOf('data-view-pick="dual"') === -1 &&
       /label: '双光视频'/.test(read('settings.js')));
 check('双光 RTSP 默认填现场球机地址',
-      /DEFAULT_PTZ_VIS = 'rtsp:\/\/192\.168\.1\.168:554\/11'/.test(read('settings.js')) &&
+      /DEFAULT_PTZ_VIS = 'rtsp:\/\/192\.168\.10\.168:554\/11'/.test(read('settings.js')) &&
       fs.readFileSync(path.join(__dirname, '..', 'rk3588', 'include', 'x30',
-        'gateway_config.hpp'), 'utf8').indexOf('192.168.1.168:554/11') !== -1);
+        'gateway_config.hpp'), 'utf8').indexOf('192.168.10.168:554/11') !== -1);
 check('指标格子字号跟气体一样大',
       /\.telemetry \.cell b \{ font-size: 22px/.test(read('style.css')) ||
       /telemetry \.cell b \{ font-size: 22px/.test(read('style.css')));

@@ -242,8 +242,8 @@ console.log('\n== MESH 上双光直拉球机 ==');
 h = harness();
 h.main = 'ptz_vis';
 h.mod.init();
-check('MESH 双光直拉 1.168:554/11，不绑射频',
-      h.calls.indexOf('start rtsp://192.168.1.168:554/11 lan') !== -1,
+check('MESH 双光直拉 10.168:554/11，不绑射频',
+      h.calls.indexOf('start rtsp://192.168.10.168:554/11 lan') !== -1,
       JSON.stringify(h.calls));
 check('MESH 双光也把网页背景透掉', !!h.cls['native-video-on']);
 

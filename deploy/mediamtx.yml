@@ -4,7 +4,7 @@
 # 这里只做转封装，CPU 几乎不占也没有二次编码损失。
 #
 # 安全：MediaMTX 默认监听全部网卡并开五种协议。本机装有 4G，这是不可接受的
-# 暴露面，所以下面把监听地址全部限定在 eth1（192.168.10.2），
+# 暴露面，所以下面把监听地址全部限定在 eth1（192.168.10.120），
 # 并关掉用不到的协议。改这些地址前先想清楚 4G 那侧能不能够到。
 
 logLevel: info
@@ -33,7 +33,7 @@ webrtcLocalUDPAddress: :8189
 # ICE 只用本地候选。这是个封闭内网，没有 NAT 要穿，
 # 配 STUN 服务器反而会在没有外网时拖慢建连。
 webrtcIPsFromInterfaces: no
-webrtcAdditionalHosts: [192.168.10.2]
+webrtcAdditionalHosts: [192.168.10.120]
 webrtcICEServers2: []
 
 api: yes
@@ -51,9 +51,9 @@ pathDefaults:
 
 paths:
   ptz_vis_main:
-    source: rtsp://192.168.1.168:554/11
+    source: rtsp://192.168.10.168:554/11
   ptz_vis_sub:
-    source: rtsp://192.168.1.168:554/11
+    source: rtsp://192.168.10.168:554/11
 
   ptz_ir_main:
     source: rtsp://admin:PASSWORD@192.168.10.12:554/Streaming/Channels/201

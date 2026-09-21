@@ -236,8 +236,7 @@ function onWsOpen() {
 
 function onWsClose() {
   const dropFromLive = !!app.wsWasOpen;
-  // 不退回 WebView 通道：它不认 bindProcessToNetwork，会从图传口 ar_net0
-  // 出去。原生通道自己重连，socket 钉在 wlan 上。
+  // 不退回 WebView 通道。原生通道自己重连。
   if (!dropFromLive && hasNativeWs() && !app.useBrowserWs) {
     app.nativeWsFails = (app.nativeWsFails || 0) + 1;
   }
