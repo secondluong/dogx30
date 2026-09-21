@@ -230,7 +230,14 @@ final class NativeVideo {
             RtspMediaSource.Factory src = new RtspMediaSource.Factory()
                     .setForceUseRtpTcp(forceTcp)
                     .setTimeoutMs(RTSP_TIMEOUT_MS);
-            if (bindRadio) src.setSocketFactory(new RadioSocketFactory());
+            if (bindRadio) {
+                src.setSocketFactory(new RadioSocketFactory());
+            } else {
+                // MESH：电脑 VLC 能拉 10.2:8554，平板却常从图传口 1.11 出去。
+                // 播放器 socket 钉在 10 网上，不跟系统默认路由走。
+                Network mesh = RadioLink.get().meshNetwork();
+                if (mesh != null) src.setSocketFactory(mesh.getSocketFactory());
+            }
             p.setMediaSource(src.createMediaSource(MediaItem.fromUri(url)));
             p.prepare();
             p.setPlayWhenReady(true);

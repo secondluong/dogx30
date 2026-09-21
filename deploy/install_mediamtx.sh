@@ -68,6 +68,12 @@ if [[ ! -f "$PREFIX/mediamtx.yml" ]]; then
   install -m 644 "$SRC/deploy/mediamtx.yml" "$PREFIX/mediamtx.yml"
 else
   echo "保留已有 $PREFIX/mediamtx.yml"
+  # 旧文件常把 RTSP 绑在 127.0.0.1，平板从 10.2 永远拉不到。
+  if grep -qE 'rtspAddress:[[:space:]]*127\.0\.0\.1' "$PREFIX/mediamtx.yml"; then
+    sed -i 's/rtspAddress:[[:space:]]*127\.0\.0\.1:8554/rtspAddress: :8554/' \
+      "$PREFIX/mediamtx.yml"
+    echo "已把 rtspAddress 从 127.0.0.1 改成全部网卡"
+  fi
 fi
 
 sed -e "s|/opt/x30|$PREFIX|g" "$SRC/deploy/x30-media.service" \
