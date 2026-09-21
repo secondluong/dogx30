@@ -191,9 +191,9 @@
     return { update: update, reset: reset, tuning: tuning, map: map };
   }
 
-  // 现场量过的 G20 通道。数组下标 = CH号 - 1。中位 1500，按键按下约 1050，
-  // 但 B1/B2（CH9、CH10）反过来，按下是 1950 —— 所以判定要按中位分两边。
-  // 右摇杆 CH1/CH2 只用来转向：CH2 参与死区，不进俯仰，避免上下推变成抬头。
+  // G30 现场表。数组下标 = CH号 - 1。中位 1500。
+  // 大摇杆按「这根杆的编号」写：左大 CH3 = CH3/CH4，右大 CH2 = CH1/CH2。
+  // 小摇杆同理：左小 CH14 = CH14/CH15，右小 CH16 只用前后（变焦 / 水炮喷射）。
   // PWM 增大按「右 / 前」理解；通道约定左移、左转为正，所以 lat/turn 取反。
   function pwmAxis(v, invert) {
     if (typeof v !== 'number' || v !== v) return 0;
@@ -207,40 +207,50 @@
     return press < 1500 ? v <= mid : v >= mid;
   }
 
+  // G30 按键高低电平均见过，不写死 1050/1950，离中位够远就算按下。
+  function pwmDown(v) {
+    return typeof v === 'number' && v === v && Math.abs(v - 1500) >= 350;
+  }
+
   function g20Channels(ch, deadzone, expo) {
     var dz = typeof deadzone === 'number' ? deadzone : DEFAULT_TUNING.deadzone;
     var ex = typeof expo === 'number' ? expo : DEFAULT_TUNING.expo;
     var left = shapeStick(pwmAxis(ch[3], true), pwmAxis(ch[2], false), dz, ex);
     var right = shapeStick(pwmAxis(ch[0], true), pwmAxis(ch[1], false), dz, ex);
+    var aux = shapeStick(pwmAxis(ch[13], true), pwmAxis(ch[14], false), dz, ex);
     return {
       fwd: left.y,
       lat: left.x,
       turn: right.x,
       tilt: right.y,
       look: right.y,
+      auxX: aux.x,
+      auxY: aux.y,
+      auxZoom: pwmAxis(ch[15], false),
     };
   }
 
+  // L1/L2/R1/HOME。SW1/SW2 是拨动，不走这里。
   var G20_BTN = {
-    stand_up: { ch: 10, press: 1050 },
-    sit_down: { ch: 6, press: 1050 },
-    // B1 / B2（现场量的是 CH9、CH10，下标 = CH号-1）。这两颗按下是 1950 而不是
-    // 1050，pwmPressed 按中位分方向，两种都认。
-    torque: { ch: 8, press: 1950 },
-    step: { ch: 9, press: 1950 },
-    shot: { ch: 7, press: 1050 },
-    talk: { ch: 5, press: 1050 },
-    view_next: { ch: 11, press: 1050 },
-    estop: { ch: 12, press: 1050 },
-    telem: { ch: 14, press: 1050 },
-    gas: { ch: 15, press: 1050 },
+    walk_cycle: { ch: 6 },   // L1 CH7 力控/起步
+    pose_cycle: { ch: 7 },   // L2 CH8 起立/趴下/卸力
+    gas: { ch: 8 },          // R1 CH9
+    talk: { ch: 9 },         // HOME CH10 按住说话
   };
 
-  // 三段拨动：高位向上控狗，低位向下控布控球。中位保持上一档，不切模式。
+  // SW1 CH5：高=狗身点云，低=狗身视频。中位保持。
   function ch5Toggle(v) {
     if (typeof v !== 'number' || v !== v) return '';
-    if (v <= 1100) return 'ptz';
-    if (v >= 1900) return 'dog';
+    if (v <= 1100) return 'dog_cam';
+    if (v >= 1900) return 'cloud';
+    return '';
+  }
+
+  // SW2 CH6：高=布控球白光，低=热成像。
+  function ch6Toggle(v) {
+    if (typeof v !== 'number' || v !== v) return '';
+    if (v <= 1100) return 'ptz_ir';
+    if (v >= 1900) return 'ptz_vis';
     return '';
   }
 
@@ -317,6 +327,10 @@
     STANDARD_AXIS: STANDARD_AXIS,
     FUNC_LABEL: FUNC_LABEL,
     onNativeKey: function (ev) {
+      if (typeof window !== 'undefined' && window.X30RcProbe &&
+          window.X30RcProbe.onNativeKey) {
+        window.X30RcProbe.onNativeKey(ev);
+      }
       if (api._onNativeKey) api._onNativeKey(ev);
     },
     onNativeAxis: function (ev) {
@@ -327,8 +341,10 @@
     },
     pwmAxis: pwmAxis,
     pwmPressed: pwmPressed,
+    pwmDown: pwmDown,
     g20Channels: g20Channels,
     ch5Toggle: ch5Toggle,
+    ch6Toggle: ch6Toggle,
     wheelDetent: wheelDetent,
   };
 
@@ -368,6 +384,8 @@
     g20Wheel: null,
     g20Primed: false,
     stickTarget: 'dog',
+    // 设置里开着按键探测时闸住派发。急停除外：那颗键任何时候都该能停。
+    muted: false,
   };
 
   function loadStored() {
@@ -416,7 +434,8 @@
   }
 
   function zero() {
-    state.channels = { fwd: 0, lat: 0, turn: 0, tilt: 0, look: 0 };
+    state.channels = { fwd: 0, lat: 0, turn: 0, tilt: 0, look: 0,
+                       auxX: 0, auxY: 0, auxZoom: 0 };
     state.engaged = false;
   }
 
@@ -476,6 +495,7 @@
     }
 
     function dispatch(key) {
+      if (state.muted && key !== 'estop') return;
       var app = getApp();
       function radioPose(cmd) {
         if (!(app.radioOnly && app.radioOnly())) return false;
@@ -505,6 +525,14 @@
       }
       if (key === 'telem') {
         if (app.toggleTelem) app.toggleTelem();
+        return;
+      }
+      if (key === 'walk_cycle') {
+        if (app.cycleWalk) app.cycleWalk();
+        return;
+      }
+      if (key === 'pose_cycle') {
+        if (app.cyclePose) app.cyclePose();
         return;
       }
       if (key === 'gas') {
@@ -661,9 +689,11 @@
       for (name in G20_BTN) {
         if (!Object.prototype.hasOwnProperty.call(G20_BTN, name)) continue;
         var spec = G20_BTN[name];
-        var down = ev.ch.length > spec.ch && pwmPressed(ev.ch[spec.ch], spec.press);
+        var down = ev.ch.length > spec.ch &&
+          (spec.press ? pwmPressed(ev.ch[spec.ch], spec.press)
+                      : pwmDown(ev.ch[spec.ch]));
         // 首帧只记档：上电时通道常是 0/1050，会把 R1/R2 当成按下，指标和气体就被打开。
-        if (primed) {
+        if (primed && !state.muted) {
           if (name === 'talk') {
             setTalk(down);
           } else if (down && !state.g20Prev[name]) {
@@ -673,34 +703,31 @@
         state.g20Prev[name] = down;
       }
       state.g20Primed = true;
-      if (ev.ch.length > 4) {
-        var tog = ch5Toggle(ev.ch[4]);
-        if (state.g20Prev.toggle === undefined) {
-          state.g20Prev.toggle = tog;
-          if (tog === 'ptz' || tog === 'dog') state.stickTarget = tog;
-        } else if (tog && tog !== state.g20Prev.toggle) {
-          state.g20Prev.toggle = tog;
-          if (tog === 'ptz' || tog === 'dog') {
-            if (state.stickTarget !== tog) {
-              state.stickTarget = tog;
-              showBanner(tog === 'ptz' ? '摇杆：布控球' : '摇杆：机器狗');
-              say(tog === 'ptz' ? '摇杆控布控球' : '摇杆控机器狗');
-            }
-          }
-        } else if (!tog) {
-          state.g20Prev.toggle = '';
+      if (state.muted) {
+        zero();
+      }
+      // 大摇杆始终控狗。SW1/SW2 只切画面。
+      state.stickTarget = 'dog';
+      if (ev.ch.length > 4 && !state.muted) {
+        var sw1 = ch5Toggle(ev.ch[4]);
+        if (state.g20Prev.sw1 === undefined) {
+          state.g20Prev.sw1 = sw1;
+        } else if (sw1 && sw1 !== state.g20Prev.sw1) {
+          state.g20Prev.sw1 = sw1;
+          if (getApp().selectView) getApp().selectView(sw1);
+        } else if (!sw1) {
+          state.g20Prev.sw1 = '';
         }
       }
-      if (ev.ch.length > 13) {
-        var detent = wheelDetent(ev.ch[13]);
-        if (state.g20Wheel === null) {
-          state.g20Wheel = detent;
-        } else if (detent !== state.g20Wheel) {
-          if (state.g20Wheel === 'mid' && window.X30Cloud && window.X30Cloud.nudgeZoom) {
-            if (detent === 'down') window.X30Cloud.nudgeZoom(1);
-            if (detent === 'up') window.X30Cloud.nudgeZoom(-1);
-          }
-          state.g20Wheel = detent;
+      if (ev.ch.length > 5 && !state.muted) {
+        var sw2 = ch6Toggle(ev.ch[5]);
+        if (state.g20Prev.sw2 === undefined) {
+          state.g20Prev.sw2 = sw2;
+        } else if (sw2 && sw2 !== state.g20Prev.sw2) {
+          state.g20Prev.sw2 = sw2;
+          if (getApp().selectView) getApp().selectView(sw2);
+        } else if (!sw2) {
+          state.g20Prev.sw2 = '';
         }
       }
       return true;
@@ -781,6 +808,12 @@
       }
 
       var out = state.core.update({ axes: pad.axes, buttons: pad.buttons });
+      if (state.muted) {
+        zero();
+        if (state.core) state.core.reset();
+        window.requestAnimationFrame(poll);
+        return;
+      }
       state.channels = out.channels;
       state.engaged = out.engaged;
       if (state.deadmanHeld !== out.deadmanHeld) {
@@ -856,11 +889,21 @@
   }
 
   api.initGamepad = initGamepad;
+  api.setMuted = function (on) {
+    state.muted = !!on;
+    if (state.muted) {
+      zero();
+      if (state.core) state.core.reset();
+    }
+  };
   api.stickTarget = function () { return state.stickTarget; };
   api.channels = function () {
     return { fwd: state.channels.fwd, lat: state.channels.lat,
              turn: state.channels.turn, tilt: state.channels.tilt,
              look: state.channels.look || 0,
+             auxX: state.channels.auxX || 0,
+             auxY: state.channels.auxY || 0,
+             auxZoom: state.channels.auxZoom || 0,
              engaged: state.engaged, source: state.source,
              stickTarget: state.stickTarget };
   };

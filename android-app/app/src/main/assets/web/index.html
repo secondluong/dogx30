@@ -31,16 +31,15 @@
     <span class="chip" id="chip-link"><i class="dot"></i><span id="link-text">连接中</span></span>
     <span class="chip" id="chip-state">—</span>
     <span class="chip" id="chip-batt">—</span>
-    <span class="chip hidden" id="chip-stick" title="点一下：摇杆改控布控球或改回控狗">摇杆 · 狗</span>
+    <span class="chip hidden" id="chip-stick" title="当前作业模式：侦检或水炮">侦检</span>
   </div>
 
   <div class="bar-right">
     <div class="bar-mode" id="bar-mode">
       <button type="button" class="btn btn-ghost" id="btn-mode">模式</button>
       <div id="hud-mode-pop" class="bar-pop hidden">
-        <button type="button" class="btn" data-mode="manual">手动</button>
-        <button type="button" class="btn hud-assist" id="btn-assist" data-mode="assist">辅助</button>
-        <button type="button" class="btn" data-mode="auto">导航</button>
+        <button type="button" class="btn" data-work="inspect">侦检模式</button>
+        <button type="button" class="btn" data-work="cannon">水炮模式</button>
       </div>
     </div>
     <!-- 仅安卓壳显示：顶栏切背景。网页直接打开时由 CSS 藏掉。 -->
@@ -100,6 +99,23 @@
 
     <!-- 语音是本机偏好，与网关配置无关，所以放在解锁之外：网页和 App 都改得了，
          网关没开在线改配置时也够得着（见 settings.js 的 open）。 -->
+    <!-- 换 G30 后通道会整表重排。这一节只记键值，不派发指令。 -->
+    <div id="set-rcprobe-box" class="set-form">
+      <div class="set-sect">遥控器按键探测</div>
+      <p class="set-sect-note">G30 的摇杆和大部分按键不进安卓手柄接口，只走云卓通道。一次只按一颗，看哪路 CH 跳变、松开和按下各是多少。打开本页时摇杆和按键不会控狗（急停除外）。</p>
+      <p class="set-sect-note" id="rc-probe-stat">—</p>
+      <div id="rc-probe-grid" class="rc-grid"></div>
+      <p class="set-sect-note" id="rc-probe-hint"></p>
+      <div class="set-sect">刚才按下</div>
+      <pre class="rc-log" id="rc-probe-log"></pre>
+      <div class="row wrap" style="margin-top:8px">
+        <button type="button" class="btn sm" id="rc-probe-rest">记下松开值</button>
+        <button type="button" class="btn sm" id="rc-probe-clear">清空记录</button>
+        <button type="button" class="btn sm" id="rc-probe-copy">复制报告</button>
+      </div>
+      <p class="set-sect-note" id="rc-probe-copy-note"></p>
+    </div>
+
     <div id="set-voice-box" class="set-form">
       <div class="set-sect">按键语音</div>
       <label class="gp-check">
@@ -345,6 +361,7 @@
           <button type="button" class="btn sm" data-gait="stair" data-short="楼梯">楼梯</button>
           <button type="button" class="btn sm" data-gait="stairmulti" data-short="多帧">楼梯(多帧)</button>
           <button type="button" class="btn sm" data-gait="stair45" data-short="45°" data-say="45度楼梯">45°楼梯</button>
+          <button type="button" class="btn sm" data-gait="lstair" data-short="L梯" data-say="L楼梯">L楼梯</button>
         </div>
       </div>
     </div>
@@ -401,9 +418,10 @@
 <script src="media.js?v=20260826y"></script>
 <script src="capture.js?v=20260826y"></script>
 <script src="cloud.js?v=20260826y"></script>
-<script src="gamepad.js?v=20260826y"></script>
-<script src="settings.js?v=20260826y"></script>
+<script src="gamepad.js?v=20260921a"></script>
+<script src="rcprobe.js?v=20260921a"></script>
+<script src="settings.js?v=20260921a"></script>
 <script src="dogcam24.js?v=20260826y"></script>
-<script src="app.js?v=20260826y"></script>
+<script src="app.js?v=20260921a"></script>
 </body>
 </html>

@@ -768,6 +768,15 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     return;
   }
 
+  // 水炮云台/喷射还没接到实机协议上。先把消息吃掉，避免 20 Hz 刷「未知消息」。
+  if (t == "cannon" || t == "cannon_spray") {
+    if (!HoldsControl(id)) {
+      SendError(id, "no_control", "未持有控制权，请先发送 claim");
+      return;
+    }
+    return;
+  }
+
   if (t == "vel" || t == "pose" || t == "release") {
     if (!HoldsControl(id)) {
       SendError(id, "no_control", "未持有控制权，请先发送 claim");

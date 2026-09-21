@@ -1551,9 +1551,8 @@ final class RadioLink {
             buttonsPrimed = true;
             return;
         }
-        if (stand && !prevStand) commandOnRadio("stand_up");
-        if (sit && !prevSit) commandOnRadio("sit_down");
-        if (estop && !prevEstop) commandOnRadio("estop");
+        // G30 按键由网页派发。这里不再按 G20 的 CH7/CH11/CH13 发指令，
+        // 否则 L1（现在是 CH7）会被当成趴下。
         prevStand = stand;
         prevSit = sit;
         prevEstop = estop;

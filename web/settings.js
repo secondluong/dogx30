@@ -307,6 +307,7 @@
     // 语音开关是本机偏好，面板每次打开都要问一遍引擎起来没有（原生 TTS 初始化
     // 要一秒左右，开机就点开的话结论会变）。
     if (window.X30Voice) window.X30Voice.onSettingsOpen();
+    if (window.X30RcProbe && window.X30RcProbe.start) window.X30RcProbe.start();
     // 网关没开在线改配置时，这个面板里仍有本机能改的东西。以前这里直接 return，
     // 表现是点了标题什么都不发生 —— 「点了没反应」是最难查的一类。
     if (!state.available && !isAppNative()) {
@@ -332,6 +333,7 @@
     state.open = false;
     root.classList.add('hidden');
     setNote('');
+    if (window.X30RcProbe && window.X30RcProbe.stop) window.X30RcProbe.stop();
   }
 
   function readSavedToken() {
@@ -486,6 +488,9 @@
 
     buildForm($('set-form'));
     fillAppGateway();
+    if (window.X30RcProbe && window.X30RcProbe.initRcProbe) {
+      window.X30RcProbe.initRcProbe();
+    }
     if ($('set-app-save')) {
       $('set-app-save').addEventListener('click', saveAppGateway);
     }

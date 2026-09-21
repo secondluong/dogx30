@@ -72,9 +72,25 @@ var pitchCh = [1500, 2000, 1500, 1500];
 var pitch = G.g20Channels(pitchCh, 0.12, 0.4);
 check('CH2 推到 2000 是俯仰', pitch.tilt > 0.9 && Math.abs(pitch.turn) < 0.05,
       JSON.stringify(pitch));
-check('CH5 低位是布控球', G.ch5Toggle(1050) === 'ptz');
+var auxXCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
+              1500, 1500, 1500, 1000, 1500, 1500];
+var auxX = G.g20Channels(auxXCh, 0.12, 0.4);
+check('CH14 是左小摇杆水平', auxX.auxX > 0.9 && Math.abs(auxX.auxY) < 0.05,
+      JSON.stringify(auxX));
+var auxYCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
+              1500, 1500, 1500, 1500, 2000, 1500];
+var auxY = G.g20Channels(auxYCh, 0.12, 0.4);
+check('CH15 是左小摇杆俯仰', auxY.auxY > 0.9 && Math.abs(auxY.auxX) < 0.05,
+      JSON.stringify(auxY));
+var auxZCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
+              1500, 1500, 1500, 1500, 1500, 2000];
+var auxZ = G.g20Channels(auxZCh, 0.12, 0.4);
+check('CH16 前推是放大', auxZ.auxZoom > 0.9, 'z=' + auxZ.auxZoom);
+check('CH5 低位是狗身视频', G.ch5Toggle(1050) === 'dog_cam');
 check('CH5 中位不动作', G.ch5Toggle(1500) === '');
-check('CH5 高位是控狗', G.ch5Toggle(1950) === 'dog');
+check('CH5 高位是点云', G.ch5Toggle(1950) === 'cloud');
+check('CH6 低位是热成像', G.ch6Toggle(1050) === 'ptz_ir');
+check('CH6 高位是白光', G.ch6Toggle(1950) === 'ptz_vis');
 check('滚轮下是增加', G.wheelDetent(1050) === 'down');
 check('滚轮中位回弹不算动作', G.wheelDetent(1500) === 'mid');
 check('滚轮上是减少', G.wheelDetent(1950) === 'up');
@@ -629,30 +645,28 @@ check('有控制权时按键下发 stand_up',
 check('坐站键念的是这一下要做的动作',
       spoken.length === 1 && spoken[0] === '起立', JSON.stringify(spoken));
 
-// G20 起立/趴下是两颗键。站着按起立必须仍发 stand_up，不能按界面状态改成趴下。
-appState.isStandingUi = function () { return true; };
-sent = []; spoken = [];
+// G30：L1=CH7 力控/起步，L2=CH8 起立/趴下/卸力。网页自己按状态循环，不走旧 CH11/CH7。
+var walked = 0;
+var posed = 0;
+appState.cycleWalk = function () { walked += 1; };
+appState.cyclePose = function () { posed += 1; };
 if (typeof B._onRcChannels === 'function') {
   var g20rest = [];
   for (var gi = 0; gi < 16; gi++) g20rest.push(1500);
-  B._onRcChannels({ connected: true, device: 'G20', ch: g20rest.slice() });
-  var g20stand = g20rest.slice();
-  g20stand[10] = 1050;
-  B._onRcChannels({ connected: true, device: 'G20', ch: g20stand });
-  check('G20 起立键站着也发 stand_up',
-        sent.length === 1 && sent[0].name === 'stand_up',
-        JSON.stringify(sent));
-  var g20sit = g20rest.slice();
-  g20sit[6] = 1050;
-  sent = [];
-  B._onRcChannels({ connected: true, device: 'G20', ch: g20rest.slice() });
-  B._onRcChannels({ connected: true, device: 'G20', ch: g20sit });
-  check('G20 趴下键发 sit_down',
-        sent.length === 1 && sent[0].name === 'sit_down',
-        JSON.stringify(sent));
+  B._onRcChannels({ connected: true, device: 'G30', ch: g20rest.slice() });
+  var g30l1 = g20rest.slice();
+  g30l1[6] = 1050;
+  B._onRcChannels({ connected: true, device: 'G30', ch: g30l1 });
+  check('G30 L1 走力控/起步循环', walked === 1, 'walked=' + walked);
+  var g30l2 = g20rest.slice();
+  g30l2[7] = 1050;
+  B._onRcChannels({ connected: true, device: 'G30', ch: g20rest.slice() });
+  B._onRcChannels({ connected: true, device: 'G30', ch: g30l2 });
+  check('G30 L2 走起立/趴下/卸力循环', posed === 1, 'posed=' + posed);
   B._onRcChannels({ connected: false, ch: [] });
 }
-delete appState.isStandingUi;
+delete appState.cycleWalk;
+delete appState.cyclePose;
 pads = [makePad([0, 0, 0, 0], [])];
 pump(2);
 
@@ -832,6 +846,12 @@ check('未映射时状态栏点明原因',
 check('未映射时说明里给出解决办法',
       elements['gp-note'].textContent.indexOf('诊断页') >= 0,
       elements['gp-note'].textContent);
+
+B4.setMuted(true);
+pads = [makePad([0, -1, 0, 0], [6])];
+pump(1);
+check('探测静音时摇杆归零', B4.channels().fwd === 0, 'fwd=' + B4.channels().fwd);
+B4.setMuted(false);
 
 console.log('\n通过 ' + pass + '，失败 ' + fail);
 process.exit(fail === 0 ? 0 : 1);

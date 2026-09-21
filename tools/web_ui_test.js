@@ -110,7 +110,7 @@ function parseElements(html) {
 var css = parseCss(read('style.css'));
 var html = read('index.html');
 var els = parseElements(html);
-var js = ['app.js', 'settings.js', 'gamepad.js'].map(function (f) {
+var js = ['app.js', 'settings.js', 'gamepad.js', 'rcprobe.js'].map(function (f) {
   return { name: f, text: read(f) };
 });
 var jsAll = js.map(function (f) { return f.text; }).join('\n');
@@ -307,6 +307,11 @@ js.forEach(function (f) {
 
 check('顶栏有背景按钮', /id="btn-view">背景<\/button>/.test(html));
 check('左下只有一个姿态按钮', /id="btn-stand"/.test(html) && html.indexOf('btn-unload') === -1);
+check('模式菜单是侦检和水炮',
+      /data-work="inspect">侦检模式/.test(html) &&
+      /data-work="cannon">水炮模式/.test(html) &&
+      html.indexOf('data-mode="assist"') === -1 &&
+      /setWorkMode/.test(read('app.js')));
 check('点标题打开设置', /id="btn-settings"[^>]*>\s*X30 遥控台/.test(html));
 check('设置面板在 CSS 到来前就藏着',
       /<style>\s*\.hidden\s*\{\s*display\s*:\s*none\s*!important/.test(html));
@@ -320,6 +325,11 @@ check('点云菜单初始收着',
 // 网页和 App 两套 HUD，改一处容易把另一处一起藏掉。
 var styleText = read('style.css');
 var appJs = read('app.js');
+check('作业模式默认侦检，狗身保持手动',
+      /workMode: 'inspect'/.test(appJs) &&
+      /ensureManualMode/.test(appJs) &&
+      /name: 'mode', value: 'manual'/.test(appJs) &&
+      html.indexOf('data-mode="manual"') === -1);
 check('急停后同一按钮转卸力',
       /emergencyLocked/.test(appJs) && /textContent = '卸力'/.test(appJs) &&
       /name = 'unload'/.test(appJs));
@@ -577,18 +587,17 @@ check('切档交接 App 记住的姿态',
 // 这两颗只许网页那层派发：踏步是**切换**指令，本机和网页各发一条就等于一按一停，
 // 狗刚起步又停下。网页那层还兼着出声和刷 walkMode（推杆提示要用），所以它必须经手。
 var gamepadJs = read('gamepad.js');
-check('B1/B2 只由网页那层发，不和原生重复',
-      /torque: \{ ch: 8, press: 1950 \}/.test(gamepadJs) &&
-      /step: \{ ch: 9, press: 1950 \}/.test(gamepadJs) &&
-      /press < 1500 \? v <= mid : v >= mid/.test(gamepadJs) &&
-      // 原生只收起立/趴下/急停这三颗幂等的，B1/B2 不许在这里再发一遍。
-      !/pressed\(ch, 8/.test(radioJava) &&
-      !/pressed\(ch, 9/.test(radioJava) &&
+check('L1/L2 只由网页那层发，不和原生重复',
+      /walk_cycle: \{ ch: 6 \}/.test(gamepadJs) &&
+      /pose_cycle: \{ ch: 7 \}/.test(gamepadJs) &&
+      /function pwmDown/.test(gamepadJs) &&
       !/commandOnRadio\("torque"\)/.test(radioJava) &&
       !/commandOnRadio\("step"\)/.test(radioJava) &&
-      /commandOnRadio\("stand_up"\)/.test(radioJava) &&
-      // 2.4G 下网页那条路要转回本机发，否则这两颗只在 MESH 下好用。
-      /radioPose\(key\)/.test(gamepadJs));
+      // G30 后原生不再按旧 CH 发起立/趴下，避免和 L1（CH7）撞车。
+      !/if \(stand && !prevStand\) commandOnRadio\("stand_up"\)/.test(radioJava) &&
+      /radioPose\(key\)/.test(gamepadJs) &&
+      /cycleWalk/.test(read('app.js')) &&
+      /cyclePose/.test(read('app.js')));
 
 // 急停后必须能找到卸力：不卸力起立是发不动的。实体红键是原生那侧收的（网页并不
 // 经手），没有遥测时只有 RadioLink 记着这件事，所以那个标志一定要读。
@@ -1084,6 +1093,15 @@ check('按住说话时闭嘴',
       /X30Media\.talking/.test(voiceJs));
 // 语音是本机偏好，网关没开在线改配置时也得够得着这个开关 ——
 // 以前那种情况下点标题什么都不发生。
+check('设置里有遥控器通道探测',
+      !!htmlIds['set-rcprobe-box'] &&
+      !!htmlIds['rc-probe-grid'] &&
+      !!htmlIds['rc-probe-log'] &&
+      /rcprobe\.js/.test(html) &&
+      /X30RcProbe\.start/.test(read('settings.js')) &&
+      /X30RcProbe\.stop/.test(read('settings.js')) &&
+      /setMuted\(true\)/.test(read('rcprobe.js')) &&
+      /key !== 'estop'/.test(read('gamepad.js')));
 check('语音开关在设置面板里且够得着',
       !!htmlIds['set-voice'] &&
       !!htmlIds['set-voice-hint'] &&

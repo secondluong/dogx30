@@ -717,8 +717,9 @@ html.native-video-on #pane-video.is-main .media-video { display: none; }
 
 .set-panel {
   width: 100%;
-  max-width: 560px;
+  max-width: 640px;
   max-height: 100%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -798,6 +799,43 @@ html.native-video-on #pane-video.is-main .media-video { display: none; }
 }
 /* 未解锁时表单和保存键都不在，留一条空的底边很难看 */
 .set-locked .set-foot { display: none; }
+
+.rc-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.rc-ch {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.rc-ch b { color: var(--muted); font-weight: 600; }
+.rc-ch span { color: var(--text); }
+.rc-ch.on {
+  border-color: var(--accent);
+  background: rgba(56, 139, 253, .14);
+}
+.rc-log {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
 
 .set-panel code {
   padding: 1px 5px;

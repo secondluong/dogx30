@@ -36,6 +36,7 @@ run "体检脚本配置解析"   tools/checkup_test.sh
 run "自解压安装包检查"   tools/installer_test.sh
 run "RTSP 探测工具自测"  tools/rtsp_probe_test.py
 run "手柄输入层测试"     tools/gamepad_test.js
+run "遥控器通道探测测试" tools/rcprobe_test.js
 run "按键语音播报测试"   tools/voice_test.js
 run "2.4G 画面测试"      tools/dogcam_test.js
 run "控制台一致性检查"   tools/web_ui_test.js

@@ -29,7 +29,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0827a';
+const WEB_BUILD = '0921a';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -107,11 +107,16 @@ const app = {
   gwPoseAdopt: false,     // hello.pose_adopt：这份网关认不认 claim.standing
   radioAcquirePending: false, // 等网关确认 yield 后再启动 2.4G 心跳
   meshAcquirePending: false,  // 等 2.4G 心跳停稳后再申请网关控制权
-  modePick: null,         // G20 三挡或点按：manual | assist | auto
+  modePick: null,         // 狗本体：manual | auto。菜单不再露这两档，默认手动。
+  workMode: 'inspect',    // 侦检 | 水炮，只管小摇杆用途
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向；y 仅在控布控球时为俯仰
 };
 app.radioFallback = app.radioPath === 'radio';
+try {
+  const savedWork = window.localStorage.getItem('x30.workMode');
+  if (savedWork === 'cannon' || savedWork === 'inspect') app.workMode = savedWork;
+} catch (e) { /* 隐私模式 */ }
 window.app = app;
 
 // 定时器在本脚本抛错时依然会触发，所以先把启动排进队列，再往下挂按钮。
@@ -236,6 +241,7 @@ function connect() {
     app.wsWasOpen = false;
     if (dropFromLive && !isAppShell) app.radioFallback = true;
     app.hasControl = false;
+    app.modePick = null;
     app.holder = 0;
     app.gwPoseAdopt = false;
     if (!radioDirect()) {
@@ -278,6 +284,7 @@ function connect() {
         app.gwPoseAdopt = !!msg.pose_adopt;
         paintVerChip();
         renderControl();
+        ensureManualMode();
         if (window.X30Settings) window.X30Settings.onHello(msg);
         if (isAppShell && app.radioPath === 'mesh' &&
             !app.meshAcquirePending) requestControl();
@@ -296,6 +303,7 @@ function connect() {
         app.holder = msg.holder || 0;
         app.hasControl = app.holder === app.clientId;
         renderControl();
+        ensureManualMode();
         if (isAppShell && app.radioPath === 'radio') finishRadioAcquire();
         if (isAppShell && app.radioPath === 'mesh' &&
             !app.meshAcquirePending && !app.hasControl && !app.holder) {
@@ -855,6 +863,21 @@ app.adoptRadioPath = adoptRadioPath;
 
 // 手持壳连上就要权：关掉原厂 App 不会把权交过来，操作员也不该再点一次。
 // 网页控制台仍是观察者，避免笔记本开着就把手柄的权抢走。
+// 菜单不再提供导航/辅助。拿到控制权后把狗身拉回手动，作业模式仍是侦检/水炮。
+function ensureManualMode() {
+  if (app.modePick === 'manual') return;
+  if (radioDirect()) {
+    if (hasNativeRadio() && app.nativeRadioCmd) {
+      app.nativeRadioCmd('manual');
+      app.modePick = 'manual';
+    }
+    return;
+  }
+  if (!app.hasControl) return;
+  app.modePick = 'manual';
+  send({ t: 'cmd', name: 'mode', value: 'manual' });
+}
+
 function requestControl() {
   // 已经有权时通常不必再发。但切回 MESH 时 poseHandoff 还在，必须再发一条带
   // standing 的 claim，否则网关记的还是切走之前的趴着 —— 这正是「旧版」误报的来源。
@@ -1151,16 +1174,17 @@ app.paintStandButton = paintStandButton;
 app.toggleGas = toggleGas;
 app.toggleTelem = toggleTelem;
 app.cycleView = cycleView;
+app.selectView = selectView;
+app.cycleWalk = cycleWalk;
+app.cyclePose = cyclePose;
 
 function paintModes() {
-  const pick = app.modePick;
-  const manual = app.controlMode === 0;
-  document.querySelectorAll('[data-mode]').forEach((b) => {
-    const fromTelem = (manual && b.dataset.mode === 'manual') ||
-                      (!manual && b.dataset.mode === 'auto');
-    const on = pick ? pick === b.dataset.mode : fromTelem;
-    b.classList.toggle('active', on);
+  document.querySelectorAll('[data-work]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.work === app.workMode);
   });
+  if ($('btn-mode')) {
+    $('btn-mode').textContent = app.workMode === 'cannon' ? '水炮' : '侦检';
+  }
 }
 
 // 开关类的按钮上只有名字，没有「现在是开还是关」。屏幕上看一眼就知道，
@@ -1180,6 +1204,93 @@ function toggleTelem() {
   const shown = !$('telemetry').classList.contains('hidden');
   if ($('btn-telem')) $('btn-telem').classList.toggle('active', shown);
   speak(shown ? '指标已开' : '指标已关');
+}
+
+function selectView(view) {
+  if (!view) return;
+  viewLayout.main = view;
+  viewLayout.mode = '1x1';
+  applyLayout();
+  speak(viewLabel(view));
+}
+
+// L1：没力控先出力控，出力控后再起步，走着再按就停步。
+function cycleWalk() {
+  const moving = app.motionState === 'walking' || app.motionState === 'starting';
+  if (moving) {
+    if (radioDirect() && hasNativeRadio()) {
+      if (app.nativeRadioCmd) app.nativeRadioCmd('step_off');
+    } else if (app.hasControl) {
+      send({ t: 'cmd', name: 'step', value: 'off' });
+    } else {
+      showBanner('请先申请控制权');
+      speak('没有控制权');
+      return;
+    }
+    speak('停步');
+    return;
+  }
+  if (app.axisMode === 'pose') {
+    if (app.lioAligning) {
+      showBanner('LIO 还在对准，请站稳，不要走', 4000);
+      speak('LIO 对准中');
+      return;
+    }
+    if (radioDirect() && hasNativeRadio()) {
+      if (app.nativeRadioCmd) app.nativeRadioCmd('step_on');
+    } else if (app.hasControl) {
+      send({ t: 'cmd', name: 'step', value: 'on' });
+    } else {
+      showBanner('请先申请控制权');
+      speak('没有控制权');
+      return;
+    }
+    speak('起步');
+    return;
+  }
+  if (radioDirect() && hasNativeRadio()) {
+    if (app.nativeRadioCmd) app.nativeRadioCmd('torque');
+    if (app.applyRadioPose) app.applyRadioPose('torque');
+  } else if (app.hasControl) {
+    send({ t: 'cmd', name: 'torque' });
+  } else {
+    showBanner('请先申请控制权');
+    speak('没有控制权');
+    return;
+  }
+  speak('力控');
+}
+
+// L2：急停锁着卸力，站着趴下，趴着起立。
+function cyclePose() {
+  let cmd = 'stand_up';
+  let said = '起立';
+  if (app.emergencyLocked) {
+    cmd = 'unload';
+    said = '卸力';
+  } else if (isStandingUi()) {
+    cmd = 'sit_down';
+    said = '趴下';
+  }
+  if (radioDirect() && hasNativeRadio()) {
+    if (app.nativeRadioCmd) app.nativeRadioCmd(cmd);
+    if (app.applyRadioPose) app.applyRadioPose(cmd);
+    if (app.notePoseCmd && (cmd === 'stand_up' || cmd === 'sit_down')) {
+      app.notePoseCmd(cmd === 'stand_up');
+    }
+    speak(said);
+    return;
+  }
+  if (!app.hasControl) {
+    showBanner('请先申请控制权');
+    speak('没有控制权');
+    return;
+  }
+  if (cmd === 'stand_up' || cmd === 'sit_down') {
+    if (app.notePoseCmd) app.notePoseCmd(cmd === 'stand_up');
+  }
+  send({ t: 'cmd', name: cmd });
+  speak(said);
 }
 
 function updateStickAvailability() {
@@ -1307,11 +1418,11 @@ function updateStickHints(ptz) {
 function paintStickChip() {
   const el = $('chip-stick');
   if (!el) return;
-  const ptz = stickTarget() === 'ptz';
+  const cannon = app.workMode === 'cannon';
   el.classList.remove('hidden');
-  el.textContent = ptz ? '摇杆 · 布控球' : '摇杆 · 狗';
-  el.classList.toggle('online', ptz);
-  updateStickHints(ptz);
+  el.textContent = cannon ? '水炮' : '侦检';
+  el.classList.toggle('online', cannon);
+  updateStickHints(false);
   updateStickAvailability();
 }
 
@@ -1324,6 +1435,49 @@ function sendRadioVel(c) {
   if (typeof n.radioVel !== 'function') return;
   if (g20Live() || stickTarget() === 'ptz') return;
   n.radioVel(c.fwd || 0, c.lat || 0, c.turn || 0, c.tilt || 0);
+}
+
+function setWorkMode(mode) {
+  if (mode !== 'inspect' && mode !== 'cannon') return;
+  app.workMode = mode;
+  try { window.localStorage.setItem('x30.workMode', mode); } catch (e) { /* */ }
+  paintModes();
+  paintStickChip();
+  speak(mode === 'cannon' ? '水炮模式' : '侦检模式');
+}
+
+let sprayArmed = '';
+
+function sendAuxPayload(c, viaGateway) {
+  const ax = c.auxX || 0;
+  const ay = c.auxY || 0;
+  const zoom = c.auxZoom || 0;
+  const moving = Math.abs(ax) > 0.08 || Math.abs(ay) > 0.08 || Math.abs(zoom) > 0.08;
+  if (app.workMode === 'cannon') {
+    if (viaGateway && app.hasControl && moving) {
+      send({ t: 'cannon', pan: -ax, tilt: ay });
+    }
+    const detent = zoom <= -0.45 ? 'jet' : (zoom >= 0.45 ? 'fog' : 'mid');
+    if (!sprayArmed) sprayArmed = detent;
+    else if (detent !== sprayArmed) {
+      if (sprayArmed === 'mid' && (detent === 'fog' || detent === 'jet')) {
+        if (viaGateway && app.hasControl) {
+          send({ t: 'cannon_spray', value: detent });
+        }
+        speak(detent === 'fog' ? '雾状喷射' : '柱状喷射');
+        showBanner(detent === 'fog' ? '水炮：雾状' : '水炮：柱状');
+      }
+      sprayArmed = detent;
+    }
+    return;
+  }
+  if (viewLayout.main === 'cloud' && Math.abs(zoom) > 0.25 &&
+      window.X30Cloud && window.X30Cloud.nudgeZoom) {
+    window.X30Cloud.nudgeZoom(zoom * 0.35);
+  }
+  if (viaGateway && app.hasControl && moving) {
+    send({ t: 'ptz', pan: -ax, tilt: ay, zoom: zoom });
+  }
 }
 
 let ptzNeedControlAt = 0;
@@ -1340,37 +1494,16 @@ setInterval(() => {
   if (onRadio) {
     syncRadioStanding(radioSt);
     syncRadioPickers(radioSt);
+    ensureManualMode();
     sendRadioVel(c);
+    sendAuxPayload(c, false);
     return;
   }
-  if (stickTarget() === 'ptz') {
-    const moving = !!(c.engaged || c.fwd || c.lat || c.turn || c.tilt ||
-                      c.look);
-    if (!app.hasControl) {
-      if (radioOnly() || !linkOpen()) return;
-      const now = Date.now();
-      if (moving && now - ptzClaimedAt > 1500) {
-        ptzClaimedAt = now;
-        requestControl();
-      }
-      if (moving && now - ptzNeedControlAt > 4000) {
-        ptzNeedControlAt = now;
-        if (app.holder && app.holder !== app.clientId) {
-          showBanner('控制权被占用，转不了云台');
-        } else {
-          showBanner('正在申请控制权以转云台');
-        }
-      }
-      return;
-    }
-    send({ t: 'vel', vx: 0, vy: 0, wz: 0 });
-    const look = typeof c.look === 'number' ? c.look : c.tilt;
-    // 通道约定上推为正；协议 tilt 也是上为正。海康 ISAPI 同样上为正。
-    // 这里再取负会把俯仰拧反。turn 左为正、pan 右为正，所以水平仍取负。
-    send({ t: 'ptz', pan: -c.turn, tilt: look, zoom: c.fwd });
+  if (!app.hasControl) {
+    sendAuxPayload(c, true);
     return;
   }
-  if (!app.hasControl) return;
+  sendAuxPayload(c, true);
   const channel = controlChannel();
   if (channel === 'vel') {
     if (app.lioAligning) {
@@ -1568,26 +1701,30 @@ document.querySelectorAll('[data-height]').forEach((b) => {
     markPending(b);
   }));
 });
-document.querySelectorAll('[data-mode]').forEach((b) => {
-  b.addEventListener('click', (ev) => {
-    const mode = b.dataset.mode;
-    if (mode === 'assist') {
-      app.modePick = 'assist';
-      paintModes();
-      closeBarPops();
-      showBanner('辅助模式本网关未接入，只有原厂 App 支持', 5000);
-      speak('辅助模式未接入');
-      return;
-    }
-    guarded(() => {
-      app.modePick = mode;
-      send({ t: 'cmd', name: 'mode', value: mode });
-      markPending(b);
-      paintModes();
-      closeBarPops();
-      speak(mode === 'manual' ? '手动模式' : '导航模式');
-    })(ev);
+document.querySelectorAll('[data-work]').forEach((b) => {
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setWorkMode(b.dataset.work);
+    closeBarPops();
   });
+});
+
+$('chip-stick').addEventListener('click', () => {
+  if (g20Live()) {
+    setWorkMode(app.workMode === 'cannon' ? 'inspect' : 'cannon');
+    return;
+  }
+  webStickTarget = webStickTarget === 'ptz' ? 'dog' : 'ptz';
+  if (webStickTarget === 'dog' && app.hasControl) {
+    send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
+  }
+  paintStickChip();
+  showBanner(webStickTarget === 'ptz' ? '摇杆改控布控球' : '摇杆改回控狗');
+  if (webStickTarget === 'ptz' && !app.hasControl) {
+    requestControl();
+    showBanner('正在申请控制权以转云台');
+  }
+  speak(webStickTarget === 'ptz' ? '摇杆控布控球' : '摇杆控机器狗');
 });
 
 $('btn-media').addEventListener('click', () => {
@@ -1603,22 +1740,6 @@ $('btn-telem').addEventListener('click', () => {
 
 $('btn-gas').addEventListener('click', () => {
   toggleGas();
-});
-
-$('chip-stick').addEventListener('click', () => {
-  if (g20Live()) return;
-  webStickTarget = webStickTarget === 'ptz' ? 'dog' : 'ptz';
-  if (webStickTarget === 'dog' && app.hasControl) {
-    send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
-  }
-  if (webStickTarget === 'ptz' && !app.hasControl) {
-    requestControl();
-    showBanner(app.holder && app.holder !== app.clientId
-      ? '控制权被占用，转不了云台'
-      : '已申请控制权，推杆转云台');
-  }
-  paintStickChip();
-  speak(webStickTarget === 'ptz' ? '摇杆控布控球' : '摇杆控机器狗');
 });
 
 $('btn-sticks').addEventListener('click', () => {
@@ -1791,6 +1912,7 @@ document.querySelectorAll('#stage .pane').forEach((pane) => {
 });
 
 applyLayout();
+paintModes();
 
 function closeAccordions() {
   document.querySelectorAll('.acc-pop').forEach((p) => p.classList.add('hidden'));

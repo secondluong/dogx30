@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 云卓 G20 通道读取。映射写死在网页里，这里只轮询 PWM 数组。
+ * 云卓遥控器通道读取（G20 / G30 同一套 PWM 数组）。映射写死在网页里。
  *
  * G20 必须 {@code get(KeyChannels)}，间隔 ≥100ms，没有推送。
  */
