@@ -981,8 +981,11 @@ check('App 的网关 WebSocket 走原生并钉在 10 网',
       /int gen/.test(nativeWsJava) &&
       /boolean isLive/.test(nativeWsJava) &&
       /static boolean isAnyLive/.test(nativeWsJava) &&
+      /String poll\(/.test(nativeWsJava) &&
       /void wsOpen\(/.test(radioBridge) &&
       /boolean wsAlive/.test(radioBridge) &&
+      /String wsPoll/.test(radioBridge) &&
+      /function drainNativeWs/.test(appJs) &&
       /function hasNativeWs/.test(appJs) &&
       /function nativeWsLive/.test(appJs) &&
       /meshDownSeq/.test(appJs) &&
@@ -1092,7 +1095,8 @@ check('点大布控球时摇杆改控云台',
 check('App 壳只拉当前大屏那一路视频',
       /function wantedTiles/.test(mediaJs) &&
       /inAppShell\(\)/.test(mediaJs) &&
-      /main === 'cloud'/.test(mediaJs));
+      /main === 'cloud'/.test(mediaJs) &&
+      /main === 'ptz_vis' \|\| main === 'dog_cam'/.test(mediaJs));
 check('双光背景只拉一路拼接流',
       /data-view-pick="ptz_vis">双光视频/.test(html) &&
       html.indexOf('data-view-pick="ptz_ir"') === -1 &&

@@ -248,6 +248,11 @@ function paint() {
   if (playing) return;
   const small = idleSmall();
   if (!small) return;
+  if (!bindRadio() && lastErr &&
+      /8554|Connection refused|Failed to connect|ECONNREFUSED/i.test(lastErr)) {
+    small.textContent = '板上 8554 没在听。开发板执行：sudo bash deploy/install_mediamtx.sh';
+    return;
+  }
   const prefix = bindRadio() ? '2.4G 直连拉流失败：' : '直连拉流失败：';
   small.textContent = lastErr ? (prefix + lastErr)
                              : ('正在从 ' + playUrl() + ' 拉流…');

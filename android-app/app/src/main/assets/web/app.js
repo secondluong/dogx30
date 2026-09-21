@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0921p';
+const WEB_BUILD = '0921q';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -220,11 +220,11 @@ function hasNativeWs() {
 
 function onWsOpen() {
   meshDownSeq += 1;
-  setLink(true);
   app.wsWasOpen = true;
   app.nativeWsFails = 0;
   app.wsNativeOpen = hasNativeWs() && !app.useBrowserWs;
   app.wsNativeOpening = false;
+  setLink(true);
   // App 壳不自动订点云：MESH 上一上来就推大帧，WebSocket 会被撑断，看着像闪断。
   if (!isAppShell && window.X30Cloud && window.X30Cloud.resubscribe) {
     window.X30Cloud.resubscribe();
@@ -397,6 +397,17 @@ window.X30NativeWs = {
   onWsClose: onWsClose,
   handleWsText: handleWsText,
 };
+
+function drainNativeWs() {
+  if (!hasNativeWs() || app.useBrowserWs) return;
+  if (!window.X30Native || typeof window.X30Native.wsPoll !== 'function') return;
+  let raw = '[]';
+  try { raw = window.X30Native.wsPoll() || '[]'; } catch (e) { return; }
+  let arr;
+  try { arr = JSON.parse(raw); } catch (e) { return; }
+  if (!arr || !arr.length) return;
+  for (let i = 0; i < arr.length; i++) handleWsText(arr[i]);
+}
 
 // 切之前是哪一档。网关说切不成时要退回它，见 onGaitResult。
 let gaitBefore = '';
@@ -769,7 +780,7 @@ function meshPaintUp() {
     return true;
   }
   if (!meshPaintDownAt) meshPaintDownAt = Date.now();
-  return Date.now() - meshPaintDownAt < 1200;
+  return Date.now() - meshPaintDownAt < 2500;
 }
 
 // 2.4G 通的判据是「指令到得了运动主机」，不是「射频起来了」。
@@ -1048,6 +1059,9 @@ function setLink(online) {
   if (radioDirect()) {
     paintRadioLink();
   } else {
+    if (online) meshPaintDownAt = 0;
+    else if (!meshPaintDownAt) meshPaintDownAt = Date.now();
+    online = meshPaintUp();
     chip.classList.toggle('online', online);
     // 布控/气体只靠网关，不靠狗。狗没上线时仍显示网关已连，别把整屏说成断了。
     $('link-text').textContent = online
@@ -2224,6 +2238,7 @@ function bootstrap() {
   paintPickers();
 
   connect();
+  if (hasNativeWs()) setInterval(drainNativeWs, 50);
 
   // 语音要第一个起来：它挂的是 document 上的委托监听，比谁都先能用，
   // 后面几个模块初始化时若报了错，至少按键还出声，现场能听出是哪一步没起来。

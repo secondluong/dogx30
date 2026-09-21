@@ -291,6 +291,9 @@ function wantedTiles(plan) {
   const raw = layout.main || plan.main;
   const main = raw === 'dual' ? 'ptz_vis' : raw;
   if (!main || main === 'cloud') return [];
+  // App 壳双光/机身走原生 RTSP。WebView 去拉 :8889 会 Failed to fetch，
+  // 每次重连还再打一次，MESH 上看着像标题闪、画面永远黑。
+  if (main === 'ptz_vis' || main === 'dog_cam') return [];
   if (nativeOwns(main)) return [];
   return VIDEO_TILES.filter((t) => t.id === main);
 }

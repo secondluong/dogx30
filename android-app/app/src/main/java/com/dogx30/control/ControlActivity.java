@@ -250,6 +250,11 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public String wsPoll() {
+            return nativeWs != null ? nativeWs.poll() : "[]";
+        }
+
+        @JavascriptInterface
         public String meshDiag() {
             return RadioLink.get().meshDiag();
         }

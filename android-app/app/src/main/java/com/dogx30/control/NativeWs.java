@@ -7,8 +7,10 @@ import android.webkit.WebView;
 
 import androidx.annotation.Nullable;
 
-import org.json.JSONObject;
+import org.json.JSONArray;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -20,6 +22,8 @@ import okhttp3.WebSocketListener;
 /**
  * App → 网关的 WebSocket。进程出口由 RadioLink.pinProcess 钉在 10 网。
  * 不用 Network.getSocketFactory：选错 Network 时 10.2 会彻底连不上（MESH 一直黄）。
+ * 下行不走 evaluateJavascript 拼 JSON：10 Hz 遥测把整段塞进 JS 源会卡住 WebView，
+ * 连接看着就像 1–2 秒断一次。消息进队列，由网页 wsPoll 取。
  */
 final class NativeWs {
     private static final String TAG = "NativeWs";
@@ -39,6 +43,7 @@ final class NativeWs {
     private static volatile boolean anyLive;
     private int gen;
     private String url = "";
+    private final List<String> inbox = new ArrayList<>();
 
     NativeWs(WebView web) {
         this.web = web;
@@ -66,6 +71,7 @@ final class NativeWs {
                 socket = null;
             }
             url = want;
+            synchronized (inbox) { inbox.clear(); }
             Log.i(TAG, "open " + want);
             try {
                 Request req = new Request.Builder().url(want).build();
@@ -81,9 +87,11 @@ final class NativeWs {
 
                     @Override
                     public void onMessage(WebSocket ws, String text) {
-                        if (my != gen) return;
-                        js("if(window.X30NativeWs)X30NativeWs.handleWsText("
-                                + JSONObject.quote(text) + ")");
+                        if (my != gen || text == null) return;
+                        synchronized (inbox) {
+                            if (inbox.size() > 80) inbox.remove(0);
+                            inbox.add(text);
+                        }
                     }
 
                     @Override
@@ -123,6 +131,16 @@ final class NativeWs {
 
     boolean isLive() {
         return live && socket != null;
+    }
+
+    String poll() {
+        synchronized (inbox) {
+            if (inbox.isEmpty()) return "[]";
+            JSONArray a = new JSONArray();
+            for (String s : inbox) a.put(s);
+            inbox.clear();
+            return a.toString();
+        }
     }
 
     static boolean isAnyLive() {

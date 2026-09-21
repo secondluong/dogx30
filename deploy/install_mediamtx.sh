@@ -18,6 +18,27 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+fetch() {
+  local url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --connect-timeout 20 --retry 2 "$url" -o "$dest"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=20 -O "$dest" "$url"
+  else
+    return 127
+  fi
+}
+
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+  echo "板上没有 curl/wget，先装下载工具…"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y && apt-get install -y curl wget
+  else
+    echo "请先安装 curl 或 wget，或把 $FILE 拷到板子。" >&2
+    exit 1
+  fi
+fi
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -25,7 +46,7 @@ echo "下载 MediaMTX ${VER} …"
 ok=0
 for URL in "${URLS[@]}"; do
   echo "  $URL"
-  if curl -fL --connect-timeout 20 --retry 2 "$URL" -o "$TMP/mtx.tgz"; then
+  if fetch "$URL" "$TMP/mtx.tgz"; then
     ok=1
     break
   fi
