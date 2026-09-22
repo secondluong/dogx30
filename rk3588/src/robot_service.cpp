@@ -409,6 +409,11 @@ bool RobotService::ControlHeld() {
   return controller_ != 0 && Clock::now() <= lease_expiry_;
 }
 
+bool RobotService::ControlHeldByOther(WsServer::ClientId id) {
+  std::lock_guard<std::mutex> lock(control_mutex_);
+  return controller_ != 0 && controller_ != id && Clock::now() <= lease_expiry_;
+}
+
 bool RobotService::CheckAdminToken(WsServer::ClientId id, const Json& msg) {
   std::string given = msg.String("password");
   if (given.empty()) given = msg.String("token");
@@ -452,10 +457,11 @@ void RobotService::HandleConfigGet(WsServer::ClientId id) {
 }
 
 void RobotService::HandleConfigSet(WsServer::ClientId id, const Json& msg) {
-  // 改完要重启，重启会中断遥控几秒。狗正被人操控时绝不能发生。
-  if (ControlHeld()) {
+  // 改完要重启，重启会中断遥控几秒。别人正操控时不能发生。
+  // 自己持有控制权（App 连上 MESH 会自动占）要能存，否则平板设置永远存不了。
+  if (ControlHeldByOther(id)) {
     SendError(id, "busy_control",
-              "有客户端正持有控制权。改配置需要重启网关，遥控会中断，"
+              "有其他客户端正持有控制权。改配置需要重启网关，遥控会中断，"
               "请先释放控制权。");
     return;
   }

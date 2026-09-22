@@ -1,8 +1,11 @@
 package com.dogx30.control;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.InputDevice;
@@ -10,6 +13,9 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -20,6 +26,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 /**
@@ -41,6 +48,15 @@ public class ControlActivity extends AppCompatActivity {
     private EditText overlayPort;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
+    private boolean micAsked;
+    private boolean pausingForMic;
+    private boolean homePrimed;
+    private boolean homeDown;
+    private long homeAt;
+    private String pipArmed = "";
+    private long pipAt;
+    private int pipMode = 2;
+    private volatile long rcTickAt;
 
     @Override
     @SuppressLint({"SetJavaScriptEnabled", "SetAllowFileAccess", "SetAllowFileAccessFromFileURLs"})
@@ -68,6 +84,7 @@ public class ControlActivity extends AppCompatActivity {
         // 根布局是 #0D1117，与网页 --bg 同色，所以没画面时观感不变。
         web.setBackgroundColor(Color.TRANSPARENT);
         video = new NativeVideo(findViewById(R.id.native_video), this::pushVideoState);
+        CameraTalk.get().attachVideo(video);
         nativeWs = new NativeWs(web);
         // 引擎初始化要一秒左右，越早开始越好：开机后第一次按键往往就在这一秒里。
         tts = new Tts(this);
@@ -223,6 +240,12 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public String pollRc() {
             return G20Rc.get().pollJson();
+        }
+
+        /** 原生正在读遥控。网页 HOME/画中画让开，避免开关各一下。 */
+        @JavascriptInterface
+        public boolean rcButtonsLive() {
+            return System.currentTimeMillis() - rcTickAt < 400;
         }
 
         @JavascriptInterface
@@ -395,11 +418,12 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public void videoStop() {
             runOnUiThread(() -> {
+                CameraTalk.get().release();
                 if (video != null) video.stop();
             });
         }
 
-        /** 布控球 anv CGI。bindRadio 与拉双光 RTSP 同一张网卡。 */
+        /** 布控球 anv CGI。球在 10 网，bindRadio=false 钉 WiFi。 */
         @JavascriptInterface
         public void cameraGetFire(String url, boolean bindRadio) {
             CameraCgi.fire(url, bindRadio);
@@ -410,12 +434,41 @@ public class ControlActivity extends AppCompatActivity {
             return CameraCgi.get(url, bindRadio);
         }
 
+        /** 布控球对讲。球机 SRS 数据通道推 G.711A，不经网关 WHIP。 */
+        @JavascriptInterface
+        public void talkStart(String host) {
+            CameraTalk.get().start(ControlActivity.this, host);
+        }
+
+        @JavascriptInterface
+        public void talkStop() {
+            CameraTalk.get().stop();
+        }
+
+        @JavascriptInterface
+        public void talkToggle(String host) {
+            CameraTalk.get().toggle(ControlActivity.this, host);
+        }
+
+        @JavascriptInterface
+        public boolean talkActive() {
+            return CameraTalk.get().isOn();
+        }
+
         /** 画面画在哪块矩形里，单位是设备像素，由网页按 devicePixelRatio 换算后给。 */
         @JavascriptInterface
         public void videoRect(int x, int y, int w, int h) {
             runOnUiThread(() -> {
                 if (video != null) video.setRect(x, y, w, h);
             });
+        }
+
+        @JavascriptInterface
+        public void saveGatewayPrefs(String host, int port) {
+            if (host == null) return;
+            host = host.trim();
+            if (host.isEmpty() || port < 1 || port > 65535) return;
+            GatewayStore.save(ControlActivity.this, host, port);
         }
 
         @JavascriptInterface
@@ -482,11 +535,67 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     private void injectRc(G20Rc.Snapshot snap) {
+        applyRcButtons(snap);
         if (web == null) return;
         web.evaluateJavascript(
                 "window.X30Gamepad&&X30Gamepad.onRcChannels&&X30Gamepad.onRcChannels("
                         + snap.toJson() + ")",
                 null);
+    }
+
+    /** HOME 和对讲、右小画中画不经过网页。网页一卡这两项就会整段失灵。 */
+    private void applyRcButtons(G20Rc.Snapshot snap) {
+        if (snap == null || !snap.connected || snap.ch == null || snap.ch.length == 0) {
+            return;
+        }
+        rcTickAt = System.currentTimeMillis();
+        int[] ch = snap.ch;
+        long now = rcTickAt;
+        String host = video != null ? video.ballHost() : "192.168.10.168";
+        if (ch.length > 9) {
+            boolean down = Math.abs(ch[9] - 1500) >= 250;
+            if (!homePrimed) {
+                homePrimed = true;
+                homeDown = down;
+            } else if (down && !homeDown && now - homeAt >= 400) {
+                homeAt = now;
+                boolean wasOn = CameraTalk.get().isOn();
+                CameraTalk.get().toggle(this, host);
+                boolean nowOn = CameraTalk.get().isOn();
+                if (tts != null && nowOn != wasOn) {
+                    tts.speak(nowOn ? "对讲开" : "对讲关");
+                }
+            }
+            homeDown = down;
+        }
+        if (ch.length > 14) {
+            String detent = pipDetent(ch[14]);
+            if (pipArmed.isEmpty()) {
+                pipArmed = detent;
+            } else if (!detent.equals(pipArmed)) {
+                if (("next".equals(detent) || "prev".equals(detent))
+                        && now - pipAt >= 280) {
+                    pipAt = now;
+                    cyclePipNative(host, "next".equals(detent) ? 1 : -1);
+                }
+                pipArmed = detent;
+            }
+        }
+    }
+
+    private static String pipDetent(int pwm) {
+        if (pwm < 900 || pwm > 2100) return "mid";
+        // 右小行程短，±0.45（1275/1725）现场经常推不到。±0.22 仍高于中位抖动。
+        if (pwm <= 1390) return "prev";
+        if (pwm >= 1610) return "next";
+        return "mid";
+    }
+
+    private void cyclePipNative(String host, int step) {
+        pipMode = (pipMode + step + 6) % 6;
+        CameraCgi.setPip(host, pipMode);
+        String[] names = { "默认", "变焦主图", "热像主图", "左右拼接", "仅变焦", "仅热像" };
+        if (tts != null) tts.speak(names[pipMode]);
     }
 
     private void injectKey(KeyEvent event) {
@@ -550,24 +659,56 @@ public class ControlActivity extends AppCompatActivity {
         // 切后台时页面里的 visibilitychange 会发 release 停车，
         // 这里再显式停一次 JS 定时器，避免系统节流下指令断续送达。
         web.onPause();
+        if (pausingForMic) return;
         // 解码器和 2.4G 带宽都不该在后台白占。
         if (video != null) video.pauseForBackground();
+        CameraTalk.get().stop();
         // 切后台了还在念上一句按键，念的又是已经不在操作的那台机器，只会吓人一跳。
         if (tts != null) tts.stop();
     }
 
     @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        CameraTalk.get().onPermission(this, requestCode, grantResults);
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        pausingForMic = false;
+        // 上一包对讲可能把进程钉在 MESH 上，画中画 CGI 会全部打不出去。
+        if (Build.VERSION.SDK_INT >= 23) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) cm.bindProcessToNetwork(null);
+            } catch (Exception ignored) {}
+        }
         G20Rc.get().addListener(rcToJs);
         web.onResume();
         if (video != null) video.resumeIfWanted();
+        askMicOnce();
+    }
+
+    /** 进页就要麦权，HOME 开对讲才不会再弹麦克风框。 */
+    private void askMicOnce() {
+        if (micAsked) return;
+        micAsked = true;
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        pausingForMic = true;
+        ActivityCompat.requestPermissions(this,
+                new String[]{Manifest.permission.RECORD_AUDIO}, CameraTalk.REQ_MIC);
     }
 
     @Override
     protected void onDestroy() {
         if (nativeWs != null) nativeWs.close();
         if (video != null) video.stop();
+        CameraTalk.get().release();
         // 不 shutdown 的话引擎连接会一直挂着，下次进来再 new 一个就是泄漏。
         if (tts != null) tts.shutdown();
         if (web != null) {

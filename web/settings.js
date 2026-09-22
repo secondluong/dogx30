@@ -54,7 +54,8 @@
           hint: '官方默认 43899。' },
         { key: 'gas_port', label: '本机气体接收端口', type: 'number',
           hint: '气体主板每 2 秒往这个 UDP 口推 10 路浓度。串口服务器' +
-                '「目的端口」必须填同一个数，默认 1000。' },
+                '「目的 IP」填网关地址（10 网是 192.168.10.120），' +
+                '「目的端口」必须和这里一致，默认 1000。' },
         { key: 'payload_ip', label: '载荷主板 IP', type: 'text',
           hint: '气泵、UWB、风扇、摄像头走这台。空则用气体口学到的对端。' },
         { key: 'payload_port', label: '载荷主板端口', type: 'number',
@@ -104,6 +105,9 @@
     saving: false,
     loading: false,
     waitingRestart: false,
+    saveArmed: false,
+    pendingDiff: null,
+    lastSaved: null,
   };
 
   const inputs = {};
@@ -113,7 +117,12 @@
   const $ = (id) => document.getElementById(id);
 
   function isAppNative() {
-    return !!(window.X30Native && typeof window.X30Native.getGatewayHost === 'function');
+    try {
+      // 安卓 WebView 里桥方法的 typeof 常常不是 function。
+      return !!(window.X30Native && 'getGatewayHost' in window.X30Native);
+    } catch (e) {
+      return false;
+    }
   }
 
   function gatewayOpen() {
@@ -329,27 +338,52 @@
            '。没登记也能操控，只是切档后姿态显示按本机记录来，可能与实际不符。';
   }
 
-  function saveAppGateway() {
-    if (!isAppNative()) return;
-    const host = $('set-app-host').value.trim();
-    const port = Number($('set-app-port').value.trim());
-    if (!host) {
-      setNote('请填服务 IP。', 'bad');
-      return;
-    }
-    if (!port || port < 1 || port > 65535) {
-      setNote('服务端口不合法。', 'bad');
-      return;
-    }
+  function persistAppLocal(reloadIfAddrChanged) {
+    if (!isAppNative()) return true;
+    const hostEl = $('set-app-host');
+    const portEl = $('set-app-port');
+    if (!hostEl || !portEl) return true;
+    const host = hostEl.value.trim();
+    const port = Number(portEl.value.trim());
     const cam = $('set-app-dogcam') ? $('set-app-dogcam').value.trim() : '';
     if (cam && cam.indexOf('rtsp://') !== 0) {
       setNote('机身相机地址要以 rtsp:// 开头。', 'bad');
-      return;
+      return false;
     }
-    // 相机地址先落盘：下面 setGateway 会重载页面，晚了就丢了。
     if (window.X30DogCam) window.X30DogCam.setUrl(cam);
-    setNote('正在按新地址重新连接…');
-    window.X30Native.setGateway(host, port);
+    if (!host) {
+      if (reloadIfAddrChanged) setNote('请填服务 IP。', 'bad');
+      return !reloadIfAddrChanged;
+    }
+    if (!port || port < 1 || port > 65535) {
+      if (reloadIfAddrChanged) setNote('服务端口不合法。', 'bad');
+      return !reloadIfAddrChanged;
+    }
+    try {
+      if ('saveGatewayPrefs' in window.X30Native) {
+        window.X30Native.saveGatewayPrefs(host, port);
+      }
+    } catch (e) { /* */ }
+    const curH = String(window.X30Native.getGatewayHost() || '');
+    const curP = Number(window.X30Native.getGatewayPort() || 0);
+    if (reloadIfAddrChanged && (host !== curH || port !== curP)) {
+      setNote('正在按新地址重新连接…');
+      window.X30Native.setGateway(host, port);
+      return true;
+    }
+    return true;
+  }
+
+  function saveAppGateway() {
+    persistAppLocal(true);
+  }
+
+  function resetSaveBtn() {
+    const btn = $('set-save');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '保存并重启网关';
+    }
   }
 
   function open() {
@@ -381,7 +415,11 @@
   }
 
   function close() {
+    persistAppLocal(false);
     state.open = false;
+    state.saveArmed = false;
+    state.pendingDiff = null;
+    resetSaveBtn();
     root.classList.add('hidden');
     setNote('');
   }
@@ -425,25 +463,60 @@
   }
 
   function save() {
+    persistAppLocal(false);
+    if (!state.current) {
+      setNote('还没读到网关配置。请先输入密码 54longqr 解锁。', 'bad');
+      return;
+    }
     const diff = changedFields();
     if (Object.keys(diff).length === 0) {
-      setNote('没有任何改动。', 'warn');
+      state.saveArmed = false;
+      resetSaveBtn();
+      setNote('网关项没有改动。上面的本机 IP / 机身相机已记下。', 'ok');
       return;
     }
 
     const portChange = Object.prototype.hasOwnProperty.call(diff, 'http_port');
     const bindChange = Object.prototype.hasOwnProperty.call(diff, 'bind_address');
-    let confirmText = '保存后网关会重启，遥控会中断一两秒。继续？';
-    if (portChange || bindChange) {
-      confirmText = '改了服务端口或监听地址，重启后这个页面的地址可能就不通了，' +
-                    '需要用新地址重新打开。继续？';
+    if (!state.saveArmed) {
+      state.saveArmed = true;
+      $('set-save').textContent = '确认保存并重启';
+      setNote(portChange || bindChange
+        ? '本机项已记下。再点「确认保存并重启」：端口或监听改了，重启后可能要用新地址。'
+        : '本机项已记下。再点「确认保存并重启」才会写入网关（会中断一两秒）。', 'warn');
+      return;
     }
-    if (!window.confirm(confirmText)) return;
-
-    state.saving = true;
+    state.saveArmed = false;
+    resetSaveBtn();
     $('set-save').disabled = true;
+    state.saving = true;
+    state.pendingDiff = diff;
+    state.lastSaved = diff;
     setNote('正在保存…');
+    // 旧网关见任何控制权都拒。先让出控制权，等松开后再写，避免 100ms 后又被抢回去。
+    try {
+      if (window.app && window.app.hasControl) {
+        state.sendFn({ t: 'yield' });
+        setTimeout(flushPendingSave, 280);
+        return;
+      }
+    } catch (e) { /* */ }
+    flushPendingSave();
+  }
+
+  function flushPendingSave() {
+    const diff = state.pendingDiff;
+    if (!diff || !state.sendFn) return;
+    state.pendingDiff = null;
     state.sendFn({ t: 'config_set', token: state.token, settings: diff });
+  }
+
+  function onControl(has) {
+    if (state.pendingDiff && !has) flushPendingSave();
+  }
+
+  function blockClaim() {
+    return !!(state.saving || state.pendingDiff);
   }
 
   // -------------------------------------------------------------------------
@@ -465,15 +538,32 @@
 
     if (state.waitingRestart) {
       state.waitingRestart = false;
+      const lost = lostAfterSave(msg.settings);
+      if (lost) {
+        setNote('网关起来了，但这些项又变回旧值：' + lost +
+                '。板子 ExecStart 里若还有 --robot-ip / --bind，会盖过配置文件。', 'bad');
+        return;
+      }
       setNote('网关已带着新配置起来了。', 'ok');
       return;
     }
     setNote('已读到当前配置。', 'ok');
   }
 
+  function lostAfterSave(settings) {
+    if (!state.lastSaved || !settings) return '';
+    const lost = [];
+    Object.keys(state.lastSaved).forEach((k) => {
+      if (String(settings[k]) !== String(state.lastSaved[k])) lost.push(k);
+    });
+    state.lastSaved = null;
+    return lost.join('、');
+  }
+
   function onConfigSaved(msg) {
     state.saving = false;
-    $('set-save').disabled = false;
+    state.pendingDiff = null;
+    resetSaveBtn();
     state.current = msg.settings;
     fillForm(msg.settings);
     rememberPtz(msg.settings);
@@ -509,7 +599,9 @@
 
     state.saving = false;
     state.loading = false;
-    $('set-save').disabled = false;
+    state.saveArmed = false;
+    state.pendingDiff = null;
+    resetSaveBtn();
     setNote(msg.msg, 'bad');
     if (msg.code === 'bad_admin_token' || msg.code === 'no_admin_token') {
       state.current = null;
@@ -526,7 +618,8 @@
     } else if (state.saving) {
       setNote('连接断了，这次保存不确定有没有成功，重连后请核对一遍。', 'warn');
       state.saving = false;
-      $('set-save').disabled = false;
+      state.pendingDiff = null;
+      resetSaveBtn();
     }
   }
 
@@ -583,5 +676,6 @@
 
   window.X30Settings = {
     initSettings, onConfig, onConfigSaved, onError, onHello, onLink,
+    onControl, blockClaim,
   };
 })();

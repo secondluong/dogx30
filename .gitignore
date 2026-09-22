@@ -13,3 +13,7 @@ __pycache__/
 .vscode/
 .idea/
 compile_commands.json
+android-app/.gradle/
+android-app/.idea/
+android-app/local.properties
+android-app/app/build/

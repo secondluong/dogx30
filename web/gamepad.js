@@ -193,7 +193,8 @@
 
   // G30 现场表。数组下标 = CH号 - 1。中位 1500。
   // 大摇杆按「这根杆的编号」写：左大 CH3 = CH3/CH4，右大 CH2 = CH1/CH2。
-  // 小摇杆同理：左小 CH14 = CH14/CH15，右小 CH16 只用前后（变焦 / 水炮喷射）。
+  // 小摇杆按右大那套「X 在 Y 前一号」：左小 CH13/CH14，右小 CH15/CH16。
+  // 现场：CH15 是右小左右，用来切画中画；CH16 前后变焦。
   // PWM 增大按「右 / 前」理解；通道约定左移、左转为正，所以 lat/turn 取反。
   function pwmAxis(v, invert) {
     if (typeof v !== 'number' || v !== v) return 0;
@@ -217,7 +218,7 @@
     var ex = typeof expo === 'number' ? expo : DEFAULT_TUNING.expo;
     var left = shapeStick(pwmAxis(ch[3], true), pwmAxis(ch[2], false), dz, ex);
     var right = shapeStick(pwmAxis(ch[0], true), pwmAxis(ch[1], false), dz, ex);
-    var aux = shapeStick(pwmAxis(ch[13], true), pwmAxis(ch[14], false), dz, ex);
+    var aux = shapeStick(pwmAxis(ch[12], true), pwmAxis(ch[13], false), dz, ex);
     return {
       fwd: left.y,
       lat: left.x,
@@ -227,6 +228,7 @@
       auxX: aux.x,
       auxY: aux.y,
       auxZoom: pwmAxis(ch[15], false),
+      auxPip: pwmAxis(ch[14], false),
     };
   }
 
@@ -234,7 +236,7 @@
   var G20_BTN = {
     walk_cycle: { ch: 6 },   // L1 CH7 力控/起步
     pose_cycle: { ch: 7 },   // L2 CH8 起立/趴下/卸力
-    talk: { ch: 9 },         // HOME CH10 按住说话
+    talk: { ch: 9 },         // HOME CH10 点一下开麦+听球，再点全关
   };
 
   // SW1 CH5 上中下：狗身点云 / 狗身视频 / 双光视频。
@@ -257,6 +259,14 @@
     if (typeof v !== 'number' || v !== v) return 'mid';
     if (v <= 1300) return 'down';
     if (v >= 1700) return 'up';
+    return 'mid';
+  }
+
+  // 右小左右 CH15：回中再拨一下切一档画中画。正=右=下一档。
+  function pipDetent(v) {
+    if (typeof v !== 'number' || v !== v) return 'mid';
+    if (v <= -0.22) return 'prev';
+    if (v >= 0.22) return 'next';
     return 'mid';
   }
 
@@ -345,6 +355,7 @@
     ch5Toggle: ch5Toggle,
     ch6Toggle: ch6Toggle,
     wheelDetent: wheelDetent,
+    pipDetent: pipDetent,
   };
 
   // --- 浏览器侧 -------------------------------------------------------------
@@ -380,6 +391,7 @@
     g20Seq: -1,
     g20Prev: {},
     g20Talk: false,
+    g20TalkAt: 0,
     g20Wheel: null,
     g20Primed: false,
     stickTarget: 'dog',
@@ -434,7 +446,7 @@
 
   function zero() {
     state.channels = { fwd: 0, lat: 0, turn: 0, tilt: 0, look: 0,
-                       auxX: 0, auxY: 0, auxZoom: 0 };
+                       auxX: 0, auxY: 0, auxZoom: 0, auxPip: 0 };
     state.engaged = false;
   }
 
@@ -666,12 +678,50 @@
       }
     }
 
+    function talkIsOn() {
+      try {
+        if (window.X30Native && 'talkActive' in window.X30Native) {
+          return !!window.X30Native.talkActive();
+        }
+      } catch (e) { /* */ }
+      return state.g20Talk;
+    }
+
     function setTalk(on) {
-      if (state.g20Talk === on) return;
-      state.g20Talk = on;
-      if (window.X30Media && window.X30Media.setTalk) {
-        window.X30Media.setTalk(on, showBanner);
+      if (!on) {
+        var was = talkIsOn() || state.g20Talk;
+        state.g20Talk = false;
+        if (window.X30Media && window.X30Media.setTalk) {
+          window.X30Media.setTalk(false, showBanner);
+        }
+        if (was) say('对讲关');
+        return;
       }
+      if (talkIsOn()) return;
+      state.g20Talk = true;
+      if (window.X30Media && window.X30Media.setTalk) {
+        window.X30Media.setTalk(true, showBanner);
+      }
+      say('对讲开');
+    }
+
+    function toggleTalk() {
+      var now = Date.now();
+      if (state.g20TalkAt && now - state.g20TalkAt < 400) return;
+      state.g20TalkAt = now;
+      if (window.X30Native && 'talkToggle' in window.X30Native) {
+        var host = '192.168.10.168';
+        try {
+          if (window.X30PtzBall && window.X30PtzBall.host) {
+            host = window.X30PtzBall.host() || host;
+          }
+        } catch (e) { /* */ }
+        window.X30Native.talkToggle(host);
+        state.g20Talk = talkIsOn();
+        say(state.g20Talk ? '对讲开' : '对讲关');
+        return;
+      }
+      setTalk(!talkIsOn());
     }
 
     function applyG20(ev) {
@@ -694,7 +744,13 @@
         // 首帧只记档：上电时通道常是 0/1050，会把 R1/R2 当成按下，指标和气体就被打开。
         if (primed && !state.muted) {
           if (name === 'talk') {
-            setTalk(down);
+            // 原生正在读遥控就让开。读不到时网页自己切，避免对讲整段没反应。
+            var nativeTalk = false;
+            try {
+              nativeTalk = !!(window.X30Native && 'rcButtonsLive' in window.X30Native
+                && window.X30Native.rcButtonsLive());
+            } catch (e) { /* */ }
+            if (!nativeTalk && down && !state.g20Prev[name]) toggleTalk();
           } else if (down && !state.g20Prev[name]) {
             dispatch(name);
           }
@@ -762,7 +818,7 @@
           state.g20Wheel = null;
           state.stickTarget = 'dog';
           zero();
-          setTalk(false);
+          // 对讲只听 HOME。遥控读数闪一下就 talkStop，球机声会被一起掐掉。
         }
         window.requestAnimationFrame(poll);
         return;
@@ -775,7 +831,6 @@
           state.source = 'none';
           zero();
           if (state.core) state.core.reset();
-          setTalk(false);
           setStatus();
           showBanner('手柄已断开，运动量已归零');
         }
@@ -822,7 +877,9 @@
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         zero();
-        setTalk(false);
+        // 对讲由 Activity.onPause 停。这里只清本地标记：点权限框也会 hidden，
+        // 若这里 talkStop，HOME 刚开的对讲会被自己掐掉，再按就被当成又开一次。
+        state.g20Talk = false;
         if (state.core) state.core.reset();
       }
     });
@@ -899,6 +956,7 @@
              auxX: state.channels.auxX || 0,
              auxY: state.channels.auxY || 0,
              auxZoom: state.channels.auxZoom || 0,
+             auxPip: state.channels.auxPip || 0,
              engaged: state.engaged, source: state.source,
              stickTarget: state.stickTarget };
   };

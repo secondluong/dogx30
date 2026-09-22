@@ -636,15 +636,29 @@ def config_scenario(host, port, token, conf_path):
     on_disk = read_conf(conf_path)   # 上面成功改过一次，基线要跟着更新
 
     # --- 控制权互锁 ---------------------------------------------------------
+    # App 连上会自动占控制权，自己改配置必须能过。挡的是别人正在操控。
+    b = WsClient(host, port)
+    b.wait_for("hello")
+    b.send({"t": "claim"})
+    b.wait_for("control", predicate=lambda m: m.get("granted") is True)
     a.drain()
-    a.send({"t": "claim"})
-    a.wait_for("control", predicate=lambda m: "granted" in m)
     a.send({"t": "config_set", "token": token, "settings": {"local_port": 43896}})
     err = a.wait_for("error", timeout=5)
-    check("有人持有控制权时不许改配置",
+    check("别人持有控制权时不许改配置",
           err.get("code") == "busy_control", err.get("msg", "")[:70])
     check("被互锁挡下时也没动文件", read_conf(conf_path) == on_disk)
+    b.send({"t": "yield"})
+    b.close()
+    time.sleep(0.2)
+    a.drain()
 
+    a.send({"t": "claim"})
+    a.wait_for("control", predicate=lambda m: m.get("granted") is True)
+    a.send({"t": "config_set", "token": token,
+            "settings": {"local_port": int(on_disk.get("local_port", 43897))}})
+    self_saved = a.wait_for("config_saved", timeout=5)
+    check("自己持有控制权时能改配置",
+          "settings" in self_saved, str(self_saved)[:80])
     a.send({"t": "yield"})
     time.sleep(0.2)
     a.drain()

@@ -940,7 +940,7 @@ check('机身相机不会被原生和网关同时拉两遍',
       /function handOver/.test(dogCamJs) &&
       /X30Media\.resync/.test(dogCamJs));
 check('MESH 双光直拉球机，不走 WebView WHEP',
-      /192\.168\.1\.168:554\/11/.test(dogCamJs) &&
+      /192\.168\.10\.168:554\/11/.test(dogCamJs) &&
       /videoStartOn/.test(dogCamJs) &&
       /void videoStartOn\(/.test(radioBridge) &&
       /id === 'ptz_vis'/.test(dogCamJs));
@@ -974,7 +974,7 @@ var mtxInstall = fs.readFileSync(
     path.join(__dirname, '..', 'deploy', 'install_mediamtx.sh'), 'utf8');
 check('MediaMTX 的 RTSP 给平板听',
       /rtspAddress: :8554/.test(mtxYml) &&
-      /192\.168\.1\.168:554\/11/.test(mtxYml) &&
+      /192\.168\.10\.168:554\/11/.test(mtxYml) &&
       /linux_arm64/.test(mtxInstall) &&
       /v1\.20\.1/.test(mtxInstall) &&
       /x30-media/.test(mtxInstall) &&
@@ -1034,14 +1034,16 @@ check('机身相机地址能在设置里改',
       /X30DogCam\.setUrl/.test(read('settings.js')));
 // ExoPlayer 默认起播前先攒 2.5 秒，那是点播的调法；直播流攒进去的每一毫秒都变成
 // 永久延迟（按 1 倍速从起点往后放，吐不出来）。遥控宁可偶尔卡一下也不要慢一截。
-// 音轨也要关：画面得跟音频时钟对齐，AudioTrack 那点缓冲就成了延迟下限，
-// 而这一路只是拿来看的（网页侧一直 muted，2.4G 下也没有对讲）。
+// 机身 / 2.4G 仍关音轨（窄链路、音频时钟拖画面）。布控球要听现场，对讲时再静音。
 check('拉流按低延迟配，不用点播那套缓冲',
       /setLoadControl/.test(nativeVideo) &&
       /setBufferDurationsMs/.test(nativeVideo) &&
       /setPrioritizeTimeOverSizeThresholds\(true\)/.test(nativeVideo) &&
       /BUFFER_MIN_MS = 200/.test(nativeVideo) &&
-      /setTrackTypeDisabled\(C\.TRACK_TYPE_AUDIO, true\)/.test(nativeVideo));
+      /setTrackTypeDisabled\(C\.TRACK_TYPE_AUDIO, !listenAudio\)/.test(nativeVideo) &&
+      /isBallUrl/.test(nativeVideo) &&
+      /setTalking/.test(nativeVideo) &&
+      /对讲只改音量/.test(nativeVideo));
 // 光调小缓冲不够：链路抖一下就攒出一段，之后一直背着走。
 check('攒出来的延迟会被追掉',
       /function trimLatency|private void trimLatency/.test(nativeVideo) &&
@@ -1105,6 +1107,26 @@ check('布控球云台走 anv CGI 而不是海康 ISAPI',
       ptzCpp.indexOf('ISAPI/PTZCtrl') === -1 &&
       /action=Stop/.test(ptzCpp) &&
       /ZoomAdd/.test(ptzCpp));
+check('右小变焦按住会补发，避免只动一步',
+      /lastZoomAt/.test(ptzJs) && /ZoomAdd/.test(ptzJs) && /ZoomSub/.test(ptzJs));
+check('左小水平走 CH13，不占用右小的 CH15',
+      /pwmAxis\(ch\[12\]/.test(read('gamepad.js')) &&
+      /pwmAxis\(ch\[13\]/.test(read('gamepad.js')) &&
+      /pwmAxis\(ch\[15\]/.test(read('gamepad.js')));
+check('右小左右回中再拨会切画中画',
+      /auxPip/.test(read('gamepad.js')) &&
+      /function applyPipStick/.test(appJs) &&
+      /rcButtonsLive/.test(appJs) &&
+      /v <= -0\.22/.test(read('gamepad.js')) &&
+      /pwm <= 1390/.test(radioBridge) &&
+      /cyclePip\(speak, showBanner/.test(appJs) &&
+      /step < 0/.test(ptzJs) &&
+      /applyRcButtons/.test(radioBridge) &&
+      /cyclePipNative/.test(radioBridge) &&
+      /static void setPip/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
+      !/setTimeout\(\(\) => \{ busy = false; \}, 400\)/.test(ptzJs));
 check('空口令或 PASSWORD 占位按 admin 登录球机',
       /password == "PASSWORD"/.test(ptzCpp) &&
       /pc.password == "PASSWORD"/.test(
@@ -1116,9 +1138,13 @@ check('双光画面上能切画中画模式',
       /t: 'ptz_pip'/.test(ptzJs) &&
       /X30PtzBall\.init/.test(appJs) &&
       /X30PtzBall\.move/.test(appJs));
-check('App 直发球机 CGI，2.4G 小摇杆不依赖网关 ISAPI',
-      /cameraGetFire/.test(ptzJs) &&
+check('App 直发球机 CGI，钉 WiFi 打 10 网球，不绑图传口',
+      /cameraGetFire\(cgiUrl\(cgi, qs\), false\)/.test(ptzJs) &&
+      /cameraGet\(cgiUrl\(cgi, qs\), false\)/.test(ptzJs) &&
       /cameraGetFire/.test(radioBridge) &&
+      /meshNetwork\(\)/.test(fs.readFileSync(
+          path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                    'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
       /class CameraCgi/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')));
@@ -1144,6 +1170,8 @@ check('气体格按协议类型而不是 CO₂/Cl₂',
       !/id="g-co2"/.test(html) && !/id="g-cl2"/.test(html));
 check('遥测 state 会刷新气体面板',
       /function renderGas/.test(appJs) && /renderGas\(s\.gas\)/.test(appJs));
+check('气体在线无读数会写明，数值按 Number 收',
+      /在线 · 无读数/.test(appJs) && /Number\(sl\.value\)/.test(appJs));
 check('气体格显示端口和板号',
       /class="g-loc"/.test(html) &&
       /端口' \+ sl\.port \+ '-板'/.test(appJs));
@@ -1208,6 +1236,88 @@ check('按住说话时闭嘴',
       /function talking/.test(read('media.js')) &&
       /talking,?\s*\n?\};/.test(read('media.js')) &&
       /X30Media\.talking/.test(voiceJs));
+check('App 对讲走球机 SRS，不经网关 WHIP',
+      /function hasNativeTalk/.test(mediaJs) &&
+      /X30Native\.talkStart/.test(mediaJs) &&
+      /nativeTalkOn/.test(mediaJs) &&
+      /talkStart/.test(radioBridge) &&
+      /class CameraTalk/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /rtc\/v1\/play/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /sdp \+ "\}"/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /bindProcessToNetwork\(null\)/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /cameraGetFire' in window.X30Native/.test(read('ptzball.js')) &&
+      /audio_cgi2/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
+      /1\.6f/.test(nativeVideo) &&
+      /setSpeakerMute/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /void prepare\(/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /downsample/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /boostAudio/.test(ptzJs) &&
+      /OK\\0/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /status=SoundOn/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /function toggleTalk/.test(read('gamepad.js')) &&
+      /talkToggle/.test(read('gamepad.js')) &&
+      /void toggle\(/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /askMicOnce/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'ControlActivity.java'), 'utf8')) &&
+      /pausingForMic/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'ControlActivity.java'), 'utf8')) &&
+      /网页桥线程只翻开关/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /通道还没建好就 break/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /ensureMicPump/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /HOME 和对讲/.test(radioBridge) &&
+      /rcButtonsLive/.test(read('gamepad.js')) &&
+      /if \(gen == talkGen\.get\(\)\) teardownSession/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /对讲开/.test(read('gamepad.js')) &&
+      /对讲关/.test(read('gamepad.js')) &&
+      /listenAudio && talking/.test(nativeVideo) &&
+      /setAdmPlaying/.test(nativeVideo) &&
+      /ADM 喇叭保持静音/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /setSpeakerMute\(true\)/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /不改 AudioFormat/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
+      /RECORD_AUDIO/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main',
+                  'AndroidManifest.xml'), 'utf8')) &&
+      /setTalking/.test(nativeVideo) &&
+      /io.github.webrtc-sdk/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'build.gradle'), 'utf8')));
 // 语音是本机偏好，网关没开在线改配置时也得够得着这个开关 ——
 // 以前那种情况下点标题什么都不发生。
 check('设置里不再有遥控器探测',
@@ -1219,6 +1329,19 @@ check('语音开关在设置面板里且够得着',
       !!htmlIds['set-voice-hint'] &&
       /X30Voice\.onSettingsOpen/.test(read('settings.js')) &&
       !/if \(!state\.available && !isAppNative\(\)\) return;/.test(read('settings.js')));
+check('设置保存不靠 WebView 的 typeof 或 confirm',
+      /'getGatewayHost' in window.X30Native/.test(read('settings.js')) &&
+      /saveArmed/.test(read('settings.js')) &&
+      /flushPendingSave/.test(read('settings.js')) &&
+      /blockClaim/.test(read('settings.js')) &&
+      /saveGatewayPrefs/.test(read('settings.js')) &&
+      /t: 'yield'/.test(read('settings.js')) &&
+      !/window\.confirm/.test(read('settings.js')));
+check('自己占着控制权仍能改配置',
+      /ControlHeldByOther/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'rk3588', 'src', 'robot_service.cpp'), 'utf8')) &&
+      /自己持有控制权/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'rk3588', 'src', 'robot_service.cpp'), 'utf8')));
 // voice.js 要排在其余模块前面：它们都会调它念结果。
 check('voice.js 先于其它模块加载',
       loadOrder.indexOf('voice.js') === 0, loadOrder.join(' '));

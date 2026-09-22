@@ -115,9 +115,10 @@ class RobotService {
   void HandleConfigSet(WsServer::ClientId id, const Json& msg);
   void HandleSwitch(WsServer::ClientId id, const Json& msg);
 
-  // 有没有人正持有控制权（含未过期的租约）。改配置要重启，重启会中断遥控，
-  // 所以只在没人操控时才允许。
+  // 有没有人正持有控制权（含未过期的租约）。
   bool ControlHeld();
+  // 别人占着控制权。自己占着仍允许改配置，否则 App 自动 claim 后设置存不了。
+  bool ControlHeldByOther(WsServer::ClientId id);
 
   std::string BuildStateJson() const;
   bool WalkHold() const;

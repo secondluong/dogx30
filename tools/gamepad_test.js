@@ -73,19 +73,29 @@ var pitch = G.g20Channels(pitchCh, 0.12, 0.4);
 check('CH2 推到 2000 是俯仰', pitch.tilt > 0.9 && Math.abs(pitch.turn) < 0.05,
       JSON.stringify(pitch));
 var auxXCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
-              1500, 1500, 1500, 1000, 1500, 1500];
+              1500, 1500, 1000, 1500, 1500, 1500];
 var auxX = G.g20Channels(auxXCh, 0.12, 0.4);
-check('CH14 是左小摇杆水平', auxX.auxX > 0.9 && Math.abs(auxX.auxY) < 0.05,
+check('CH13 是左小摇杆水平', auxX.auxX > 0.9 && Math.abs(auxX.auxY) < 0.05,
       JSON.stringify(auxX));
 var auxYCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
-              1500, 1500, 1500, 1500, 2000, 1500];
+              1500, 1500, 1500, 2000, 1500, 1500];
 var auxY = G.g20Channels(auxYCh, 0.12, 0.4);
-check('CH15 是左小摇杆俯仰', auxY.auxY > 0.9 && Math.abs(auxY.auxX) < 0.05,
+check('CH14 是左小摇杆俯仰', auxY.auxY > 0.9 && Math.abs(auxY.auxX) < 0.05,
       JSON.stringify(auxY));
 var auxZCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
               1500, 1500, 1500, 1500, 1500, 2000];
 var auxZ = G.g20Channels(auxZCh, 0.12, 0.4);
 check('CH16 前推是放大', auxZ.auxZoom > 0.9, 'z=' + auxZ.auxZoom);
+var pipCh = [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
+             1500, 1500, 1500, 1500, 2000, 1500];
+var pip = G.g20Channels(pipCh, 0.12, 0.4);
+check('CH15 右拨是画中画下一档', pip.auxPip > 0.9 && G.pipDetent(pip.auxPip) === 'next',
+      JSON.stringify(pip));
+var pipL = G.g20Channels([1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500,
+                          1500, 1500, 1500, 1500, 1000, 1500], 0.12, 0.4);
+check('CH15 左拨是画中画上一档', pipL.auxPip < -0.9 && G.pipDetent(pipL.auxPip) === 'prev',
+      JSON.stringify(pipL));
+check('CH15 中位不切画中画', G.pipDetent(0) === 'mid');
 check('CH5 上是点云', G.ch5Toggle(1950) === 'cloud');
 check('CH5 中是狗身视频', G.ch5Toggle(1500) === 'dog_cam');
 check('CH5 下是双光视频', G.ch5Toggle(1050) === 'ptz_vis');

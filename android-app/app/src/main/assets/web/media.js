@@ -332,8 +332,43 @@ function selectMain(id) {
 // 对讲：按住说话
 // ---------------------------------------------------------------------------
 
+// App 壳走球机 SRS 数据通道，不经网关 WHIP。浏览器桌面仍走 WHIP。
+function hasNativeTalk() {
+  try {
+    return !!(window.X30Native && 'talkStart' in window.X30Native);
+  } catch (e) {
+    return false;
+  }
+}
+
+function talkHost() {
+  if (window.X30PtzBall && window.X30PtzBall.host) {
+    return window.X30PtzBall.host();
+  }
+  const u = (window.X30DogCam && window.X30DogCam.ptzUrl)
+    ? window.X30DogCam.ptzUrl()
+    : 'rtsp://192.168.10.168:554/11';
+  const m = /rtsp:\/\/(?:[^/?#@]*@)?([^:/?#]+)/i.exec(String(u || ''));
+  return (m && m[1]) || '192.168.10.168';
+}
+
 // 做成按住说话而不是常开：工地噪音大，常开既容易啸叫也白占带宽。
+let nativeTalkOn = false;
+
 async function talkStart(showBanner) {
+  if (hasNativeTalk()) {
+    nativeTalkOn = true;
+    try {
+      if (window.X30PtzBall && window.X30PtzBall.boostAudio) {
+        window.X30PtzBall.boostAudio();
+      }
+      window.X30Native.talkStart(talkHost());
+    } catch (e) {
+      nativeTalkOn = false;
+      if (showBanner) showBanner(`对讲失败：${e.message || e}`, 6000);
+    }
+    return;
+  }
   if (media.talkPc || !media.plan) return;
   try {
     media.talkStream = await navigator.mediaDevices.getUserMedia({
@@ -372,6 +407,10 @@ async function talkStart(showBanner) {
 }
 
 function talkStop() {
+  nativeTalkOn = false;
+  if (hasNativeTalk()) {
+    try { window.X30Native.talkStop(); } catch (e) { /* */ }
+  }
   if (media.talkPc) {
     media.talkPc.close();
     media.talkPc = null;
@@ -392,12 +431,29 @@ let talkBanner = null;
 // 传到狗那侧就是回声。判据用 talkStream 而不是 talkPc —— 麦克风一开就算，
 // 那时 WHIP 还没协商完，而回声正是从麦克风那一刻起就有了。
 function talking() {
+  if (nativeTalkOn) return true;
+  if (hasNativeTalk()) {
+    try {
+      if (window.X30Native.talkActive()) return true;
+    } catch (e) { /* */ }
+  }
   return !!media.talkStream;
 }
 
 function setTalk(on, showBanner) {
   const talkBtns = document.querySelectorAll('.btn-talk');
   talkBtns.forEach((b) => b.classList.toggle('active', on));
+  if (hasNativeTalk()) {
+    if (on) {
+      try {
+        if (window.X30Native.talkActive()) return;
+      } catch (e) { /* */ }
+      talkStart(showBanner || talkBanner);
+    } else {
+      talkStop();
+    }
+    return;
+  }
   if (on) talkStart(showBanner || talkBanner);
   else talkStop();
 }

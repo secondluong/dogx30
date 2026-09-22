@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <!-- 后续接入视频时云台/相机可能需要，先声明为可选，避免无摄像头设备装不上。 -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />

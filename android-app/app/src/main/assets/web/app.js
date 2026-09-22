@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0921r';
+const WEB_BUILD = '0921aj';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -351,6 +351,11 @@ function handleWsText(raw) {
         app.hasControl = app.holder === app.clientId;
         renderControl();
         ensureManualMode();
+        try {
+          if (window.X30Settings && window.X30Settings.onControl) {
+            window.X30Settings.onControl(app.hasControl);
+          }
+        } catch (e) { /* */ }
         if (isAppShell && app.radioPath === 'radio') finishRadioAcquire();
         if (isAppShell && app.radioPath === 'mesh' &&
             !app.meshAcquirePending && !app.hasControl && !app.holder) {
@@ -975,6 +980,12 @@ function ensureManualMode() {
 }
 
 function requestControl() {
+  try {
+    if (window.X30Settings && window.X30Settings.blockClaim
+        && window.X30Settings.blockClaim()) {
+      return;
+    }
+  } catch (e) { /* */ }
   // 已经有权时通常不必再发。但切回 MESH 时 poseHandoff 还在，必须再发一条带
   // standing 的 claim，否则网关记的还是切走之前的趴着 —— 这正是「旧版」误报的来源。
   if (app.hasControl && app.poseHandoff === null) return;
@@ -1317,6 +1328,8 @@ function renderGas(gas) {
     panel.classList.add('stale');
   }
   const slots = gas.slots || [];
+  let painted = 0;
+  let okCount = 0;
   for (let i = 0; i < slots.length; i++) {
     const sl = slots[i];
     if (!sl || sl.status === 'empty' || sl.key === 'empty' || !sl.key) continue;
@@ -1332,9 +1345,21 @@ function renderGas(gas) {
     if (sl.status === 'offline') {
       val.textContent = '掉线';
       cell.classList.add('offline');
-    } else if (typeof sl.value === 'number') {
-      val.textContent = fmt(sl.value, 1);
+      painted++;
+    } else {
+      const num = Number(sl.value);
+      if (num === num) {
+        val.textContent = fmt(num, 1);
+        painted++;
+        okCount++;
+      }
     }
+  }
+  if (tag && gas.alive) {
+    tag.textContent = okCount ? ('在线 · ' + okCount + '路')
+      : (painted ? '在线' : '在线 · 无读数');
+  } else if (tag && !gas.heard) {
+    tag.textContent = '未接入';
   }
 }
 
@@ -1684,8 +1709,33 @@ function setWorkMode(mode) {
 }
 
 let sprayArmed = '';
+let pipArmed = '';
+
+function applyPipStick(c) {
+  try {
+    if (window.X30Native && 'rcButtonsLive' in window.X30Native
+        && window.X30Native.rcButtonsLive()) {
+      return;
+    }
+  } catch (e) { /* */ }
+  const detent = window.X30Gamepad && window.X30Gamepad.pipDetent
+    ? window.X30Gamepad.pipDetent(c.auxPip || 0)
+    : 'mid';
+  if (!pipArmed) {
+    pipArmed = detent;
+    return;
+  }
+  if (detent === pipArmed) return;
+  if (detent === 'next' || detent === 'prev') {
+    if (window.X30PtzBall && window.X30PtzBall.cyclePip) {
+      window.X30PtzBall.cyclePip(speak, showBanner, detent === 'next' ? 1 : -1);
+    }
+  }
+  pipArmed = detent;
+}
 
 function sendAuxPayload(c, viaGateway) {
+  applyPipStick(c);
   const ax = c.auxX || 0;
   const ay = c.auxY || 0;
   const zoom = c.auxZoom || 0;

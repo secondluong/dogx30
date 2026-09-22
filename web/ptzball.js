@@ -1,5 +1,5 @@
 // 布控球：画中画模式 + 小摇杆云台。球机是 EVERET anv CGI，不是海康 ISAPI。
-// App 走原生 HTTP（2.4G 绑射频，和拉 RTSP 同一张网卡）；网页走网关转发。
+// 球在 10 网。App 走原生 HTTP，钉 WiFi，不绑 2.4G 图传口。网页走网关转发。
 
 'use strict';
 
@@ -21,7 +21,7 @@
   let pipSize = 0;
   let pipPos = 0;
   let lastMoveKey = '';
-  let busy = false;
+  let lastZoomAt = 0;
 
   function host() {
     const u = (window.X30DogCam && window.X30DogCam.ptzUrl)
@@ -31,13 +31,14 @@
     return (m && m[1]) || '192.168.10.168';
   }
 
-  function radioBound() {
-    return document.documentElement.classList.contains('radio-24');
-  }
-
   function native() {
-    const n = window.X30Native;
-    return n && typeof n.cameraGetFire === 'function' ? n : null;
+    try {
+      // 安卓 WebView 里 X30Native 方法的 typeof 常常不是 function。
+      return (window.X30Native && 'cameraGetFire' in window.X30Native)
+        ? window.X30Native : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   function cgiUrl(cgi, qs) {
@@ -47,21 +48,19 @@
   }
 
   function fire(cgi, qs) {
-    // MESH 上平板是 10 网，打不到 1 网的球；云台走网关 CGI。
-    if (!radioBound()) return false;
     const n = native();
     if (n) {
-      n.cameraGetFire(cgiUrl(cgi, qs), true);
+      // 球在 192.168.10.168，绑 ar_net0 永远到不了。MESH/2.4G 都走 WiFi。
+      n.cameraGetFire(cgiUrl(cgi, qs), false);
       return true;
     }
     return false;
   }
 
   function wait(cgi, qs) {
-    if (!radioBound()) return '';
     const n = native();
     if (n && typeof n.cameraGet === 'function') {
-      return String(n.cameraGet(cgiUrl(cgi, qs), true) || '');
+      return String(n.cameraGet(cgiUrl(cgi, qs), false) || '');
     }
     return '';
   }
@@ -132,16 +131,27 @@
     if (!key) {
       if (lastMoveKey) {
         lastMoveKey = '';
+        lastZoomAt = 0;
         fire('ptz_cgi', 'action=Stop&Speed=1');
       }
       return true;
     }
-    if (key === lastMoveKey) return true;
+    const now = Date.now();
+    // 变焦 CGI 有的机型是步进不是持续转。按住时按间隔补发，松手仍走 Stop。
+    const zoomDue = !!z && (now - lastZoomAt > 280);
+    if (key === lastMoveKey && !zoomDue) return true;
+    const dirChanged = key.replace(/[+-]/g, '') !== lastMoveKey.replace(/[+-]/g, '');
+    const zoomDropped = !z && /[+-]/.test(lastMoveKey);
     lastMoveKey = key;
     const speed = speedOf(p, t, z);
     const dir = dirOf(p, t);
-    if (dir) fire('ptz_cgi', 'action=' + dir + '&Speed=' + speed);
-    if (z) fire('ptz_cgi', 'action=' + (z > 0 ? 'ZoomAdd' : 'ZoomSub') + '&Speed=' + speed);
+    if (dir && (dirChanged || zoomDropped)) {
+      fire('ptz_cgi', 'action=' + dir + '&Speed=' + speed);
+    }
+    if (zoomDue) {
+      lastZoomAt = now;
+      fire('ptz_cgi', 'action=' + (z > 0 ? 'ZoomAdd' : 'ZoomSub') + '&Speed=' + speed);
+    }
     return !!native();
   }
 
@@ -175,11 +185,9 @@
     if (send) send({ t: 'ptz_pip' });
   }
 
-  function cyclePip(speak, banner) {
-    if (busy) return;
-    busy = true;
-    setTimeout(() => { busy = false; }, 400);
-    const next = (pipMode + 1) % PIP_MODES.length;
+  function cyclePip(speak, banner, step) {
+    const d = step < 0 ? -1 : 1;
+    const next = (pipMode + d + PIP_MODES.length) % PIP_MODES.length;
     if (!setPip(next)) {
       if (banner) banner('球机未接通，无法切画中画');
       return;
@@ -214,9 +222,15 @@
       });
     }
     refreshPip(send);
+    boostAudio();
+  }
+
+  function boostAudio() {
+    fire('audio_cgi2',
+      'action=set&IODevice=0&InputVolume=100&OutputVolume=100&EnableAudio=1');
   }
 
   window.X30PtzBall = {
-    init, move, setPip, cyclePip, refreshPip, onPipMsg, paintPip,
+    init, move, setPip, cyclePip, refreshPip, onPipMsg, paintPip, host, boostAudio,
   };
 })();

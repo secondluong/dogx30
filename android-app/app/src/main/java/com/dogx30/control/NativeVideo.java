@@ -9,6 +9,7 @@ import android.widget.FrameLayout;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
+import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
@@ -98,6 +99,10 @@ final class NativeVideo {
      * 「先 UDP、收不到再自己退 TCP」，覆盖面更广。用的是哪种会写进报错里。
      */
     private boolean forceTcp = true;
+    private boolean listenAudio;
+    private boolean talking;
+    /** WebRTC 已在放球机声时，RTSP 音轨静音，避免两条叠成回声。 */
+    private boolean admPlaying;
     private float speed = 1.0f;
     private long lastBufferedMs;
 
@@ -176,6 +181,53 @@ final class NativeVideo {
         if (wanted && player == null) open();
     }
 
+    void setTalking(boolean on) {
+        talking = on;
+        if (!on) admPlaying = false;
+        ui.post(() -> applyAudio(player));
+    }
+
+    void setAdmPlaying(boolean on) {
+        admPlaying = on;
+        ui.post(() -> applyAudio(player));
+    }
+
+    private void applyAudio(ExoPlayer p) {
+        if (p == null) return;
+        // 对讲只改音量：HOME 开才放现场声，关掉就静音。中途禁音轨会让画面断一下。
+        // 球机返回声只走这条 RTSP，不把音量交给 WebRTC ADM。
+        p.setVolume(listenAudio && talking ? 1.6f : 0f);
+    }
+
+    private void applyTracks(ExoPlayer p) {
+        p.setTrackSelectionParameters(p.getTrackSelectionParameters()
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !listenAudio)
+                .build());
+    }
+
+    private static boolean isBallUrl(String u) {
+        String s = u == null ? "" : u;
+        return s.contains("10.168") || s.contains(":554/11") || s.contains(":554/12");
+    }
+
+    String ballHost() {
+        return hostOf(url);
+    }
+
+    private static String hostOf(String u) {
+        if (u == null || u.isEmpty()) return "192.168.10.168";
+        int a = u.indexOf("://");
+        String s = a >= 0 ? u.substring(a + 3) : u;
+        int at = s.indexOf('@');
+        if (at >= 0) s = s.substring(at + 1);
+        int cut = s.indexOf('/');
+        if (cut >= 0) s = s.substring(0, cut);
+        int colon = s.indexOf(':');
+        if (colon >= 0) s = s.substring(0, colon);
+        return s.isEmpty() ? "192.168.10.168" : s;
+    }
+
     void release() {
         ui.removeCallbacks(watch);
         lastBufferedMs = 0;
@@ -191,6 +243,10 @@ final class NativeVideo {
         view.setVisibility(View.VISIBLE);
         try {
             ExoPlayer p = new ExoPlayer.Builder(view.getContext())
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(C.USAGE_MEDIA)
+                            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                            .build(), false)
                     .setLoadControl(new DefaultLoadControl.Builder()
                             .setBufferDurationsMs(BUFFER_MIN_MS, BUFFER_MAX_MS,
                                     PLAY_AFTER_MS, PLAY_AFTER_REBUFFER_MS)
@@ -217,14 +273,10 @@ final class NativeVideo {
                     scheduleRetry();
                 }
             });
-            // 关掉音轨。这一路只是拿来看的（网页那侧的 video 一直是 muted，
-            // 2.4G 下也没有对讲，对讲在网关那侧）。留着它有两处坏处：画面要跟
-            // 音频时钟对齐，AudioTrack 自己那点缓冲就成了延迟下限；而且窄链路上
-            // 白占码率。
-            p.setTrackSelectionParameters(p.getTrackSelectionParameters()
-                    .buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
-                    .build());
+            // 布控球音轨先备着，HOME 打开对讲才出声。机身 / 2.4G 仍关掉。
+            listenAudio = isBallUrl(url) || !bindRadio;
+            applyTracks(p);
+            applyAudio(p);
             view.setPlayer(p);
             RtspMediaSource.Factory src = new RtspMediaSource.Factory()
                     .setForceUseRtpTcp(forceTcp)

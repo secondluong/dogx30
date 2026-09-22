@@ -18,7 +18,7 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
 /**
- * 布控球 anv CGI。2.4G 时绑射频网卡，和 NativeVideo 拉 RTSP 同一条路。
+ * 布控球 anv CGI。球在 10 网，socket 钉 WiFi，不走 2.4G 图传口。
  * 球机证书自签，这里只信这一次 HTTP(S) 调用，不改系统信任库。
  */
 final class CameraCgi {
@@ -34,6 +34,32 @@ final class CameraCgi {
         IO.execute(() -> get(url, bindRadio));
     }
 
+    private static final String USER_MD5 = "21232f297a57a5a743894a0e4a801fc3";
+    private static final String PWD_MD5 = "21232f297a57a5a743894a0e4a801fc3";
+
+    static void setPip(String host, int mode) {
+        String h = host == null ? "" : host.trim();
+        if (h.isEmpty()) h = "192.168.10.168";
+        int m = ((mode % 6) + 6) % 6;
+        fire("http://" + h + "/cgi-bin/anv/pip_cgi?user=" + USER_MD5
+                + "&pwd=" + PWD_MD5
+                + "&action=set&mode=" + m
+                + "&SmallPicSize=0&SmallPicPos=0&CustomSmallPicX=0&CustomSmallPicY=0"
+                + "&Cache=" + Math.random(), false);
+    }
+
+    /** 把球机输入/输出音量拉满，听现场才够响，喇叭才接得住对讲。 */
+    static void boostAudio(String host) {
+        String h = host == null ? "" : host.trim();
+        if (h.isEmpty()) h = "192.168.10.168";
+        // 不改 AudioFormat：19=G.711A 是对讲数据通道用的，写进球机全局编码
+        // 会把 RTSP 音轨也切成 PCMA，ExoPlayer 放不出来，现场就没声。
+        fire("http://" + h + "/cgi-bin/anv/audio_cgi2?user=" + USER_MD5
+                + "&pwd=" + PWD_MD5
+                + "&action=set&IODevice=0&InputVolume=100&OutputVolume=100"
+                + "&EnableAudio=1&Cache=" + Math.random(), false);
+    }
+
     static String get(String url, boolean bindRadio) {
         if (url == null || url.isEmpty()) return "";
         try {
@@ -47,7 +73,9 @@ final class CameraCgi {
     private static String fetch(String spec, boolean bindRadio) throws Exception {
         URL url = new URL(spec);
         HttpURLConnection conn;
-        Network net = bindRadio ? RadioLink.get().airNetwork() : null;
+        Network net = bindRadio
+                ? RadioLink.get().airNetwork()
+                : RadioLink.get().meshNetwork();
         if (net != null) {
             conn = (HttpURLConnection) net.openConnection(url);
         } else {
