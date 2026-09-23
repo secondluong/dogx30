@@ -12,7 +12,7 @@
   const MAGIC = 0x43303358; // "X30C" 小端读成 u32
   const HEADER_SIZE = 40;
   const MAX_LIVE_FRAMES = 80;
-  const MAX_PERSIST = 80000;
+  const MAX_PERSIST = 160000;
   const MAX_TRAIL = 2000;
 
   let gl = null;
@@ -651,13 +651,30 @@
     const xyz = decodeFrame(view, origin, scale, count);
     const flags = view.getUint8(5);
     const world = (flags & 1) !== 0;
+    // 配准云已经在下时，间隙里漏出的机体帧必须丢掉。
+    // 以前这里会清掉 persistMap，走过的地方看起来像没留下。
+    if (est.world && !world) return;
     if (world !== est.world) {
-      // 机体云和配准云坐标系不同，混在一张持久图里会对不齐轨迹。
       persistMap.clear();
       frames.length = 0;
       est.lastIngestX = null;
       est.lastIngestY = null;
       est.world = world;
+    }
+    const payloadEnd = HEADER_SIZE + count * 6;
+    if (world && arrayBuffer.byteLength >= payloadEnd + 12) {
+      const rx = view.getFloat32(payloadEnd, true);
+      const ry = view.getFloat32(payloadEnd + 4, true);
+      const ryaw = view.getFloat32(payloadEnd + 8, true);
+      if (Number.isFinite(rx) && Number.isFinite(ry) && Number.isFinite(ryaw)) {
+        pose.x = rx;
+        pose.y = ry;
+        pose.yaw = ryaw;
+        est.x = rx;
+        est.y = ry;
+        est.yaw = ryaw;
+        est.source = 'lio';
+      }
     }
     const stamped = {
       t: Date.now(),
@@ -668,15 +685,9 @@
     };
     frames.push(stamped);
     if (frames.length > MAX_LIVE_FRAMES) frames.splice(0, frames.length - MAX_LIVE_FRAMES);
-    if (opts.persist) {
-      const moved = est.lastIngestX === null ||
-        Math.hypot(stamped.pose.x - est.lastIngestX, stamped.pose.y - est.lastIngestY) > 0.04;
-      if (moved) {
-        ingestPersist(xyz, count, stamped.pose, world);
-        est.lastIngestX = stamped.pose.x;
-        est.lastIngestY = stamped.pose.y;
-      }
-    }
+    // 持久图按体素去重，每帧都叠。不能等「位姿移动 4cm」：
+    // 转身扫到的墙、LIO 位姿偶发不动，都会让走过的地方丢了。
+    if (opts.persist) ingestPersist(xyz, count, stamped.pose, world);
 
     // 帧到了就是订上了。只信本地按钮的话，重连或 2×2 切布局时角标会停在「未订阅」。
     if (!subscribed) {
@@ -743,7 +754,8 @@
       imuYaw = typeof a.imuYaw === 'number' ? a.imuYaw * Math.PI / 180 : null;
       mile = typeof a.mile === 'number' ? a.mile : null;
       if (typeof a.source === 'string' && a.source && a.source !== est.source) {
-        if (est.source) {
+        // 配准云已经锁世界系时，lio/scan 来源闪一下不能清持久图。
+        if (est.source && !est.world) {
           persistMap.clear();
           frames.length = 0;
           est.lastIngestX = null;

@@ -60,8 +60,8 @@ class CloudBridge {
   // 每帧解析后回调（10 Hz 原云，抽帧之前）。只喂机体系，给扫描定位用。
   void SetFrameHandler(std::function<void(const PointCloudFrame&)> handler);
 
-  // LIO 位姿，给世界系点云做距离裁剪（相对狗，而不是世界原点）。
-  void SetWorldPose(float x, float y);
+  // LIO 位姿，给世界系点云做距离裁剪，并随帧带给遥控端叠持久图。
+  void SetWorldPose(float x, float y, float yaw = 0);
 
   // 供遥测里带上，遥控端据此显示"感知主机未连通"之类的提示。
   std::string StatusJson() const;
@@ -92,6 +92,7 @@ class CloudBridge {
   bool last_world_ = false;
   float world_x_ = 0.0f;
   float world_y_ = 0.0f;
+  float world_yaw_ = 0.0f;
   uint64_t last_world_ms_ = 0;
 
   std::atomic<bool> running_{false};

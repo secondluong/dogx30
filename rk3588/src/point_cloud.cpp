@@ -287,6 +287,14 @@ void PointCloudEncoder::Encode(const PointCloudFrame& frame,
     PutU16(out, qz);
   }
 
+  // 狗在世界系的位姿。遥控端叠持久图必须用和点同一套坐标，
+  // 不能再猜腿式里程计。旧客户端按 count 解点，多出来的 12 字节会丢掉。
+  if (frame.world) {
+    PutF32(out, frame.robot_x);
+    PutF32(out, frame.robot_y);
+    PutF32(out, frame.robot_yaw);
+  }
+
   last_count_ = static_cast<uint32_t>(count);
 }
 

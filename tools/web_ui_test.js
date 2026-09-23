@@ -1128,6 +1128,17 @@ check('没画面时占位图说得出原因',
       /拉流失败/.test(dogCamJs) &&
       /RETRY_MS/.test(nativeVideo));
 // 运动走 2.4G 时 MESH 仍连着，热成像不该再被标成「2.4G 不可用」。
+var cloudJs = read('cloud.js');
+check('持久点云每帧都叠，机体帧不清配准图',
+      /if \(opts\.persist\) ingestPersist/.test(cloudJs) &&
+      /if \(est\.world && !world\) return/.test(cloudJs) &&
+      /payloadEnd \+ 12/.test(cloudJs) &&
+      /if \(est\.source && !est\.world\)/.test(cloudJs));
+check('网关配准云带狗位姿，不再夹带机体云',
+      /PutF32\(out, frame\.robot_x\)/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'rk3588', 'src', 'point_cloud.cpp'), 'utf8')) &&
+      /if \(last_world_ms_ != 0\) return/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'rk3588', 'src', 'cloud_bridge.cpp'), 'utf8')));
 check('2.4G 运动档不误杀热成像提示',
       !/2\.4G 下没有这一路：热成像/.test(dogCamJs) &&
       /media-idle-ptz-ir/.test(dogCamJs) &&

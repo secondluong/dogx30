@@ -40,6 +40,7 @@ struct PointCloudFrame {
   bool world = false;      // true：已在 LIO 世界系，不要再按机体系转
   float robot_x = 0.0f;    // 世界系时，距离裁剪相对机器人当前位置
   float robot_y = 0.0f;
+  float robot_yaw = 0.0f;
 };
 
 // 解析 sensor_msgs/PointCloud2 的原始消息体。

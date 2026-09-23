@@ -1268,7 +1268,7 @@ void RobotService::NoteLioSample(float x, float y, float yaw) {
       std::printf("[LIO] 已对准，可以走\n");
     }
   }
-  if (cloud_) cloud_->SetWorldPose(x, y);
+  if (cloud_) cloud_->SetWorldPose(x, y, yaw);
 }
 
 bool RobotService::WalkHold() const {

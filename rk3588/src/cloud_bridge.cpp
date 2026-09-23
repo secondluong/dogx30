@@ -47,10 +47,11 @@ void CloudBridge::SetFrameHandler(
   frame_handler_ = std::move(handler);
 }
 
-void CloudBridge::SetWorldPose(float x, float y) {
+void CloudBridge::SetWorldPose(float x, float y, float yaw) {
   std::lock_guard<std::mutex> lock(mutex_);
   world_x_ = x;
   world_y_ = y;
+  world_yaw_ = yaw;
 }
 
 void CloudBridge::RemoveSubscriber(WsServer::ClientId id) {
@@ -148,8 +149,12 @@ void CloudBridge::OnBodyCloud(const uint8_t* data, size_t len) {
   }
   parse_buffer_.world = false;
   if (frame_handler_) frame_handler_(parse_buffer_);
-  // LIO 配准云在时不要再下机体云：遥控端用机体系硬转世界系会对不齐轨迹。
-  if (WorldFresh(NowMs())) return;
+  // 本会话已经出过配准云就不再下机体云。间隙里漏一帧机体云，
+  // 遥控端会把持久图整张清掉，走过的地方看起来像没留下。
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (last_world_ms_ != 0) return;
+  }
   Emit(&parse_buffer_);
 }
 
@@ -166,6 +171,7 @@ void CloudBridge::OnWorldCloud(const uint8_t* data, size_t len) {
     last_world_ms_ = NowMs();
     parse_buffer_.robot_x = world_x_;
     parse_buffer_.robot_y = world_y_;
+    parse_buffer_.robot_yaw = world_yaw_;
   }
   Emit(&parse_buffer_);
 }
