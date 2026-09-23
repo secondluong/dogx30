@@ -704,7 +704,7 @@ html.shell-app #pane-ptz-vis.is-main .ptz-pip-btn {
   text-align: center;
   user-select: text;
 }
-#cloud-accum.is-dim { opacity: .4; pointer-events: none; }
+#cloud-note { pointer-events: none; }
 #btn-trail.active {
   background: #c62828;
   border-color: #c62828;

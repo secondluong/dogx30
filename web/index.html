@@ -288,21 +288,6 @@
           <button type="button" class="btn sm active" data-cloud-mode="live">实时</button>
           <button type="button" class="btn sm" data-cloud-mode="persist">持久地图</button>
         </div>
-        <!-- 按钮上的字为了省地方缩到了极限（「3s」「5」），念出来听不懂是什么，
-             所以 data-say 里补全。 -->
-        <div class="cloud-seg" id="cloud-accum">
-          <button type="button" class="btn sm active" data-cloud-accum="0">单帧</button>
-          <button type="button" class="btn sm" data-cloud-accum="3" data-say="累积3秒">3s</button>
-          <button type="button" class="btn sm" data-cloud-accum="10" data-say="累积10秒">10s</button>
-          <button type="button" class="btn sm" data-cloud-accum="30" data-say="累积30秒">30s</button>
-        </div>
-        <div class="cloud-seg" id="cloud-voxel">
-          <span class="cloud-lab">体素</span>
-          <button type="button" class="btn sm" data-cloud-voxel="0.05" data-say="体素5厘米">5</button>
-          <button type="button" class="btn sm active" data-cloud-voxel="0.10" data-say="体素10厘米">10</button>
-          <button type="button" class="btn sm" data-cloud-voxel="0.20" data-say="体素20厘米">20</button>
-          <button type="button" class="btn sm" data-cloud-voxel="0.40" data-say="体素40厘米">40</button>
-        </div>
         <button type="button" class="btn sm active" id="btn-cloud-vis" title="隐藏点云，轨迹继续留着">点云显控</button>
         <button type="button" class="btn sm active" id="btn-trail" title="用红色画出狗走过的路">轨迹</button>
         <div class="cloud-slice-row">

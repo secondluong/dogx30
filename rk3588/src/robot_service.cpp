@@ -866,10 +866,8 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
   }
 
   if (t == "ptz") {
-    if (!HoldsControl(id)) {
-      SendError(id, "no_control", "未持有控制权，请先发送 claim");
-      return;
-    }
+    // 云台是载荷：2.4G 运动档已把 claim yield 掉，这里仍要能转球。
+    // App 也会直发 CGI；网关这条作桌面/备份。
     if (ptz_) {
       ptz_->Set(Clamp01(msg.Number("pan")), Clamp01(msg.Number("tilt")),
                 Clamp01(msg.Number("zoom")));
@@ -890,11 +888,8 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
   }
 
   // 水炮云台/喷射还没接到实机协议上。先把消息吃掉，避免 20 Hz 刷「未知消息」。
+  // 与云台一样：不绑运动控制权，2.4G 运动档 yield 后仍可经 MESH 下发。
   if (t == "cannon" || t == "cannon_spray") {
-    if (!HoldsControl(id)) {
-      SendError(id, "no_control", "未持有控制权，请先发送 claim");
-      return;
-    }
     return;
   }
 

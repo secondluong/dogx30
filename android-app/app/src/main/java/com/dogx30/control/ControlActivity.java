@@ -443,8 +443,8 @@ public class ControlActivity extends AppCompatActivity {
         }
 
         /**
-         * bindRadio=true 绑 2.4G 网卡（直拉 1 网球/机身）。
-         * false 走 WiFi（MESH 上直拉同一 1 网的球机 / 机身）。
+         * bindRadio=true 绑 2.4G 网卡（历史路径，网页已不再用）。
+         * false 钉 WiFi/MESH：画面与球机载荷不跟运动档位走射频口。
          */
         @JavascriptInterface
         public void videoStartOn(String url, boolean bindRadio) {

@@ -44,8 +44,8 @@
 
   const opts = {
     persist: false,
-    accumMs: 0,
-    voxel: 0.10,
+    accumMs: 30000,   // 实时：固定累积最近 30 秒（设置里不再提供单帧/3s/10s）
+    voxel: 0.10,      // 固定 10 cm 体素
     trail: true,
     showPoints: true,
     slice: false,
@@ -848,8 +848,14 @@
     // active 是「网上有没有任何人在订」，不是这台平板自己。
     // 角标必须看本地 subscribed，否则 2×2 左上角会一直停在初始的「未订阅」。
     if (!subscribed) {
-      tag.textContent = '未订阅';
-      tag.className = 'tag';
+      if (msg && msg.error) {
+        tag.textContent = '点云未启用';
+        tag.className = 'tag tag-warn';
+        if (note) note.textContent = msg.error;
+      } else {
+        tag.textContent = '未订阅';
+        tag.className = 'tag';
+      }
       const idle = document.getElementById('cloud-idle');
       if (idle) idle.classList.remove('hidden');
       return;
@@ -872,29 +878,8 @@
     const shown = pointCount || (msg && msg.points) || 0;
     tag.textContent = shown > 0 ? `${(shown / 1000).toFixed(1)}k 点` : '已订阅';
     tag.className = 'tag tag-ok';
-    if (note && msg) {
-      const dropped = msg.dropped > 0 ? `，丢帧 ${msg.dropped}` : '';
-      const extra = opts.persist ? '，持久' :
-                    opts.accumMs > 0 ? `，累积 ${opts.accumMs / 1000}s` : '';
-      let trailNote = '';
-      if (opts.trail && trail.length > 1) {
-        let len = 0;
-        for (let i = 1; i < trail.length; i++) {
-          len += Math.hypot(trail[i].x - trail[i - 1].x, trail[i].y - trail[i - 1].y);
-        }
-        trailNote = `，轨迹 ${len.toFixed(1)} m`;
-      }
-      const loc = est.world || (msg && msg.frame === 'world') ? '，配准' :
-                  est.source === 'lio' ? '，LIO' :
-                  est.source === 'scan' ? '，扫描定位' : '';
-      let floorNote = '';
-      if (opts.floorCut && opts.floors.length) {
-        floorNote = opts.floorView < 0
-          ? `，${opts.floors.length}层·全部`
-          : `，${opts.floors.length}层·${opts.floorView + 1}F`;
-      }
-      note.textContent = `下行 ${(msg.voxel * 100).toFixed(0)} cm${extra}${loc}${floorNote}${trailNote}${dropped}`;
-    }
+    // 不写「下行 xx cm」之类诊断串，角标点数已够。
+    if (note) note.textContent = '拖动旋转';
   }
 
   function onCloudStatus(msg) {
@@ -916,10 +901,6 @@
 
   function syncToolbar() {
     setSeg('cloud-mode', 'data-cloud-mode', opts.persist ? 'persist' : 'live');
-    setSeg('cloud-accum', 'data-cloud-accum', String(opts.accumMs / 1000));
-    setSeg('cloud-voxel', 'data-cloud-voxel', opts.voxel.toFixed(2));
-    const accum = document.getElementById('cloud-accum');
-    if (accum) accum.classList.toggle('is-dim', opts.persist);
     const trailBtn = document.getElementById('btn-trail');
     if (trailBtn) trailBtn.classList.toggle('active', opts.trail);
     const visBtn = document.getElementById('btn-cloud-vis');
@@ -1023,29 +1004,10 @@
             ingestPersist(frames[i].xyz, frames[i].count, frames[i].pose,
                           !!frames[i].world);
           }
-        }
-        applyOpts();
-        return;
-      }
-      if (t.dataset.cloudAccum !== undefined) {
-        opts.accumMs = Number(t.dataset.cloudAccum) * 1000;
-        applyOpts();
-        return;
-      }
-      if (t.dataset.cloudVoxel) {
-        const next = Number(t.dataset.cloudVoxel);
-        if (next !== opts.voxel) {
-          opts.voxel = next;
-          if (opts.persist) {
-            const old = [];
-            persistMap.forEach((w) => old.push(w));
-            persistMap.clear();
-            const inv = 1 / Math.max(opts.voxel, 0.05);
-            for (let i = 0; i < old.length && persistMap.size < MAX_PERSIST; i++) {
-              const w = old[i];
-              persistMap.set(voxelKey(w[0], w[1], w[2], inv), w);
-            }
-          }
+        } else {
+          // 切回实时：固定 30 秒窗、10 cm 体素。
+          opts.accumMs = 30000;
+          opts.voxel = 0.10;
         }
         applyOpts();
         return;
@@ -1143,6 +1105,23 @@
     sendFn({ t: 'cloud_sub' });
   }
 
+  /** 网关回 no_cloud：退回未订阅，角标写清原因（设置里开「启用点云回传」）。 */
+  function onDenied(reason) {
+    wanted = false;
+    subscribed = false;
+    lastStatus = { active: false, connected: false, error: reason || '网关未启用点云' };
+    clearCloud();
+    syncSubscribeButton();
+    paintTag(lastStatus);
+    const idle = document.getElementById('cloud-idle');
+    const small = idle ? idle.querySelector('small') : null;
+    if (small) {
+      small.textContent = reason ||
+        '网关未启用点云。设置 → 启用点云回传，并确认感知主机 ROS 可达';
+    }
+    if (idle) idle.classList.remove('hidden');
+  }
+
   function nudgeZoom(steps) {
     if (!steps) return;
     cam.dist *= Math.pow(0.89, steps);
@@ -1152,6 +1131,6 @@
 
   window.X30Cloud = {
     initCloud, onCloudFrame, onCloudStatus, onPose, stop, resize, resubscribe,
-    setWanted, nudgeZoom, setSoldiers,
+    onDenied, setWanted, nudgeZoom, setSoldiers,
   };
 })();

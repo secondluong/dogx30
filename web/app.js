@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0923m';
+const WEB_BUILD = '0923p';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -112,6 +112,7 @@ const app = {
   gwPoseAdopt: false,     // hello.pose_adopt：这份网关认不认 claim.standing
   radioAcquirePending: false, // 等网关确认 yield 后再启动 2.4G 心跳
   meshAcquirePending: false,  // 等 2.4G 心跳停稳后再申请网关控制权
+  pendingCycle: null,         // MESH 下 L1/L2：要到控制权后再执行 'walk'|'pose'
   modePick: null,         // 狗本体：manual | auto。菜单不再露这两档，默认手动。
   workMode: 'inspect',    // 侦检 | 水炮，只管小摇杆用途
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
@@ -369,9 +370,16 @@ function handleWsText(raw) {
           setTimeout(requestControl, 100);
         }
         if (msg.granted === false) {
+          app.pendingCycle = null;
           showBanner(app.holder && app.holder !== app.clientId
             ? '控制权被 #' + app.holder + ' 占用'
             : '申请控制权失败');
+        } else if (app.hasControl && app.pendingCycle) {
+          // L1/L2 在无控制权时先 claim，拿到后再跑与 2.4G 相同的循环。
+          const next = app.pendingCycle;
+          app.pendingCycle = null;
+          if (next === 'walk') cycleWalk();
+          else if (next === 'pose') cyclePose();
         }
         break;
       case 'state':
@@ -398,6 +406,9 @@ function handleWsText(raw) {
         // 配置相关的报错归设置面板显示在表单旁边，横幅四秒就没了，
         // 而人这时正盯着表单等结果。
         if (window.X30Settings && window.X30Settings.onError(msg)) break;
+        if (msg.code === 'no_cloud' && window.X30Cloud && window.X30Cloud.onDenied) {
+          window.X30Cloud.onDenied(msg.msg || '网关未启用点云');
+        }
         showBanner(msg.msg);
         break;
     }
@@ -494,10 +505,11 @@ function radioDirect() {
 
 function send(obj) {
   if (!obj) return;
-  // 只有安装包真能直达时，2.4G 才停掉网关运动。否则切 2.4G 等于把 MESH 也掐死。
+  // 运动链路跟档位互斥：2.4G 时网关不再发 claim/vel/pose/运动 cmd，避免双 0x21。
+  // 云台/水炮/开关/媒体/点云等载荷不挡——能走 MESH 仍走 MESH。
   if (radioDirect() && hasNativeRadio()) {
     const t = obj.t;
-    if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'ptz') return;
+    if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'release') return;
     if (t === 'cmd' && obj.name !== 'estop') return;
   }
   // 走网关发过起立/趴下之后，网关那份记忆就是它自己刚写的，比我们从 2.4G 带过来
@@ -542,7 +554,7 @@ app.radioOnly = radioOnly;
 function radioHint(kind) {
   if (radioDirect()) {
     showBanner(kind === 'g20'
-      ? '当前 2.4G：起立/趴下/行走直达运动主机'
+      ? '当前 2.4G：起立/趴下/行走直达运动主机；画面与云台仍走 MESH'
       : '2.4G 姿态没发出去。请先切回 MESH 看画面，或重装 App');
     speak('2.4G 没发出去');
     return;
@@ -888,7 +900,7 @@ function applyRadioPath(announce) {
         setNativeRadioControl(true);
       }
       if (announce) {
-        showBanner('已切到 2.4G。指令走 G20 数传，不经网关');
+        showBanner('已切到 2.4G：运动走数传；视频/云台/开关仍走 MESH');
         speak('已切 2.4G');
       }
       setTimeout(() => {
@@ -1512,17 +1524,34 @@ function selectView(view) {
 
 // L1 / 屏幕行走键：力控 → 起步 → 停步。三级分开，不能把「未力控」直接当起步。
 // 踏步码是切换指令：本地状态一旦和狗错位，点「起步」就会变成停步。
+// MESH 与 2.4G 同一套循环；MESH 须持有网关控制权（无则自动 claim 后再跑）。
+function meshMotionGate(kind) {
+  if (radioDirect() && hasNativeRadio()) return true;
+  if (!linkOpen()) {
+    radioHint();
+    return false;
+  }
+  if (app.hasControl) return true;
+  if (app.holder && app.holder !== app.clientId) {
+    app.pendingCycle = null;
+    showBanner('控制权被 #' + app.holder + ' 占用，L1/L2 无法下发。请让对方交还或点顶栏「控制权」', 7000);
+    speak('没有控制权');
+    return false;
+  }
+  app.pendingCycle = kind;
+  send(claimMsg());
+  showBanner('正在申请控制权…', 3000);
+  return false;
+}
+
 function cycleWalk() {
+  if (!meshMotionGate('walk')) return;
   const moving = app.motionState === 'walking' || app.motionState === 'starting';
   if (moving) {
     if (radioDirect() && hasNativeRadio()) {
       if (app.nativeRadioCmd) app.nativeRadioCmd('step_off');
-    } else if (app.hasControl) {
-      send({ t: 'cmd', name: 'step', value: 'off' });
     } else {
-      showBanner('请先申请控制权');
-      speak('没有控制权');
-      return;
+      send({ t: 'cmd', name: 'step', value: 'off' });
     }
     speak('停步');
     return;
@@ -1537,12 +1566,8 @@ function cycleWalk() {
     }
     if (radioDirect() && hasNativeRadio()) {
       if (app.nativeRadioCmd) app.nativeRadioCmd('step_on');
-    } else if (app.hasControl) {
-      send({ t: 'cmd', name: 'step', value: 'on' });
     } else {
-      showBanner('请先申请控制权');
-      speak('没有控制权');
-      return;
+      send({ t: 'cmd', name: 'step', value: 'on' });
     }
     speak('起步');
     return;
@@ -1550,18 +1575,15 @@ function cycleWalk() {
   if (radioDirect() && hasNativeRadio()) {
     if (app.nativeRadioCmd) app.nativeRadioCmd('torque');
     if (app.applyRadioPose) app.applyRadioPose('torque');
-  } else if (app.hasControl) {
-    send({ t: 'cmd', name: 'torque' });
   } else {
-    showBanner('请先申请控制权');
-    speak('没有控制权');
-    return;
+    send({ t: 'cmd', name: 'torque' });
   }
   speak('力控');
 }
 
 // L2：急停锁着卸力，站着趴下，趴着起立。
 function cyclePose() {
+  if (!meshMotionGate('pose')) return;
   let cmd = 'stand_up';
   let said = '起立';
   if (app.emergencyLocked) {
@@ -1578,11 +1600,6 @@ function cyclePose() {
       app.notePoseCmd(cmd === 'stand_up');
     }
     speak(said);
-    return;
-  }
-  if (!app.hasControl) {
-    showBanner('请先申请控制权');
-    speak('没有控制权');
     return;
   }
   if (cmd === 'stand_up' || cmd === 'sit_down') {
@@ -1727,7 +1744,7 @@ function paintStickChip() {
 
 // 2.4G 下屏幕上那两个摇杆也要能推。实体摇杆由原生自己读通道，这里只送触摸那份，
 // 免得同一支杆两边各读一遍、死区不一样打起来。
-// 云台在网关那侧，2.4G 够不到，所以摇杆指向云台时什么都不发。
+// 云台走 MESH/CGI，不经 2.4G 数传；摇杆指向云台时这里不发运动轴。
 function sendRadioVel(c) {
   const n = window.X30Native;
   if (!n) return;
@@ -1802,15 +1819,17 @@ function sendAuxPayload(c, viaGateway) {
   const ay = c.auxY || 0;
   const zoom = c.auxZoom || 0;
   const moving = Math.abs(ax) > 0.08 || Math.abs(ay) > 0.08 || Math.abs(zoom) > 0.08;
+  // 2.4G 档已 yield 运动控制权；载荷仍走 MESH，不要求 hasControl。
+  const meshPayload = viaGateway && (app.hasControl || radioDirect());
   if (app.workMode === 'cannon') {
-    if (viaGateway && app.hasControl && moving) {
+    if (meshPayload && moving) {
       send({ t: 'cannon', pan: -ax, tilt: ay });
     }
     const detent = zoom <= -0.45 ? 'jet' : (zoom >= 0.45 ? 'fog' : 'mid');
     if (!sprayArmed) sprayArmed = detent;
     else if (detent !== sprayArmed) {
       if (sprayArmed === 'mid' && (detent === 'fog' || detent === 'jet')) {
-        if (viaGateway && app.hasControl) {
+        if (meshPayload) {
           send({ t: 'cannon_spray', value: detent });
         }
         speak(detent === 'fog' ? '雾状喷射' : '柱状喷射');
@@ -1826,11 +1845,11 @@ function sendAuxPayload(c, viaGateway) {
   }
   const pan = -ax;
   const tilt = ay;
-  // 球机 CGI 由 App 直发：2.4G 不走网关，而且不依赖控制权。
+  // 球机 CGI 钉 WiFi；网关 ptz 作备份，2.4G 档同样可走 MESH。
   if (window.X30PtzBall && window.X30PtzBall.move) {
     window.X30PtzBall.move(pan, tilt, zoom);
   }
-  if (viaGateway && app.hasControl && moving) {
+  if (meshPayload && moving) {
     send({ t: 'ptz', pan: pan, tilt: tilt, zoom: zoom });
   }
 }
@@ -1851,7 +1870,8 @@ setInterval(() => {
     syncRadioPickers(radioSt);
     ensureManualMode();
     sendRadioVel(c);
-    sendAuxPayload(c, false);
+    // 运动已走 2.4G；云台/水炮仍尽量走 MESH。
+    sendAuxPayload(c, true);
     return;
   }
   if (!app.hasControl) {

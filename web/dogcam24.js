@@ -1,5 +1,5 @@
-// App 原生 RTSP：2.4G 绑 ar_net0，MESH 绑 wlan。整机统一 1 网，
-// 双光直拉 192.168.10.168:554/11，机身直拉设置里的地址。
+// App 原生 RTSP：画面一律钉 WiFi/MESH 网卡。运动走 2.4G 时也不把视频绑到
+// ar_net0——球在 10 网、机身在 1 网都能从 MESH/WiFi 到；绑射频口只会把球拉黑。
 
 'use strict';
 
@@ -98,10 +98,11 @@ function playUrl() {
 }
 
 function bindRadio() {
-  return radio24();
+  // 视频/球机属于载荷，不跟运动档位走 2.4G。永远 false → 绑 WiFi/MESH。
+  return false;
 }
 
-// 2.4G / MESH 都直拉 1 网球/机身。只是绑的网卡不同。
+// 2.4G / MESH 都直拉球/机身，socket 始终走 WiFi/MESH。
 function wanted() {
   if (!nativeVideo()) return false;
   if (document.hidden) return false;
@@ -217,16 +218,15 @@ function restoreIdleText() {
   });
 }
 
-// 热成像仍在网关那侧，2.4G 到不了。双光在 192.168.10.168，MESH/LAN 能直拉。
-function paintPtz(on) {
+// 热成像仍由网关 MediaMTX / 桌面 WHEP 编排；App 主画面走原生白光。
+// 2.4G 运动档不切断 MESH，热成像仍可从网关侧拿到。
+function paintPtz(/* on */) {
   const id = 'media-idle-ptz-ir';
   rememberIdle(id);
   const el = document.getElementById(id);
   const small = el ? el.querySelector('small') : null;
-  if (!small) return;
-  const next = on ? '2.4G 下没有这一路：热成像在网关那侧，要看它请切 MESH'
-                  : idleOrig[id];
-  if (next && small.textContent !== next) small.textContent = next;
+  if (!small || !idleOrig[id]) return;
+  if (small.textContent !== idleOrig[id]) small.textContent = idleOrig[id];
 }
 
 function paint() {
@@ -236,7 +236,7 @@ function paint() {
   if (playing) return;
   const small = idleSmall();
   if (!small) return;
-  const prefix = bindRadio() ? '2.4G 直连拉流失败：' : '直连拉流失败：';
+  const prefix = '直连拉流失败：';
   small.textContent = lastErr ? (prefix + lastErr)
                              : ('正在从 ' + playUrl() + ' 拉流…');
 }
@@ -266,7 +266,7 @@ function onStageLayout() {
 }
 
 function onRadioPath() {
-  paintPtz(radio24() && !!nativeVideo());
+  paintPtz();
   sync();
 }
 

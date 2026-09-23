@@ -404,10 +404,10 @@ check('App 顶栏有 2.4G/MESH 切换',
       /function adoptRadioPath/.test(appJs) &&
       /html\.shell-app #btn-radio/.test(styleText) &&
       /html\.shell-app #btn-control/.test(styleText));
-check('切 2.4G 不经网关下发',
+check('切 2.4G 不经网关下发运动',
       /radioPath === 'radio'/.test(appJs) &&
       /t === 'claim' \|\| t === 'vel'/.test(appJs) &&
-      /已切到 2.4G/.test(appJs) &&
+      /已切到 2\.4G：运动走数传/.test(appJs) &&
       /nativeRadioCmd/.test(appJs) &&
       /radioCmdFromEl/.test(appJs) &&
       /applyRadioPose/.test(appJs) &&
@@ -905,6 +905,8 @@ check('L1 与屏幕共用力控/起步/停步循环',
       /pose_cycle: \{ ch: 7 \}/.test(read('gamepad.js')) &&
       /function cycleWalk/.test(appJs) &&
       /function cyclePose/.test(appJs) &&
+      /function meshMotionGate/.test(appJs) &&
+      /pendingCycle/.test(appJs) &&
       /name === 'walk_cycle'/.test(appJs) &&
       /力控 \/ 起步 \/ 停步/.test(html));
 
@@ -1022,6 +1024,21 @@ check('MESH 双光直拉球机，不走 WebView WHEP',
       /videoStartOn/.test(dogCamJs) &&
       /void videoStartOn\(/.test(radioBridge) &&
       /id === 'ptz_vis'/.test(dogCamJs));
+// 运动跟档位；视频/云台/水炮等载荷能走 MESH 就走 MESH，不把 ptz 挡在 send() 外。
+check('2.4G 运动独占，载荷仍走 MESH',
+      /运动链路跟档位互斥/.test(appJs) &&
+      /t === 'claim' \|\| t === 'vel' \|\| t === 'pose' \|\| t === 'release'/.test(appJs) &&
+      !/t === 'ptz'\) return/.test(appJs) &&
+      /sendAuxPayload\(c, true\)/.test(appJs) &&
+      /meshPayload = viaGateway && \(app\.hasControl \|\| radioDirect\(\)\)/.test(appJs) &&
+      /function bindRadio\(\) \{[\s\S]*?return false;/.test(dogCamJs) &&
+      /画面一律钉 WiFi\/MESH/.test(dogCamJs));
+check('网关云台水炮不绑运动控制权',
+      /云台是载荷/.test(serviceCpp) &&
+      /t == "ptz"[\s\S]{0,200}if \(ptz_\)/.test(serviceCpp) &&
+      !/t == "ptz"[\s\S]{0,80}HoldsControl/.test(serviceCpp) &&
+      /t == "cannon"[\s\S]{0,120}return;/.test(serviceCpp) &&
+      !/t == "cannon"[\s\S]{0,80}HoldsControl/.test(serviceCpp));
 check('网关连上不依赖狗，芯片写网关已连',
       /网关已连/.test(appJs) &&
       !/把板子 eth0 网线插回机身口/.test(appJs));
@@ -1110,10 +1127,11 @@ check('没画面时占位图说得出原因',
       /X30DogCam&&X30DogCam\.onState/.test(radioBridge) &&
       /拉流失败/.test(dogCamJs) &&
       /RETRY_MS/.test(nativeVideo));
-// 布控球挂在网关那侧的 192.168.10.0/24，2.4G 到不了。不说清楚就像设备坏了。
-check('2.4G 下热成像如实标不可用',
-      /热成像在网关那侧/.test(dogCamJs) &&
-      /media-idle-ptz-ir/.test(dogCamJs));
+// 运动走 2.4G 时 MESH 仍连着，热成像不该再被标成「2.4G 不可用」。
+check('2.4G 运动档不误杀热成像提示',
+      !/2\.4G 下没有这一路：热成像/.test(dogCamJs) &&
+      /media-idle-ptz-ir/.test(dogCamJs) &&
+      /function paintPtz/.test(dogCamJs));
 // 相机地址不该写死在包里：现场换过相机或改过端口，不能为此重新编包。
 check('机身相机地址能在设置里改',
       !!htmlIds['set-app-dogcam'] &&
