@@ -481,10 +481,12 @@ function initMedia(sendFn, showBanner) {
   });
 
   // 页面切后台时把流停掉，省带宽也省电。回来时网关会重发计划。
+  // App 壳对讲由 Activity.onPause 停。WebView 在开麦、SurfaceView 重绘时
+  // 也会报 hidden，这里再 talkStop 等于 HOME 刚开就被自己掐死。
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       stopAll();
-      talkStop();
+      if (!hasNativeTalk()) talkStop();
     } else if (media.plan) {
       renderMediaPanel(media.plan, showBanner);
     }

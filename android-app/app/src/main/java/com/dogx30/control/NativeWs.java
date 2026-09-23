@@ -3,6 +3,7 @@ package com.dogx30.control;
 import android.net.Network;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 import android.util.Log;
 import android.webkit.WebView;
 
@@ -19,14 +20,19 @@ import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
+import okio.ByteString;
 
 /**
  * App → 网关的 WebSocket。socket 走 WiFi / MESH 电台。
  * 下行不走 evaluateJavascript 拼 JSON：10 Hz 遥测把整段塞进 JS 源会卡住 WebView，
- * 连接看着就像 1–2 秒断一次。消息进队列，由网页 wsPoll 取。
+ * 连接看着就像 1–2 秒断一次。消息进队列，由网页 wsPoll / wsPollBin 取。
+ *
+ * 点云是二进制帧。只接 String 时 App 壳永远看不到点，表现就是「已订阅 / 0 点」。
  */
 final class NativeWs {
     private static final String TAG = "NativeWs";
+    /** 点云只要最新几帧；积压只会把延迟越滚越大。 */
+    private static final int BIN_MAX = 3;
 
     private final WebView web;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -44,6 +50,7 @@ final class NativeWs {
     private int gen;
     private String url = "";
     private final List<String> inbox = new ArrayList<>();
+    private final List<byte[]> binInbox = new ArrayList<>();
 
     NativeWs(WebView web) {
         this.web = web;
@@ -72,6 +79,7 @@ final class NativeWs {
             }
             url = want;
             synchronized (inbox) { inbox.clear(); }
+            synchronized (binInbox) { binInbox.clear(); }
             Log.i(TAG, "open " + want);
             try {
                 OkHttpClient c = client;
@@ -96,6 +104,15 @@ final class NativeWs {
                         synchronized (inbox) {
                             if (inbox.size() > 80) inbox.remove(0);
                             inbox.add(text);
+                        }
+                    }
+
+                    @Override
+                    public void onMessage(WebSocket ws, ByteString bytes) {
+                        if (my != gen || bytes == null || bytes.size() == 0) return;
+                        synchronized (binInbox) {
+                            if (binInbox.size() >= BIN_MAX) binInbox.remove(0);
+                            binInbox.add(bytes.toByteArray());
                         }
                     }
 
@@ -144,6 +161,19 @@ final class NativeWs {
             JSONArray a = new JSONArray();
             for (String s : inbox) a.put(s);
             inbox.clear();
+            return a.toString();
+        }
+    }
+
+    /** 点云二进制帧，Base64 数组。网页还原成 ArrayBuffer 再交给 cloud.js。 */
+    String pollBin() {
+        synchronized (binInbox) {
+            if (binInbox.isEmpty()) return "[]";
+            JSONArray a = new JSONArray();
+            for (byte[] b : binInbox) {
+                a.put(Base64.encodeToString(b, Base64.NO_WRAP));
+            }
+            binInbox.clear();
             return a.toString();
         }
     }

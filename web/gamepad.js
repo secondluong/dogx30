@@ -213,6 +213,17 @@
     return typeof v === 'number' && v === v && Math.abs(v - 1500) >= 350;
   }
 
+  // R1/R2 行程比肩键短。有的键松开就停在 1050，不能再按离 1500 远来判断。
+  function btnDown(v) {
+    return typeof v === 'number' && v === v && Math.abs(v - 1500) >= 180;
+  }
+
+  function btnRestDown(pwm, rest) {
+    if (typeof pwm !== 'number' || pwm !== pwm || pwm < 900 || pwm > 2100) return false;
+    if (typeof rest !== 'number' || rest !== rest) return false;
+    return Math.abs(pwm - rest) >= 160;
+  }
+
   function g20Channels(ch, deadzone, expo) {
     var dz = typeof deadzone === 'number' ? deadzone : DEFAULT_TUNING.deadzone;
     var ex = typeof expo === 'number' ? expo : DEFAULT_TUNING.expo;
@@ -232,11 +243,10 @@
     };
   }
 
-  // L1/L2/HOME。R1/R2 先空着。SW1/SW2 是三档拨动，不走这里。
+  // L1/L2 运动。对讲听球走左右旋钮，不走 R1/HOME。
   var G20_BTN = {
-    walk_cycle: { ch: 6 },   // L1 CH7 力控/起步
+    walk_cycle: { ch: 6 },   // L1 CH7 力控/起步/停步
     pose_cycle: { ch: 7 },   // L2 CH8 起立/趴下/卸力
-    talk: { ch: 9 },         // HOME CH10 点一下开麦+听球，再点全关
   };
 
   // SW1 CH5 上中下：狗身点云 / 狗身视频 / 双光视频。
@@ -351,6 +361,8 @@
     pwmAxis: pwmAxis,
     pwmPressed: pwmPressed,
     pwmDown: pwmDown,
+    btnDown: btnDown,
+    btnRestDown: btnRestDown,
     g20Channels: g20Channels,
     ch5Toggle: ch5Toggle,
     ch6Toggle: ch6Toggle,
@@ -394,6 +406,9 @@
     g20TalkAt: 0,
     g20Wheel: null,
     g20Primed: false,
+    btnRest: {},
+    g20WalkAt: 0,
+    g20PoseAt: 0,
     stickTarget: 'dog',
     // 设置里开着按键探测时闸住派发。急停除外：那颗键任何时候都该能停。
     muted: false,
@@ -687,6 +702,15 @@
       return state.g20Talk;
     }
 
+    function listenIsOn() {
+      try {
+        if (window.X30Native && 'listenActive' in window.X30Native) {
+          return !!window.X30Native.listenActive();
+        }
+      } catch (e) { /* */ }
+      return !!state.g20Listen;
+    }
+
     function setTalk(on) {
       if (!on) {
         var was = talkIsOn() || state.g20Talk;
@@ -717,11 +741,18 @@
           }
         } catch (e) { /* */ }
         window.X30Native.talkToggle(host);
-        state.g20Talk = talkIsOn();
-        say(state.g20Talk ? '对讲开' : '对讲关');
         return;
       }
       setTalk(!talkIsOn());
+    }
+
+    function toggleListen() {
+      var now = Date.now();
+      if (state.g20ListenAt && now - state.g20ListenAt < 400) return;
+      state.g20ListenAt = now;
+      if (window.X30Native && 'listenToggle' in window.X30Native) {
+        window.X30Native.listenToggle();
+      }
     }
 
     function applyG20(ev) {
@@ -735,24 +766,48 @@
       state.engaged = ch.fwd !== 0 || ch.lat !== 0 || ch.turn !== 0;
       var name;
       var primed = state.g20Primed;
+      var nativeOwnsRc = false;
+      try {
+        nativeOwnsRc = !!(window.X30Native && 'pollRc' in window.X30Native);
+      } catch (e) { /* */ }
       for (name in G20_BTN) {
         if (!Object.prototype.hasOwnProperty.call(G20_BTN, name)) continue;
         var spec = G20_BTN[name];
+        var pwm = ev.ch.length > spec.ch ? ev.ch[spec.ch] : 0;
+        var talkish = name === 'talk';
+        var listenish = false;
+        var cycleish = name === 'walk_cycle' || name === 'pose_cycle';
+        // L1/L2 也按松开值判定：有的键松开停在 1050，离 1500 永远算按下，上升沿出不来。
+        if ((talkish || cycleish) && state.btnRest[spec.ch] == null
+            && typeof pwm === 'number' && pwm >= 900 && pwm <= 2100) {
+          state.btnRest[spec.ch] = pwm;
+        }
         var down = ev.ch.length > spec.ch &&
           (spec.press ? pwmPressed(ev.ch[spec.ch], spec.press)
-                      : pwmDown(ev.ch[spec.ch]));
+                      : (talkish || cycleish)
+                        ? btnRestDown(pwm, state.btnRest[spec.ch])
+                        : btnDown(ev.ch[spec.ch]));
         // 首帧只记档：上电时通道常是 0/1050，会把 R1/R2 当成按下，指标和气体就被打开。
         if (primed && !state.muted) {
-          if (name === 'talk') {
-            // 原生正在读遥控就让开。读不到时网页自己切，避免对讲整段没反应。
-            var nativeTalk = false;
-            try {
-              nativeTalk = !!(window.X30Native && 'rcButtonsLive' in window.X30Native
-                && window.X30Native.rcButtonsLive());
-            } catch (e) { /* */ }
-            if (!nativeTalk && down && !state.g20Prev[name]) toggleTalk();
+          if (talkish || listenish) {
+            // 有原生通道轮询就只让 Java 管对讲/听球。网页再 toggle 一次会把刚开的麦立刻关掉。
+            if (!nativeOwnsRc && down && !state.g20Prev[name]) {
+              if (listenish) toggleListen();
+              else toggleTalk();
+            }
+          } else if (cycleish && nativeOwnsRc) {
+            // L1/L2 由 ControlActivity.applyL12 原生派发，这里再 dispatch 会双沿。
           } else if (down && !state.g20Prev[name]) {
-            dispatch(name);
+            var nowCycle = Date.now();
+            var lastAt = name === 'walk_cycle' ? state.g20WalkAt
+              : (name === 'pose_cycle' ? state.g20PoseAt : 0);
+            if (cycleish && lastAt && nowCycle - lastAt < 350) {
+              /* 同键抖沿 */
+            } else {
+              if (name === 'walk_cycle') state.g20WalkAt = nowCycle;
+              if (name === 'pose_cycle') state.g20PoseAt = nowCycle;
+              dispatch(name);
+            }
           }
         }
         state.g20Prev[name] = down;
@@ -815,10 +870,11 @@
           state.connected = false;
           state.g20Primed = false;
           state.g20Prev = {};
+          state.btnRest = {};
           state.g20Wheel = null;
           state.stickTarget = 'dog';
           zero();
-          // 对讲只听 HOME。遥控读数闪一下就 talkStop，球机声会被一起掐掉。
+          // 对讲只听左旋。遥控读数闪一下就 talkStop，球机声会被一起掐掉。
         }
         window.requestAnimationFrame(poll);
         return;
@@ -878,7 +934,7 @@
       if (document.hidden) {
         zero();
         // 对讲由 Activity.onPause 停。这里只清本地标记：点权限框也会 hidden，
-        // 若这里 talkStop，HOME 刚开的对讲会被自己掐掉，再按就被当成又开一次。
+        // 若这里 talkStop，左旋刚开的对讲会被自己掐掉，再按就被当成又开一次。
         state.g20Talk = false;
         if (state.core) state.core.reset();
       }

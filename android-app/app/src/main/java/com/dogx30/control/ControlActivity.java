@@ -8,6 +8,8 @@ import android.graphics.Color;
 import android.net.ConnectivityManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -24,6 +26,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
@@ -48,15 +51,41 @@ public class ControlActivity extends AppCompatActivity {
     private EditText overlayPort;
     private final NativeBridge nativeBridge = new NativeBridge();
     private final G20Rc.Listener rcToJs = this::injectRc;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private Runnable pendingTalkStart;
+    private Runnable pendingTalkGo;
+    private boolean rcListening;
     private boolean micAsked;
     private boolean pausingForMic;
-    private boolean homePrimed;
-    private boolean homeDown;
+    /** CH9 起按键的松开值。有的键松开停在 1050，不能再按离 1500 远来判断。 */
+    private final int[] btnRest = new int[32];
+    private final boolean[] btnDown = new boolean[32];
+    private int btnRestTicks;
+    private final int[] h16Rest = new int[32];
+    private final boolean[] h16Down = new boolean[32];
+    private int h16RestTicks;
+    private long r1At;
     private long homeAt;
+    private long talkKeyAt;
+    private boolean talkKnobLive;
+    private boolean listenKnobLive;
+    private int talkKnobRest;
+    private int listenKnobRest;
+    private boolean talkKnobOn;
+    private boolean listenKnobOn;
+    private long rcArmedAt;
     private String pipArmed = "";
     private long pipAt;
     private int pipMode = 2;
     private volatile long rcTickAt;
+    /** L1=CH7 / L2=CH8：原生边沿派发，不依赖 WebView 轮询 pollRc。 */
+    private int l1Rest;
+    private int l2Rest;
+    private boolean l1Down;
+    private boolean l2Down;
+    private int l12PrimeTicks;
+    private long l1At;
+    private long l2At;
 
     @Override
     @SuppressLint({"SetJavaScriptEnabled", "SetAllowFileAccess", "SetAllowFileAccessFromFileURLs"})
@@ -88,6 +117,7 @@ public class ControlActivity extends AppCompatActivity {
         nativeWs = new NativeWs(web);
         // 引擎初始化要一秒左右，越早开始越好：开机后第一次按键往往就在这一秒里。
         tts = new Tts(this);
+        CameraTalk.get().attachTts(tts);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -113,10 +143,12 @@ public class ControlActivity extends AppCompatActivity {
                 hideOverlay();
                 view.requestFocus();
                 pushRadioPathToWeb();
+                syncPipToWeb();
             }
         });
 
         G20Rc.get().setBackupRadio("radio".equals(GatewayStore.radioPath(this)));
+        ensureRcListener();
         loadLocalConsole();
 
         // 误触返回键会直接退出遥控页，机器狗随即失去控制指令。必须二次确认。
@@ -277,6 +309,12 @@ public class ControlActivity extends AppCompatActivity {
             return nativeWs != null ? nativeWs.poll() : "[]";
         }
 
+        /** 点云二进制帧（Base64 数组）。见 NativeWs.pollBin。 */
+        @JavascriptInterface
+        public String wsPollBin() {
+            return nativeWs != null ? nativeWs.pollBin() : "[]";
+        }
+
         @JavascriptInterface
         public String meshDiag() {
             return RadioLink.get().meshDiag();
@@ -418,7 +456,7 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public void videoStop() {
             runOnUiThread(() -> {
-                CameraTalk.get().release();
+                // 网页 hidden 会误报（开麦、画中画重拉都会）。听球只听右旋 / onPause。
                 if (video != null) video.stop();
             });
         }
@@ -427,6 +465,15 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public void cameraGetFire(String url, boolean bindRadio) {
             CameraCgi.fire(url, bindRadio);
+            if (url != null && url.contains("pip_cgi") && url.contains("action=set")) {
+                refreshBallVideo();
+            }
+        }
+
+        /** 网页按钮切画中画后，把平板这条 RTSP 拆掉重拉。 */
+        @JavascriptInterface
+        public void videoRefresh() {
+            refreshBallVideo();
         }
 
         @JavascriptInterface
@@ -447,12 +494,22 @@ public class ControlActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public void talkToggle(String host) {
-            CameraTalk.get().toggle(ControlActivity.this, host);
+            toggleTalkFromUser(0);
         }
 
         @JavascriptInterface
         public boolean talkActive() {
             return CameraTalk.get().isOn();
+        }
+
+        @JavascriptInterface
+        public void listenToggle() {
+            toggleListenFromUser();
+        }
+
+        @JavascriptInterface
+        public boolean listenActive() {
+            return video != null && video.isListening();
         }
 
         /** 画面画在哪块矩形里，单位是设备像素，由网页按 devicePixelRatio 换算后给。 */
@@ -543,43 +600,260 @@ public class ControlActivity extends AppCompatActivity {
                 null);
     }
 
-    /** HOME 和对讲、右小画中画不经过网页。网页一卡这两项就会整段失灵。 */
+    /** 左旋 CH11 开麦并调音量，右旋 CH12 听球并调音量。R1/HOME 不再开关。 */
     private void applyRcButtons(G20Rc.Snapshot snap) {
-        if (snap == null || !snap.connected || snap.ch == null || snap.ch.length == 0) {
+        if (snap == null || !snap.connected) return;
+        rcTickAt = System.currentTimeMillis();
+        if (rcArmedAt == 0) rcArmedAt = rcTickAt + 800;
+        int[] ch = snap.ch;
+        if (ch != null && ch.length > 0) {
+            scanPwmButtons(ch, btnRest, btnDown, true);
+            applyL12(ch);
+            applyKnobs(ch);
+            applyPipStick(ch);
+        }
+        if (snap.h16 != null && snap.h16.length > 0) {
+            scanPwmButtons(snap.h16, h16Rest, h16Down, false);
+        }
+    }
+
+    /**
+     * L1/L2 必须走原生边沿：网页靠 pollRc 轮询时，安卓桥偶发读不到就整颗键失聪。
+     * 相对松开值判定（有的键松开停在 1050），上升沿调网页 cycleWalk / cyclePose。
+     */
+    private void applyL12(int[] ch) {
+        if (ch.length <= 7) return;
+        if (l12PrimeTicks < 5) {
+            if (ch[6] >= 900 && ch[6] <= 2100) l1Rest = ch[6];
+            if (ch[7] >= 900 && ch[7] <= 2100) l2Rest = ch[7];
+            l12PrimeTicks++;
             return;
         }
-        rcTickAt = System.currentTimeMillis();
-        int[] ch = snap.ch;
+        if (rcTickAt < rcArmedAt) return;
+        if (l1Rest == 0 && ch[6] >= 900 && ch[6] <= 2100) l1Rest = ch[6];
+        if (l2Rest == 0 && ch[7] >= 900 && ch[7] <= 2100) l2Rest = ch[7];
+        boolean d1 = l1Rest != 0 && Math.abs(ch[6] - l1Rest) >= 160;
+        boolean d2 = l2Rest != 0 && Math.abs(ch[7] - l2Rest) >= 160;
+        long now = rcTickAt;
+        if (d1 && !l1Down && now - l1At >= 400) {
+            l1At = now;
+            web.evaluateJavascript(
+                    "try{window.app&&app.cycleWalk&&app.cycleWalk()}catch(e){}",
+                    null);
+        }
+        if (d2 && !l2Down && now - l2At >= 400) {
+            l2At = now;
+            web.evaluateJavascript(
+                    "try{window.app&&app.cyclePose&&app.cyclePose()}catch(e){}",
+                    null);
+        }
+        l1Down = d1;
+        l2Down = d2;
+    }
+
+    private void scanPwmButtons(int[] ch, int[] rest, boolean[] downAt, boolean primeCh) {
+        int last = Math.min(ch.length - 1, rest.length - 1);
+        int ticks = primeCh ? btnRestTicks : h16RestTicks;
+        if (ticks < 5) {
+            for (int i = 8; i <= last; i++) {
+                if (skipPwmBtn(i)) continue;
+                if (ch[i] >= 900 && ch[i] <= 2100) rest[i] = ch[i];
+            }
+            if (primeCh) btnRestTicks++;
+            else h16RestTicks++;
+            return;
+        }
+        if (rcTickAt < rcArmedAt) return;
+        for (int i = 8; i <= last; i++) {
+            if (skipPwmBtn(i)) continue;
+            int pwm = ch[i];
+            if (pwm < 900 || pwm > 2100) continue;
+            if (rest[i] == 0) rest[i] = pwm;
+            int th = i == 8 ? 120 : 80;
+            boolean down = Math.abs(pwm - rest[i]) >= th;
+            downAt[i] = down;
+        }
+    }
+
+    private void applyPipStick(int[] ch) {
+        if (ch.length <= 14) return;
         long now = rcTickAt;
         String host = video != null ? video.ballHost() : "192.168.10.168";
-        if (ch.length > 9) {
-            boolean down = Math.abs(ch[9] - 1500) >= 250;
-            if (!homePrimed) {
-                homePrimed = true;
-                homeDown = down;
-            } else if (down && !homeDown && now - homeAt >= 400) {
-                homeAt = now;
-                boolean wasOn = CameraTalk.get().isOn();
-                CameraTalk.get().toggle(this, host);
-                boolean nowOn = CameraTalk.get().isOn();
-                if (tts != null && nowOn != wasOn) {
-                    tts.speak(nowOn ? "对讲开" : "对讲关");
-                }
+        String detent = pipDetent(ch[14]);
+        if (pipArmed.isEmpty()) {
+            pipArmed = detent;
+        } else if (!detent.equals(pipArmed)) {
+            if (("next".equals(detent) || "prev".equals(detent))
+                    && now - pipAt >= 280) {
+                pipAt = now;
+                cyclePipNative(host, "next".equals(detent) ? 1 : -1);
             }
-            homeDown = down;
+            pipArmed = detent;
         }
-        if (ch.length > 14) {
-            String detent = pipDetent(ch[14]);
-            if (pipArmed.isEmpty()) {
-                pipArmed = detent;
-            } else if (!detent.equals(pipArmed)) {
-                if (("next".equals(detent) || "prev".equals(detent))
-                        && now - pipAt >= 280) {
-                    pipAt = now;
-                    cyclePipNative(host, "next".equals(detent) ? 1 : -1);
-                }
-                pipArmed = detent;
-            }
+    }
+
+    /** CH11/CH12 是左右旋钮，CH13–CH16 是小摇杆，都不当按键。 */
+    private static boolean skipPwmBtn(int index) {
+        return index == 10 || index == 11 || (index >= 12 && index <= 15);
+    }
+
+    private static String chSpeak(int chNum) {
+        switch (chNum) {
+            case 9: return "通道九";
+            case 10: return "通道十";
+            case 11: return "通道十一";
+            case 12: return "通道十二";
+            default: return "通道" + chNum;
+        }
+    }
+
+    private static final int KNOB_MOVE = 70;
+    private static final int KNOB_ON = 1240;
+    private static final int KNOB_OFF = 1140;
+
+    private void applyKnobs(int[] ch) {
+        if (rcTickAt < rcArmedAt) return;
+        if (ch.length > 10) applyTalkKnob(ch[10]);
+        if (ch.length > 11) applyListenKnob(ch[11]);
+    }
+
+    /** 以静止位为中，±350 走满 0..1。短行程旋钮用 1050–1950 会几乎调不动。 */
+    private static float knobVol(int pwm, int rest) {
+        int mid = rest >= 900 && rest <= 2100 ? rest : 1500;
+        float n = (pwm - mid) / 350f + 0.5f;
+        if (n < 0f) n = 0f;
+        if (n > 1f) n = 1f;
+        return n;
+    }
+
+    private void applyTalkKnob(int pwm) {
+        if (pwm < 900 || pwm > 2100) return;
+        if (talkKnobRest == 0) talkKnobRest = pwm;
+        float mix = knobVol(pwm, talkKnobRest);
+        CameraTalk.get().setOutGain(0.06f + mix * 2.8f);
+        if (video != null) video.setTalkMix(mix);
+        if (!talkKnobLive) {
+            if (Math.abs(pwm - talkKnobRest) < KNOB_MOVE) return;
+            talkKnobLive = true;
+        }
+        boolean want = talkKnobOn ? pwm >= KNOB_OFF : pwm >= KNOB_ON;
+        if (want == talkKnobOn) return;
+        talkKnobOn = want;
+        setTalkFromKnob(want);
+    }
+
+    private void applyListenKnob(int pwm) {
+        if (pwm < 900 || pwm > 2100) return;
+        if (listenKnobRest == 0) listenKnobRest = pwm;
+        if (video != null) video.setListenLevel(knobVol(pwm, listenKnobRest));
+        if (!listenKnobLive) {
+            if (Math.abs(pwm - listenKnobRest) < KNOB_MOVE) return;
+            listenKnobLive = true;
+        }
+        boolean want = listenKnobOn ? pwm >= KNOB_OFF : pwm >= KNOB_ON;
+        if (want == listenKnobOn) return;
+        listenKnobOn = want;
+        setListenFromKnob(want);
+    }
+
+    private void setTalkFromKnob(boolean on) {
+        talkKeyAt = System.currentTimeMillis();
+        String host = video != null ? video.ballHost() : "192.168.10.168";
+        if (on) {
+            if (CameraTalk.get().isOn() || pendingTalkStart != null) return;
+            String line = "对讲开";
+            Toast.makeText(this, line, Toast.LENGTH_SHORT).show();
+            pendingTalkStart = () -> CameraTalk.get().startFromUser(this, host);
+            pendingTalkGo = () -> {
+                Runnable r = pendingTalkStart;
+                pendingTalkStart = null;
+                pendingTalkGo = null;
+                if (r != null) r.run();
+            };
+            if (tts != null) tts.speakThen(line, pendingTalkGo);
+            ui.postDelayed(pendingTalkGo, 500);
+            return;
+        }
+        if (pendingTalkGo != null) {
+            ui.removeCallbacks(pendingTalkGo);
+            pendingTalkGo = null;
+        }
+        pendingTalkStart = null;
+        if (CameraTalk.get().isOn()) CameraTalk.get().stopFromUser();
+        announce(0, "对讲关");
+    }
+
+    private void setListenFromKnob(boolean on) {
+        homeAt = System.currentTimeMillis();
+        if (video == null) return;
+        video.setListening(on);
+        ui.post(() -> announce(0, on ? "听球开" : "听球关"));
+    }
+
+    /** 屏幕按钮仍可开关。旋钮走 setTalkFromKnob / setListenFromKnob。 */
+    private void toggleListenFromUser() {
+        long now = System.currentTimeMillis();
+        if (now - homeAt < 350) return;
+        homeAt = now;
+        if (video == null) return;
+        video.toggleListening();
+        boolean on = video.isListening();
+        ui.post(() -> announce(0, on ? "听球开" : "听球关"));
+    }
+
+    /** 屏幕按钮：先念再开麦。麦一抢媒体通道，「对讲开」会被自己掐死。 */
+    private void toggleTalkFromUser(int chNum) {
+        long now = System.currentTimeMillis();
+        if (now - r1At < 350) return;
+        r1At = now;
+        talkKeyAt = now;
+        String host = video != null ? video.ballHost() : "192.168.10.168";
+        if (pendingTalkStart != null) return;
+        if (CameraTalk.get().isOn()) {
+            CameraTalk.get().stopFromUser();
+            announce(0, "对讲关");
+            return;
+        }
+        String line = "对讲开";
+        Toast.makeText(this, line, Toast.LENGTH_SHORT).show();
+        pendingTalkStart = () -> CameraTalk.get().startFromUser(this, host);
+        Runnable go = () -> {
+            Runnable r = pendingTalkStart;
+            pendingTalkStart = null;
+            if (r != null) r.run();
+        };
+        if (tts != null) tts.speakThen(line, go);
+        ui.postDelayed(go, 500);
+    }
+
+    private void announce(int chNum, String act) {
+        String line = chNum > 0 ? chSpeak(chNum) + "，" + act : act;
+        if (tts != null) tts.speak(line);
+        Toast.makeText(this, line, Toast.LENGTH_SHORT).show();
+    }
+
+    private static boolean isListenKey(int kc) {
+        return kc == KeyEvent.KEYCODE_HOME
+                || kc == KeyEvent.KEYCODE_BUTTON_MODE
+                || kc == KeyEvent.KEYCODE_BUTTON_START
+                || kc == KeyEvent.KEYCODE_BUTTON_SELECT
+                || kc == KeyEvent.KEYCODE_ESCAPE
+                || kc == KeyEvent.KEYCODE_MENU;
+    }
+
+    private void handleRcKey(KeyEvent e) {
+        int kc = e.getKeyCode();
+        if (kc == KeyEvent.KEYCODE_BACK || kc == KeyEvent.KEYCODE_VOLUME_UP
+                || kc == KeyEvent.KEYCODE_VOLUME_DOWN || kc == KeyEvent.KEYCODE_VOLUME_MUTE
+                || kc == KeyEvent.KEYCODE_HOME || kc == KeyEvent.KEYCODE_APP_SWITCH
+                || kc == KeyEvent.KEYCODE_POWER || kc == KeyEvent.KEYCODE_ENTER
+                || kc == KeyEvent.KEYCODE_DPAD_CENTER) {
+            return;
+        }
+        if (kc == KeyEvent.KEYCODE_BUTTON_R1 || kc == KeyEvent.KEYCODE_BUTTON_5
+                || kc == KeyEvent.KEYCODE_BUTTON_R2 || kc == KeyEvent.KEYCODE_BUTTON_6
+                || kc == KeyEvent.KEYCODE_BUTTON_7 || kc == KeyEvent.KEYCODE_BUTTON_8) {
+            return;
         }
     }
 
@@ -592,14 +866,55 @@ public class ControlActivity extends AppCompatActivity {
     }
 
     private void cyclePipNative(String host, int step) {
-        pipMode = (pipMode + step + 6) % 6;
-        CameraCgi.setPip(host, pipMode);
-        String[] names = { "默认", "变焦主图", "热像主图", "左右拼接", "仅变焦", "仅热像" };
-        if (tts != null) tts.speak(names[pipMode]);
+        final String dest = host;
+        final int d = step;
+        new Thread(() -> {
+            int cur = CameraCgi.getPipMode(dest);
+            if (cur < 0) cur = pipMode;
+            int next = (cur + d + 6) % 6;
+            CameraCgi.setPipNow(dest, next);
+            int confirmed = CameraCgi.getPipMode(dest);
+            if (confirmed >= 0) next = confirmed;
+            pipMode = next;
+            final int shown = next;
+            ui.post(() -> {
+                refreshBallVideo();
+                String[] names = { "默认", "变焦主图", "热像主图", "左右拼接", "仅变焦", "仅热像" };
+                if (tts != null) tts.speak(names[shown]);
+                paintPipWeb(shown);
+            });
+        }, "ptz-pip").start();
+    }
+
+    private void refreshBallVideo() {
+        if (video != null) video.refreshAfterPip();
+    }
+
+    private void syncPipToWeb() {
+        final String dest = video != null ? video.ballHost() : "192.168.10.168";
+        new Thread(() -> {
+            int cur = CameraCgi.getPipMode(dest);
+            if (cur < 0) return;
+            pipMode = cur;
+            ui.post(() -> paintPipWeb(cur));
+        }, "ptz-pip-sync").start();
+    }
+
+    private void paintPipWeb(int mode) {
+        if (web == null) return;
+        web.evaluateJavascript(
+                "(function(){var n=0;function go(){"
+                        + "if(window.X30PtzBall&&X30PtzBall.applyMode){"
+                        + "X30PtzBall.applyMode(" + mode + ");return;}"
+                        + "if(++n<25)setTimeout(go,80);}go();})()",
+                null);
     }
 
     private void injectKey(KeyEvent event) {
         nativeBridge.rememberKey(event);
+        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            handleRcKey(event);
+        }
         if (web == null) return;
         String name = KeyEvent.keyCodeToString(event.getKeyCode());
         if (name == null) name = "UNKNOWN";
@@ -632,6 +947,10 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (isListenKey(event.getKeyCode())) {
+            // HOME 等系统键吞掉，避免退出；听球改由右旋 CH12。
+            return true;
+        }
         injectKey(event);
         return super.dispatchKeyEvent(event);
     }
@@ -652,19 +971,24 @@ public class ControlActivity extends AppCompatActivity {
         if (hasFocus) goImmersive();
     }
 
+    private void ensureRcListener() {
+        if (rcListening) return;
+        G20Rc.get().addListener(rcToJs);
+        rcListening = true;
+    }
+
     @Override
     protected void onPause() {
-        G20Rc.get().removeListener(rcToJs);
         super.onPause();
-        // 切后台时页面里的 visibilitychange 会发 release 停车，
-        // 这里再显式停一次 JS 定时器，避免系统节流下指令断续送达。
+        // 开麦、播报、麦标都会走 onPause。这里停对讲或停 TTS，就是现场
+        // 「对讲开只有字、麦标闪一下」。真切后台留给 onStop。
+        if (pausingForMic || CameraTalk.get().isOn() || pendingTalkStart != null
+                || System.currentTimeMillis() - talkKeyAt < 4000
+                || System.currentTimeMillis() - homeAt < 4000) {
+            return;
+        }
         web.onPause();
-        if (pausingForMic) return;
-        // 解码器和 2.4G 带宽都不该在后台白占。
         if (video != null) video.pauseForBackground();
-        CameraTalk.get().stop();
-        // 切后台了还在念上一句按键，念的又是已经不在操作的那台机器，只会吓人一跳。
-        if (tts != null) tts.stop();
     }
 
     @Override
@@ -678,6 +1002,11 @@ public class ControlActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         pausingForMic = false;
+        ensureRcListener();
+        web.onResume();
+        if (CameraTalk.get().isOn() || pendingTalkStart != null) {
+            return;
+        }
         // 上一包对讲可能把进程钉在 MESH 上，画中画 CGI 会全部打不出去。
         if (Build.VERSION.SDK_INT >= 23) {
             try {
@@ -685,13 +1014,19 @@ public class ControlActivity extends AppCompatActivity {
                 if (cm != null) cm.bindProcessToNetwork(null);
             } catch (Exception ignored) {}
         }
-        G20Rc.get().addListener(rcToJs);
-        web.onResume();
         if (video != null) video.resumeIfWanted();
         askMicOnce();
     }
 
-    /** 进页就要麦权，HOME 开对讲才不会再弹麦克风框。 */
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (pausingForMic || CameraTalk.get().isOn() || pendingTalkStart != null
+                || System.currentTimeMillis() - homeAt < 4000) return;
+        if (video != null) video.pauseForBackground();
+    }
+
+    /** 进页就要麦权，左旋开麦才不会再弹麦克风框。 */
     private void askMicOnce() {
         if (micAsked) return;
         micAsked = true;
@@ -706,6 +1041,15 @@ public class ControlActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (pendingTalkGo != null) {
+            ui.removeCallbacks(pendingTalkGo);
+            pendingTalkGo = null;
+        }
+        pendingTalkStart = null;
+        if (rcListening) {
+            G20Rc.get().removeListener(rcToJs);
+            rcListening = false;
+        }
         if (nativeWs != null) nativeWs.close();
         if (video != null) video.stop();
         CameraTalk.get().release();

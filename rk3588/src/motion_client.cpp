@@ -394,7 +394,9 @@ void MotionClient::ReconcileReportedMotionLocked(int motion_state) {
   }
   // 状态 3 只说明本体处于力控站立，无法区分“主动点力控”还是“行走后停步”。
   // 保留当前 kTorque 意图；只有从行走/停步路径回来时才显示 kStopped。
+  // 已在行走时不要清：Type=1002 踏步中常仍报 3，一清就发不出速度轴。
   if (motion_phase_ == MotionPhase::kStarting) return;
+  if (motion_phase_ == MotionPhase::kWalking) return;
   const bool keep_torque = motion_phase_ == MotionPhase::kTorque;
   torqued_ = true;
   stepping_ = false;
@@ -964,10 +966,11 @@ MotionView MotionClient::View() const {
   out.state_valid = udp || ros || official;
   const int body = state_.body_motion_state;
   const int ros_basic = state_.ros_basic_state;
+  // body == 6 || body == 7：7 摔倒不再单独锁。坐下应给出起立，卸力留给真急停。
   const bool locked =
       (udp && JointsLocked(state_.basic_state, state_.emergency_source)) ||
       (ros && ros_basic == 6) ||
-      (official && (body == 6 || body == 7));
+      (official && body == 6);
   // 官方 ROS 话题能修正现场已确认的“UDP 仍报趴下”问题。除此之外 UDP 优先。
   const bool use_ros_motion =
       ros && (!udp || (state_.basic_state == BasicState::kSitting &&

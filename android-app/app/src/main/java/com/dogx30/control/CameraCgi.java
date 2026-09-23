@@ -37,27 +37,79 @@ final class CameraCgi {
     private static final String USER_MD5 = "21232f297a57a5a743894a0e4a801fc3";
     private static final String PWD_MD5 = "21232f297a57a5a743894a0e4a801fc3";
 
+    static int getPipMode(String host) {
+        String h = host == null ? "" : host.trim();
+        if (h.isEmpty()) h = "192.168.10.168";
+        String body = get("http://" + h + "/cgi-bin/anv/pip_cgi?user=" + USER_MD5
+                + "&pwd=" + PWD_MD5 + "&action=get&Cache=" + Math.random(), false);
+        if (body == null) return -1;
+        for (String line : body.split("\\r?\\n")) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            if (!"mode".equalsIgnoreCase(line.substring(0, eq).trim())) continue;
+            try {
+                int m = Integer.parseInt(line.substring(eq + 1).trim());
+                if (m >= 0 && m <= 5) return m;
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
     static void setPip(String host, int mode) {
+        fire(pipSetUrl(host, mode), false);
+    }
+
+    static void setPipNow(String host, int mode) {
+        get(pipSetUrl(host, mode), false);
+    }
+
+    private static String pipSetUrl(String host, int mode) {
         String h = host == null ? "" : host.trim();
         if (h.isEmpty()) h = "192.168.10.168";
         int m = ((mode % 6) + 6) % 6;
-        fire("http://" + h + "/cgi-bin/anv/pip_cgi?user=" + USER_MD5
+        return "http://" + h + "/cgi-bin/anv/pip_cgi?user=" + USER_MD5
                 + "&pwd=" + PWD_MD5
                 + "&action=set&mode=" + m
                 + "&SmallPicSize=0&SmallPicPos=0&CustomSmallPicX=0&CustomSmallPicY=0"
-                + "&Cache=" + Math.random(), false);
+                + "&Cache=" + Math.random();
     }
 
-    /** 把球机输入/输出音量拉满，听现场才够响，喇叭才接得住对讲。 */
+    /** 只拉音量。编码必须带着写：球机网页保存也总带 AudioFormat，
+     * 漏写会被固件存成 0，喇叭和对讲一起停。 */
     static void boostAudio(String host) {
         String h = host == null ? "" : host.trim();
         if (h.isEmpty()) h = "192.168.10.168";
-        // 不改 AudioFormat：19=G.711A 是对讲数据通道用的，写进球机全局编码
-        // 会把 RTSP 音轨也切成 PCMA，ExoPlayer 放不出来，现场就没声。
-        fire("http://" + h + "/cgi-bin/anv/audio_cgi2?user=" + USER_MD5
-                + "&pwd=" + PWD_MD5
-                + "&action=set&IODevice=0&InputVolume=100&OutputVolume=100"
-                + "&EnableAudio=1&Cache=" + Math.random(), false);
+        final String dest = h;
+        IO.execute(() -> {
+            String cur = get("http://" + dest + "/cgi-bin/anv/audio_cgi2?user=" + USER_MD5
+                    + "&pwd=" + PWD_MD5 + "&action=get&Cache=" + Math.random(), false);
+            int fmt = parseAudioFormat(cur);
+            // 0 不是合法编码。网页只认 19=G.711A、37=AAC。
+            // 19 会把 RTSP 也切成 PCMA，ExoPlayer 放不出来，恢复用 AAC。
+            if (fmt != 19 && fmt != 37) fmt = 37;
+            get("http://" + dest + "/cgi-bin/anv/audio_cgi2?user=" + USER_MD5
+                    + "&pwd=" + PWD_MD5
+                    + "&action=set&IODevice=0&InputVolume=100&OutputVolume=100"
+                    + "&EnableAudio=1&AudioFormat=" + fmt
+                    + "&Cache=" + Math.random(), false);
+        });
+    }
+
+    private static int parseAudioFormat(String body) {
+        if (body == null) return 0;
+        for (String line : body.split("\\r?\\n")) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            if (!"AudioFormat".equalsIgnoreCase(line.substring(0, eq).trim())) continue;
+            try {
+                return Integer.parseInt(line.substring(eq + 1).trim());
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     static String get(String url, boolean bindRadio) {

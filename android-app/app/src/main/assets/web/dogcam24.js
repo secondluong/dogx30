@@ -18,7 +18,12 @@ const idleOrig = {};
 
 function nativeVideo() {
   const n = window.X30Native;
-  return n && typeof n.videoStart === 'function' ? n : null;
+  // WebView 里桥方法的 typeof 常常不是 function。
+  try {
+    return (n && 'videoStart' in n) ? n : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 function stored(key, fallback) {
@@ -162,7 +167,7 @@ function handOver() {
 function startNative() {
   const n = nativeVideo();
   const u = playUrl();
-  if (typeof n.videoStartOn === 'function') n.videoStartOn(u, bindRadio());
+  if ('videoStartOn' in n) n.videoStartOn(u, bindRadio());
   else n.videoStart(u);
 }
 

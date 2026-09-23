@@ -59,7 +59,8 @@
 
   function wait(cgi, qs) {
     const n = native();
-    if (n && typeof n.cameraGet === 'function') {
+    // WebView 里桥方法的 typeof 常常不是 function，只能用 in。
+    if (n && 'cameraGet' in n) {
       return String(n.cameraGet(cgiUrl(cgi, qs), false) || '');
     }
     return '';
@@ -101,6 +102,11 @@
     if (st.pos != null) pipPos = st.pos;
     rememberMode(pipMode);
     paintPip();
+  }
+
+  function applyMode(mode) {
+    const n = ((Number(mode) % 6) + 6) % 6;
+    applyPip({ mode: n, size: pipSize, pos: pipPos });
   }
 
   function speedOf(pan, tilt, zoom) {
@@ -165,6 +171,12 @@
       fire('pip_cgi', qs);
       rememberMode(next);
       paintPip();
+      // 平板 RTSP 长连接跟不上球机重编，原生会拆掉重拉。
+      try {
+        if (window.X30Native && 'videoRefresh' in window.X30Native) {
+          window.X30Native.videoRefresh();
+        }
+      } catch (e) { /* */ }
       return true;
     }
     if (window.X30PtzBallSend) {
@@ -187,6 +199,10 @@
 
   function cyclePip(speak, banner, step) {
     const d = step < 0 ? -1 : 1;
+    if (native()) {
+      const st = parsePip(wait('pip_cgi', 'action=get'));
+      if (st && st.mode >= 0 && st.mode <= 5) pipMode = st.mode;
+    }
     const next = (pipMode + d + PIP_MODES.length) % PIP_MODES.length;
     if (!setPip(next)) {
       if (banner) banner('球机未接通，无法切画中画');
@@ -226,11 +242,19 @@
   }
 
   function boostAudio() {
+    // 球机网页保存总带 AudioFormat。漏写会被固件存成 0，喇叭和对讲一起停。
+    const cur = wait('audio_cgi2', 'action=get');
+    let fmt = 37;
+    const m = /(?:^|\n)AudioFormat=(\d+)/.exec(cur || '');
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n === 19 || n === 37) fmt = n;
+    }
     fire('audio_cgi2',
-      'action=set&IODevice=0&InputVolume=100&OutputVolume=100&EnableAudio=1');
+      'action=set&IODevice=0&InputVolume=100&OutputVolume=100&EnableAudio=1&AudioFormat=' + fmt);
   }
 
   window.X30PtzBall = {
-    init, move, setPip, cyclePip, refreshPip, onPipMsg, paintPip, host, boostAudio,
+    init, move, setPip, cyclePip, refreshPip, onPipMsg, paintPip, applyMode, host, boostAudio,
   };
 })();

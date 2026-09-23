@@ -1,6 +1,9 @@
 package com.dogx30.control;
 
+import android.content.Context;
+import android.media.AudioManager;
 import android.net.Network;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -15,13 +18,20 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.common.audio.AudioProcessor;
 import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.audio.AudioSink;
+import androidx.media3.exoplayer.audio.DefaultAudioSink;
+import androidx.media3.exoplayer.audio.TeeAudioProcessor;
 import androidx.media3.exoplayer.rtsp.RtspMediaSource;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -100,9 +110,27 @@ final class NativeVideo {
      */
     private boolean forceTcp = true;
     private boolean listenAudio;
-    private boolean talking;
+    private volatile boolean talking;
+    /** 听球机返回声。右旋 CH12 开关，和左旋开麦分开。 */
+    private boolean listening;
+    /** 听球音量 0..1，由右旋中间行程给出。 */
+    private float listenLevel = 1f;
+    /** 左旋 0..1。对讲开着时麦大声则听球变小，麦小则听球变大。 */
+    private volatile float talkMix;
+    /** 播放和录音共用，硬件 AEC 才对得上参考音。 */
+    private int playSessionId;
     /** WebRTC 已在放球机声时，RTSP 音轨静音，避免两条叠成回声。 */
     private boolean admPlaying;
+    /** 听音放大。对讲开着时左旋过半听球关掉，打断球机闭环啸叫。 */
+    private static final float LISTEN_GAIN = 3.6f;
+    /** 左旋高于此值听球静音；低于此值不发麦。 */
+    private static final float TALK_MUTE_LISTEN = 0.42f;
+    /** 保留符号给测试；听音不再跟 VAD 走。 */
+    private static final float LISTEN_DUCK = 1f;
+    private boolean speakDuck;
+    private volatile float playGain;
+    private final SoftwareAec aec = new SoftwareAec();
+    private final FarTap farTap = new FarTap();
     private float speed = 1.0f;
     private long lastBufferedMs;
 
@@ -131,6 +159,27 @@ final class NativeVideo {
         view.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
     }
 
+    /**
+     * 球机切画中画会重开编码（分辨率、SPS 都可能变）。ExoPlayer 这条
+     * RTSP 长连接经常继续解旧 GOP，画面就停在切之前；PC 走网关 WebRTC
+     * 能跟上。对讲把音轨打开之后更容易卡死解码器。这里拆掉重拉。
+     * 对讲刚开时也走这里：从音量 0 拉起来有的机型音轨不醒。
+     */
+    void refreshAfterPip() {
+        refreshStream();
+    }
+
+    void refreshStream() {
+        ui.removeCallbacks(refreshTask);
+        ui.postDelayed(refreshTask, 600);
+    }
+
+    private final Runnable refreshTask = () -> {
+        if (!wanted || !isBallUrl(url)) return;
+        Log.i(TAG, "refresh stream " + url + " talk=" + talking);
+        open();
+    };
+
     /** 反复调用同一个地址是空操作，页面切布局时会调很多次。 */
     void start(String rtspUrl) {
         start(rtspUrl, true);
@@ -152,6 +201,7 @@ final class NativeVideo {
     void stop() {
         wanted = false;
         ui.removeCallbacks(retry);
+        ui.removeCallbacks(refreshTask);
         release();
         view.setVisibility(View.GONE);
         report(false, "");
@@ -173,6 +223,7 @@ final class NativeVideo {
      */
     void pauseForBackground() {
         ui.removeCallbacks(retry);
+        ui.removeCallbacks(refreshTask);
         release();
         view.setVisibility(View.GONE);
     }
@@ -183,7 +234,67 @@ final class NativeVideo {
 
     void setTalking(boolean on) {
         talking = on;
-        if (!on) admPlaying = false;
+        if (!on) {
+            admPlaying = false;
+            speakDuck = false;
+        }
+        // 关麦不再重拉：音轨一直在解，只改音量。重拉会黑一下，后半句也听丢。
+        ui.post(() -> applyAudio(player));
+    }
+
+    /** 旧接口还在。听音改跟左旋交叉，不再认人声压听。 */
+    void setSpeakDuck(boolean duck) {
+        speakDuck = duck;
+    }
+
+    void setTalkMix(float n) {
+        float v = Math.max(0f, Math.min(1f, n));
+        if (Math.abs(v - talkMix) < 0.01f) return;
+        talkMix = v;
+        ui.post(() -> applyAudio(player));
+    }
+
+    float talkMix() {
+        return talkMix;
+    }
+
+    boolean isTalking() {
+        return talking;
+    }
+
+    void echoCancel(short[] pcm) {
+        aec.process(pcm);
+    }
+
+    int playSessionId() {
+        if (playSessionId == 0) {
+            AudioManager am = (AudioManager) view.getContext()
+                    .getSystemService(Context.AUDIO_SERVICE);
+            if (am != null && Build.VERSION.SDK_INT >= 21) {
+                playSessionId = am.generateAudioSessionId();
+            }
+        }
+        return playSessionId;
+    }
+
+    void setListening(boolean on) {
+        listening = on;
+        // 只改音量。开关音轨或改 AudioAttributes 会让 ExoPlayer 拆 RTSP 重拉。
+        ui.post(() -> applyAudio(player));
+    }
+
+    boolean isListening() {
+        return listening;
+    }
+
+    void toggleListening() {
+        setListening(!listening);
+    }
+
+    void setListenLevel(float n) {
+        float v = Math.max(0f, Math.min(1f, n));
+        if (Math.abs(v - listenLevel) < 0.01f) return;
+        listenLevel = v;
         ui.post(() -> applyAudio(player));
     }
 
@@ -194,9 +305,41 @@ final class NativeVideo {
 
     private void applyAudio(ExoPlayer p) {
         if (p == null) return;
-        // 对讲只改音量：HOME 开才放现场声，关掉就静音。中途禁音轨会让画面断一下。
-        // 球机返回声只走这条 RTSP，不把音量交给 WebRTC ADM。
-        p.setVolume(listenAudio && talking ? 1.6f : 0f);
+        // 听音走媒体通路+喇叭。通话通路在平板上常进听筒，听球开却没声。
+        boolean hear = listenAudio && listening;
+        float gain = listenLevel * LISTEN_GAIN;
+        if (talking) {
+            // 左旋过半听球关掉。0.88 交叉仍留 12%×3.6，球机闭环照样啸。
+            float t = talkMix;
+            gain = t >= TALK_MUTE_LISTEN ? 0f
+                    : gain * (1f - t / TALK_MUTE_LISTEN);
+        }
+        playGain = hear ? gain : 0f;
+        p.setVolume(playGain);
+        routeSpeaker(hear);
+    }
+
+    private void routeSpeaker(boolean hear) {
+        AudioManager am = (AudioManager) view.getContext()
+                .getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        if (hear) {
+            if (!talking) am.setMode(AudioManager.MODE_NORMAL);
+            am.setSpeakerphoneOn(true);
+        }
+    }
+
+    private void routeComm(boolean comm) {
+        AudioManager am = (AudioManager) view.getContext()
+                .getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return;
+        if (comm) {
+            am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            am.setSpeakerphoneOn(true);
+        } else {
+            am.setSpeakerphoneOn(false);
+            am.setMode(AudioManager.MODE_NORMAL);
+        }
     }
 
     private void applyTracks(ExoPlayer p) {
@@ -231,6 +374,8 @@ final class NativeVideo {
     void release() {
         ui.removeCallbacks(watch);
         lastBufferedMs = 0;
+        aec.reset();
+        routeComm(false);
         if (player != null) {
             player.release();
             player = null;
@@ -242,11 +387,27 @@ final class NativeVideo {
         release();
         view.setVisibility(View.VISIBLE);
         try {
-            ExoPlayer p = new ExoPlayer.Builder(view.getContext())
+            DefaultRenderersFactory rf = new DefaultRenderersFactory(view.getContext()) {
+                @Override
+                protected AudioSink buildAudioSink(Context context, boolean enableFloatOutput,
+                                                   boolean enableAudioTrackPlaybackParams) {
+                    return new DefaultAudioSink.Builder(context)
+                            .setEnableFloatOutput(enableFloatOutput)
+                            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                            .setAudioProcessors(new AudioProcessor[] {
+                                    new TeeAudioProcessor(farTap)
+                            })
+                            .build();
+                }
+            };
+            ExoPlayer.Builder eb = new ExoPlayer.Builder(view.getContext())
+                    .setRenderersFactory(rf)
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(C.USAGE_MEDIA)
                             .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
-                            .build(), false)
+                            .build(), false);
+            int sid = playSessionId();
+            ExoPlayer p = eb
                     .setLoadControl(new DefaultLoadControl.Builder()
                             .setBufferDurationsMs(BUFFER_MIN_MS, BUFFER_MAX_MS,
                                     PLAY_AFTER_MS, PLAY_AFTER_REBUFFER_MS)
@@ -255,6 +416,7 @@ final class NativeVideo {
                             .setPrioritizeTimeOverSizeThresholds(true)
                             .build())
                     .build();
+            if (sid > 0) p.setAudioSessionId(sid);
             p.addListener(new Player.Listener() {
                 @Override
                 public void onRenderedFirstFrame() {
@@ -273,7 +435,7 @@ final class NativeVideo {
                     scheduleRetry();
                 }
             });
-            // 布控球音轨先备着，HOME 打开对讲才出声。机身 / 2.4G 仍关掉。
+            // 布控球音轨可听，HOME 开着才出声。机身 / 2.4G 仍关掉。
             listenAudio = isBallUrl(url) || !bindRadio;
             applyTracks(p);
             applyAudio(p);
@@ -351,6 +513,65 @@ final class NativeVideo {
         if ((m == null || m.isEmpty()) && cause != null) m = cause.getMessage();
         if (m == null || m.isEmpty()) return e.getClass().getSimpleName();
         return m;
+    }
+
+    private final class FarTap implements TeeAudioProcessor.AudioBufferSink {
+        private int hz = 48000;
+        private int ch = 1;
+        private int enc = C.ENCODING_PCM_16BIT;
+        private int acc;
+        private int accN;
+        private final short[] chunk = new short[160];
+        private int chunkN;
+
+        @Override
+        public void flush(int sampleRateHz, int channelCount, int encoding) {
+            hz = sampleRateHz > 0 ? sampleRateHz : 48000;
+            ch = channelCount > 0 ? channelCount : 1;
+            enc = encoding;
+            acc = 0;
+            accN = 0;
+            chunkN = 0;
+        }
+
+        @Override
+        public void handleBuffer(ByteBuffer buffer) {
+            ByteBuffer b = buffer.order(ByteOrder.LITTLE_ENDIAN);
+            int step = Math.max(1, hz / SoftwareAec.HZ);
+            float g = playGain / LISTEN_GAIN;
+            while (b.remaining() >= bytesPerSample()) {
+                int s = readSample(b);
+                acc += s;
+                accN++;
+                if (accN < step) continue;
+                int v = acc / accN;
+                acc = 0;
+                accN = 0;
+                if (v > 32767) v = 32767;
+                if (v < -32768) v = -32768;
+                chunk[chunkN++] = (short) v;
+                if (chunkN == chunk.length) {
+                    aec.pushFar(chunk, chunkN, g);
+                    chunkN = 0;
+                }
+            }
+        }
+
+        private int bytesPerSample() {
+            int w = enc == C.ENCODING_PCM_FLOAT ? 4 : 2;
+            return w * ch;
+        }
+
+        private int readSample(ByteBuffer b) {
+            if (enc == C.ENCODING_PCM_FLOAT) {
+                float s = 0f;
+                for (int i = 0; i < ch; i++) s += b.getFloat();
+                return Math.round((s / ch) * 32767f);
+            }
+            int s = 0;
+            for (int i = 0; i < ch; i++) s += b.getShort();
+            return s / ch;
+        }
     }
 
     /**

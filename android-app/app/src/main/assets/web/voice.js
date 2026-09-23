@@ -121,7 +121,10 @@
     state.timer = null;
     var text = state.pending;
     state.pending = '';
-    if (!text || !state.on || talking()) return;
+    // 对讲开/关必须能念出来。talking() 在开关刚翻时已经是 true，「对讲开」会被自己吞掉。
+    if (!text || !state.on) return;
+    if (talking() && text.indexOf('对讲开') < 0 && text.indexOf('对讲关') < 0
+        && text.indexOf('听球开') < 0 && text.indexOf('听球关') < 0) return;
     if (nativeSpeak(text)) return;
     webSpeak(text);
   }

@@ -285,10 +285,18 @@ final class RadioLink {
         return bodyAt != 0 && System.currentTimeMillis() - bodyAt < BODY_FRESH_MS;
     }
 
+    /** 坐下且来源不是急停：左下角给出起立，摔倒(7)也不要锁成卸力。 */
+    private boolean sittingReady() {
+        return telemFresh() && telemState == ST_SITTING
+                && (telemEmergSrc == 0 || telemEmergSrc == 2 || telemEmergSrc == 3);
+    }
+
     /** 关节自锁。急停后主机常回报坐下，原厂看 0x1008 的来源字节。 */
     private boolean telemLocked() {
-        // Type=1002 明确定义软急停=6、摔倒=7，优先级高于运动 UDP。
-        if (bodyFresh() && (bodyMotion == 6 || bodyMotion == 7)) return true;
+        if (sittingReady()) return false;
+        // Type=1002 软急停=6 才锁。摔倒=7 不当卸力：2.4G 常只有 1002，
+        // 坐下会被报成 7，左下角就出不了起立。起立时若仍是 7 会先卸力。
+        if (bodyFresh() && bodyMotion == 6) return true;
         if (telemFresh() && (telemState == ST_EMERGENCY
                 || telemEmergSrc == 1
                 || (telemEmergSrc >= 4 && telemEmergSrc <= 6))) {
@@ -321,8 +329,12 @@ final class RadioLink {
             return false;
         }
         if (bodyFresh()) {
-            return bodyMotion == 2 || bodyMotion == 3
-                    || bodyMotion == 4 || bodyMotion == 16;
+            if (bodyMotion == 2 || bodyMotion == 3
+                    || bodyMotion == 4 || bodyMotion == 16) return true;
+            // 2.4G 常只有 Type=1002，坐下会被报成摔倒(7)。有本机姿态依据时信本地，
+            // 否则左下角出不了起立，起步后 axisMode 也一直是 none。
+            if (bodyMotion == 7 && poseKnown) return standing;
+            return false;
         }
         return standing;
     }
@@ -473,15 +485,34 @@ final class RadioLink {
 
     private String postureState() {
         if (telemLocked()) return "locked";
-        if (!telemFresh() && bodyFresh() && bodyMotion == 1) return "rising";
+        // 起立过渡：本机已发起立且过了起身窗，别再卡在 rising。
+        // 否则 Type=1002 仍报 1 时，趴下/力控/起步全被 commandOnRadio 静默丢掉。
+        if (!telemFresh() && bodyFresh() && bodyMotion == 1) {
+            if (standing && lastStandAt != 0
+                    && System.currentTimeMillis() - lastStandAt > 1500) {
+                return "standing";
+            }
+            return "rising";
+        }
         if (!telemFresh() && bodyFresh() && bodyMotion == 5) return "falling";
-        if (telemFresh() && telemState == ST_SIT_TO_STAND) return "rising";
+        if (telemFresh() && telemState == ST_SIT_TO_STAND) {
+            if (standing && lastStandAt != 0
+                    && System.currentTimeMillis() - lastStandAt > 1500) {
+                return "standing";
+            }
+            return "rising";
+        }
         if (telemFresh() && telemState == ST_STAND_TO_SIT) return "falling";
         return isStanding() ? "standing" : "prone";
     }
 
     private String motionState() {
-        if (!"standing".equals(postureState())) return "unavailable";
+        String posture = postureState();
+        // rising 但本机已站着：允许力控/起步，否则 L1 永远走不到。
+        if (!"standing".equals(posture)
+                && !("rising".equals(posture) && standing)) {
+            return "unavailable";
+        }
         if (stepPending) return "starting";
         // 本控制层发过的明确模式指令优先。Type=1002/运动 UDP 在真机上低频、
         // 间歇或长期错报，拿它持续覆盖本地意图会让力控/起步按钮反复闪烁。
@@ -514,17 +545,29 @@ final class RadioLink {
 
     private synchronized void firePendingStep() {
         if (!enabled || !stepPending) return;
-        if (bodyFresh() && bodyMotion != 3) {
+        // 与网关对齐：本体 3 或运动遥测力控站立都算确认。
+        // 本机已发出力控后，2/4/16 也放行，避免 Type=1002 卡在 2 时起步时灵时不灵。
+        boolean torqueConfirmed =
+                (bodyFresh() && (bodyMotion == 3 || bodyMotion == 2
+                        || bodyMotion == 4 || bodyMotion == 16))
+                || (telemFresh() && (telemState == ST_TORQUE_STANDING
+                        || telemState == ST_STEPPING
+                        || telemState == ST_INITIAL_STANDING));
+        if (bodyFresh() && !torqueConfirmed) {
             if (System.currentTimeMillis() - modeCmdAt < 2500) {
                 onRadioDelayed(stepTask, 100);
                 return;
             }
-            stepPending = false;
-            stepping = false;
-            torqued = false;
-            stopped = true;
-            bodyErr = "起步取消：本体未确认力控状态3";
-            return;
+            // 超时仍未确认：若本机确实发过力控，仍发踏步，比取消后摇杆全死更可控。
+            if (!torqued) {
+                stepPending = false;
+                stepping = false;
+                torqued = false;
+                stopped = true;
+                bodyErr = "起步取消：本体未确认力控状态3";
+                return;
+            }
+            bodyErr = "起步：本体未报力控3，已按本机力控继续踏步";
         }
         stepPending = false;
         stepSent = true;
@@ -540,6 +583,19 @@ final class RadioLink {
         String motion = motionState();
         if (!"stopped".equals(motion) && !"torque".equals(motion)) return;
         if (stepping && (stepSent || stepPending)) return;
+        // 已在力控：只发踏步切换，不要再灌一条力控（有的主机上会把踏步切回去）。
+        if (torqued && "torque".equals(motion)) {
+            stepping = true;
+            stepSent = true;
+            stepPending = false;
+            stopped = false;
+            modeCmdAt = System.currentTimeMillis();
+            standing = true;
+            sendSimple(STEP);
+            flushPendingGait();
+            flushPendingHeight();
+            return;
+        }
         sendSimple(TORQUE);
         torqued = true;
         stepping = true;
@@ -554,8 +610,9 @@ final class RadioLink {
     private void stopStepping() {
         if (emergency) return;
         boolean cancelOnly = stepPending && !stepSent;
-        boolean sent = stepSent || (bodyFresh() && bodyMotion == 4)
-                || (telemFresh() && telemState == ST_STEPPING);
+        // 只相信本机已发出的踏步。滞后的 body=4 不能当成「还在走」再发切换码，
+        // 否则刚停步后点停步会把狗又切回踏步。
+        boolean sent = stepSent;
         cancelPendingStep();
         stepping = false;
         torqued = true;
@@ -601,7 +658,7 @@ final class RadioLink {
      * 只有关节锁着才先卸力。站着再卸力，狗会先软下去，看起来像「起立变成趴下」。
      */
     private void standUp() {
-        if (telemLocked() || emergency) {
+        if (telemLocked() || emergency || (bodyFresh() && bodyMotion == 7)) {
             sendSimple(UNLOAD);
             emergency = false;
             standing = false;
@@ -651,15 +708,23 @@ final class RadioLink {
                 break;
             case "sit":
             case "sit_down":
-                if (!"standing".equals(postureState())) break;
+                // 信本机 standing：过渡态 rising 时 postureState 还不是 standing，
+                // 硬卡 standing 会让 L2/屏幕「趴下」按了没反应。
+                if (!standing && !"standing".equals(postureState())
+                        && !"rising".equals(postureState())) break;
                 cancelPendingStand();
                 pendingGait = "";
                 if (telemNavMode == 1) sendSimple(MODE_MANUAL);
-                boolean sitAfterStep = stepping && stepSent;
+                // 本地可能已被滞后本体状态清掉 stepping，但狗还在踏步。
+                // 不先停步就发趴下，运动会把起趴丢掉——力控/起步后再趴下失灵。
+                boolean sitAfterStep = (stepping && stepSent)
+                        || (bodyFresh() && bodyMotion == 4)
+                        || (telemFresh() && telemState == ST_STEPPING);
                 if (sitAfterStep) sendSimple(STEP);
                 cancelPendingStep();
                 standing = false;
                 clearWalk();
+                stopped = true;
                 lastStandAt = System.currentTimeMillis();
                 if (sitAfterStep) {
                     onRadioDelayed(() -> sendSimple(SIT), 300);
@@ -679,7 +744,8 @@ final class RadioLink {
                 clearWalk();
                 break;
             case "torque":
-                if (!"standing".equals(postureState())) break;
+                if (!standing && !"standing".equals(postureState())
+                        && !"rising".equals(postureState())) break;
                 boolean leaveStep = stepping && stepSent;
                 if (leaveStep) sendSimple(STEP);
                 cancelPendingStep();
@@ -968,24 +1034,35 @@ final class RadioLink {
         bodyOnDock = dock;
         bodyAt = System.currentTimeMillis();
         bodyErr = "";
-        if (motion == 6 || motion == 7) {
+        if (motion == 6) {
             emergency = true;
             standing = false;
             clearWalk();
         } else if (System.currentTimeMillis() - modeCmdAt >= 800 && !stepPending) {
-            // 保护期后让本体真实状态纠正本地记忆，避免切步态后“力控/起步反了”。
+            // 保护期后让本体真实状态纠正本地记忆。
+            // 但必须尊重本机刚发的停步/起步：Type=1002 滞后的 4 会把刚停步
+            // 又拉回 walking，下一拍「停步」变成再切一次踏步——表现为起步/停步反了。
             if (motion == 4) {
-                standing = true;
-                torqued = true;
-                stepping = true;
-                stepSent = true;
-                stopped = false;
+                if (stopped && !stepping) {
+                    // 本机刚停步，丢掉滞后的踏步回报。
+                } else {
+                    standing = true;
+                    torqued = true;
+                    stepping = true;
+                    stepSent = true;
+                    stopped = false;
+                }
             } else if (motion == 3) {
+                // 状态3无法区分“主动力控”和“行走后停步”，保留命令侧 stopped。
+                // 已确认起步且未主动停步时不要清：踏步中 Type=1002 常仍报 3。
                 standing = true;
                 torqued = true;
-                stepping = false;
-                stepSent = false;
-                // 状态3无法区分“主动力控”和“行走后停步”，保留命令侧 stopped。
+                if (stepping && stepSent && !stopped) {
+                    /* keep walking */
+                } else {
+                    stepping = false;
+                    stepSent = false;
+                }
             }
         }
         if (gaitApplying && gait == gaitExpected) {
@@ -1693,8 +1770,10 @@ final class RadioLink {
             applyTelemLock();
         } else if (telemState == ST_SITTING) {
             // RL 起立后主机仍报坐下。分不清真趴着还是那种谎报，不动 standing。
-            // 急停后也常报坐下，但关节锁着 —— 有 0x1008 才敢把急停旗标清掉。
-            if (telemRunSeen && telemEmergSrc == 0) emergency = false;
+            // 来源 0/2/3 不是锁：坐下就清本地急停，左下角才能回到起立。
+            if (telemEmergSrc == 0 || telemEmergSrc == 2 || telemEmergSrc == 3) {
+                emergency = false;
+            }
         } else if (telemState == ST_STAND_TO_SIT) {
             clearWalk();
         }

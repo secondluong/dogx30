@@ -305,13 +305,44 @@ js.forEach(function (f) {
         missing.length ? '找不到：' + missing.join(', ') : '');
 });
 
-check('顶栏有背景按钮', /id="btn-view">背景<\/button>/.test(html));
+check('顶栏有主图按钮', /id="btn-view">主图<\/button>/.test(html));
 check('左下只有一个姿态按钮', /id="btn-stand"/.test(html) && html.indexOf('btn-unload') === -1);
 check('模式菜单是侦检和水炮',
       /data-work="inspect">侦检模式/.test(html) &&
       /data-work="cannon">水炮模式/.test(html) &&
       html.indexOf('data-mode="assist"') === -1 &&
       /setWorkMode/.test(read('app.js')));
+check('侦检菜单左侧有学习按钮，主画面按键位说明',
+      /id="btn-learn"/.test(html) &&
+      html.indexOf('id="btn-learn"') < html.indexOf('id="btn-mode"') &&
+      /id="rc-learn"/.test(html) &&
+      /SW1 左拨动开关/.test(html) &&
+      /左大摇杆/.test(html) &&
+      /左小摇杆/.test(html) &&
+      />L1</.test(html) &&
+      />L2</.test(html) &&
+      /SW2 右拨动开关/.test(html) &&
+      /右大摇杆/.test(html) &&
+      /右小摇杆/.test(html) &&
+      />左旋</.test(html) &&
+      />右旋</.test(html) &&
+      /function paintLearn/.test(read('app.js')) &&
+      /setLearnOpen/.test(read('app.js')) &&
+      /data-key="lknob"[\s\S]*for-inspect[\s\S]*data-key="rknob"/.test(html) &&
+      !/data-key="lknob"[\s\S]*for-cannon/.test(html) &&
+      /bottom: 80px/.test(read('style.css')) &&
+      /data-key="l2"\] \{ bottom: 0; left: 0/.test(read('style.css')) &&
+      /data-key="rknob"\] \{ bottom: 0; right: 0/.test(read('style.css')) &&
+      /icons\/rc-sw\.png/.test(html) &&
+      /icons\/rc-stick\.png/.test(html) &&
+      /icons\/rc-hat\.png/.test(html) &&
+      /icons\/rc-l1\.png/.test(html) &&
+      /icons\/rc-l2\.png/.test(html) &&
+      /icons\/rc-knob\.png/.test(html) &&
+      ['rc-sw.png', 'rc-stick.png', 'rc-hat.png', 'rc-l1.png',
+       'rc-l2.png', 'rc-knob.png'].every(function (n) {
+        return fs.existsSync(path.join(WEB, 'icons', n));
+      }));
 check('点标题打开设置', /id="btn-settings"[^>]*>\s*X30 遥控台/.test(html));
 check('设置面板在 CSS 到来前就藏着',
       /<style>\s*\.hidden\s*\{\s*display\s*:\s*none\s*!important/.test(html));
@@ -474,9 +505,11 @@ check('2.4G RadioLink 含起立趴下行走指令',
 check('两条链路都读取官方 Type=1002 本体状态',
       /BODY_PORT = 30000/.test(radioJava) &&
       /<Type>1002<\/Type>/.test(radioJava) &&
-      /bodyMotion == 6 \|\| bodyMotion == 7/.test(radioJava) &&
+      /bodyMotion == 6/.test(radioJava) &&
+      /bodyMotion == 7/.test(radioJava) &&
       /<Type>1002<\/Type>/.test(bodyCpp) &&
-      /body == 6 \|\| body == 7/.test(motionCpp));
+      /body == 6/.test(motionCpp) &&
+      /body == 7/.test(motionCpp));
 check('V1.0.6 的 RL 与 L楼梯枚举已贯通双链路',
       /kRl = 16/.test(motionHpp + fs.readFileSync(
         path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'protocol.hpp'), 'utf8')) &&
@@ -611,6 +644,10 @@ check('L1/L2 只由网页那层发，不和原生重复',
 
 // 急停后必须能找到卸力：不卸力起立是发不动的。实体红键是原生那侧收的（网页并不
 // 经手），没有遥测时只有 RadioLink 记着这件事，所以那个标志一定要读。
+check('坐下/摔倒(7)左下角给出起立，不误判卸力',
+      /sittingReady/.test(radioJava) &&
+      /const locked = !!st.emergency/.test(appJs) &&
+      /摔倒=7 不当卸力/.test(radioJava));
 check('急停后左下角变卸力，实体红键也算',
       /o\.put\("emergency", telemLocked\(\)\)/.test(radioJava) &&
       /o\.put\("emergSrc", telemEmergSrc\)/.test(radioJava) &&
@@ -694,7 +731,7 @@ check('G20 起立键不改发趴下',
 check('力控只作为起步前置，只有起步后才发速度轴',
       /app\.axisMode === 'vel'/.test(appJs) &&
       !/channel === 'pose'/.test(appJs) &&
-      /b\.textContent = walk === 'step'/.test(appJs) &&
+      /btn\.textContent = stopping \? '停步中' : '停步'/.test(appJs) &&
       /app\.motionState === 'stopping'/.test(appJs) &&
       !/basicState === STATE_STEPPING\) return 'vel'/.test(appJs) &&
       !/basic === STATE_STEPPING && app\.walkMode !== 'torque'/.test(appJs) &&
@@ -703,7 +740,10 @@ check('力控只作为起步前置，只有起步后才发速度轴',
       /stepping_ && step_sent_/.test(motionCpp) &&
       /当前产品不开放姿态扭身/.test(motionHpp) &&
       /当前机器未开放姿态扭身/.test(serviceCpp) &&
-      /RL 起立后主机可能一直谎报坐下/.test(radioJava));
+      /RL 起立后主机可能一直谎报坐下/.test(radioJava) &&
+      /app\.motionState === 'torque'/.test(appJs) &&
+      !/app\.motionState === 'torque' \|\| app\.motionState === 'stopped'/.test(appJs) &&
+      !/app\.axisMode === 'pose'/.test(appJs));
 check('力控与停步状态都不发送姿态轴',
       /机器侧未开放 enable_twist/.test(motionCpp) &&
       !/return "pose"/.test(radioJava) &&
@@ -711,8 +751,16 @@ check('力控与停步状态都不发送姿态轴',
 check('有本体反馈时起步必须先确认力控状态3',
       /body_monitor_alive && !torque_confirmed/.test(motionCpp) &&
       /起步取消：本体监控未确认进入力控状态 3/.test(motionCpp) &&
-      /bodyFresh\(\) && bodyMotion != 3/.test(radioJava) &&
+      /torqueConfirmed/.test(radioJava) &&
       /起步取消：本体未确认力控状态3/.test(radioJava));
+check('L1/L2 由原生边沿派发 cycleWalk/cyclePose',
+      /applyL12/.test(radioBridge) &&
+      /app\.cycleWalk/.test(radioBridge) &&
+      /app\.cyclePose/.test(radioBridge) &&
+      /l12PrimeTicks/.test(radioBridge));
+check('力控/起步按钮用白字高亮',
+      /walk-hot/.test(appJs) &&
+      /\.hud-stand \.hud-walk \.btn\.walk-hot/.test(styleText));
 check('力控指令只发一次且不再开放姿态轴',
       !/力控补发/.test(motionCpp) &&
       !/pose_axes_at_/.test(motionCpp) &&
@@ -728,7 +776,14 @@ check('官方本体状态会纠正两侧的本地模式记忆',
 check('状态3保留力控或停步的命令来源',
       /keep_torque = motion_phase_ == MotionPhase::kTorque/.test(motionCpp) &&
       /keep_torque \? MotionPhase::kTorque : MotionPhase::kStopped/.test(motionCpp) &&
-      /状态3无法区分“主动力控”和“行走后停步”/.test(radioJava));
+      /if \(motion_phase_ == MotionPhase::kWalking\) return;/.test(motionCpp) &&
+      /状态3无法区分“主动力控”和“行走后停步”/.test(radioJava) &&
+      /stepping && stepSent && !stopped/.test(radioJava) &&
+      /stopped && !stepping/.test(radioJava));
+check('停步后不被滞后踏步状态拉回',
+      /本机刚停步，丢掉滞后的踏步回报/.test(radioJava) &&
+      /boolean sent = stepSent;/.test(radioJava) &&
+      /只有已力控才起步/.test(appJs));
 check('两侧都暴露四轴实际发送值供诊断',
       /"axis_right_y"/.test(serviceCpp) &&
       /"axisRy"/.test(radioJava));
@@ -743,6 +798,23 @@ check('链路交接确认后才启动新心跳',
       /if \(!st\.enabled\)/.test(appJs) &&
       /if \(!enabled\) return/.test(radioJava) &&
       /radioActivatedThisSession/.test(g20Java));
+check('左旋对讲、右旋听球',
+      /getKeyChannels/.test(g20Java) &&
+      /applyTalkKnob/.test(radioBridge) &&
+      /applyListenKnob/.test(radioBridge) &&
+      /setTalkFromKnob/.test(radioBridge) &&
+      /setListenFromKnob/.test(radioBridge) &&
+      /setOutGain/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /setListenLevel/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'NativeVideo.java'), 'utf8')) &&
+      /听球开/.test(radioBridge) &&
+      /听球关/.test(radioBridge) &&
+      /index == 10 \|\| index == 11/.test(radioBridge) &&
+      !/toggleTalkFromUser\(9\)/.test(radioBridge) &&
+      !/chNum >= 10 && chNum <= 12/.test(radioBridge));
 check('运动切换命令必须显式 on off',
       /case "step_on"/.test(radioJava) &&
       /case "step_off"/.test(radioJava) &&
@@ -815,20 +887,26 @@ check('趴着收起档位菜单，2.4G 姿态没把握时不收',
       /html\.radio-24\.pose-known \.dog-prone \.hud-menus/.test(styleText) &&
       /html:not\(\.radio-24\) \.dog-prone \.hud-menus/.test(styleText));
 
-// 底栏那一排永远是一行。以前力控/起步在 .row.wrap 里，屏幕一窄就折成两行；
-// 现在那两颗直接拿掉了（推杆自己踩），剩下三个档位按钮还要用短名收窄。
-// 力控/起步没有删掉，是挪到了左下角起立按钮上方竖排：推杆自己会踩这两级，但停步和
-// 用摇杆调姿态还得靠它们。
+// 底栏那一排永远是一行。力控/起步/停步与实体 L1 共用一颗循环键，放在起立上方。
 var standBlock = html.slice(html.indexOf('class="hud-stand"'),
                            html.indexOf('id="hud-standing"'));
 check('底栏菜单不折行、档位用短名',
-      /data-cmd="torque"/.test(standBlock) &&
-      /data-cmd="step"/.test(standBlock) &&
+      /data-cmd="walk_cycle"/.test(standBlock) &&
+      /id="btn-walk"/.test(standBlock) &&
+      !/data-cmd="torque"/.test(standBlock) &&
+      !/data-cmd="step"/.test(standBlock) &&
       /\.hud-stand \.hud-walk \{/.test(styleText) &&
       /\.dog-prone \.hud-stand \.hud-walk/.test(styleText) &&
       /data-short="多帧"/.test(html) &&
       /on\.dataset\.short \|\| on\.textContent/.test(appJs) &&
       /flex-wrap: nowrap/.test(styleText));
+check('L1 与屏幕共用力控/起步/停步循环',
+      /walk_cycle: \{ ch: 6 \}/.test(read('gamepad.js')) &&
+      /pose_cycle: \{ ch: 7 \}/.test(read('gamepad.js')) &&
+      /function cycleWalk/.test(appJs) &&
+      /function cyclePose/.test(appJs) &&
+      /name === 'walk_cycle'/.test(appJs) &&
+      /力控 \/ 起步 \/ 停步/.test(html));
 
 // 步态编码到按钮键的映射现在有两份：网关的 GaitKey() 和 2.4G 直连用的
 // RADIO_GAIT_KEYS。走歪了的表现是同一只狗在两条链路上高亮不同的步态。
@@ -968,6 +1046,14 @@ check('App 的网关 WebSocket 走原生 MESH/WiFi 通道',
       /不退回 WebView/.test(appJs) &&
       /X30NativeWs/.test(appJs) &&
       /okhttp:4\.12\.0/.test(appGradle));
+check('App 原生 WebSocket 转发点云二进制帧',
+      /ByteString bytes/.test(nativeWsJava) &&
+      /pollBin\(/.test(nativeWsJava) &&
+      /wsPollBin/.test(radioBridge) &&
+      /b64ToArrayBuffer/.test(appJs) &&
+      /wsPollBin/.test(appJs) &&
+      /'wsPollBin' in window\.X30Native/.test(appJs) &&
+      !/typeof window\.X30Native\.wsPollBin !== 'function'/.test(appJs));
 var mtxYml = fs.readFileSync(
     path.join(__dirname, '..', 'deploy', 'mediamtx.yml'), 'utf8');
 var mtxInstall = fs.readFileSync(
@@ -982,6 +1068,7 @@ check('MediaMTX 的 RTSP 给平板听',
 check('2.4G 的机身相机走原生 RTSP',
       /rtsp:\/\/192\.168\.1\.105:8554/.test(dogCamJs) &&
       /videoStart/.test(dogCamJs) &&
+      /'videoStart' in n/.test(dogCamJs) &&
       /videoStart/.test(radioBridge) &&
       /videoRect/.test(radioBridge) &&
       /RtspMediaSource/.test(nativeVideo) &&
@@ -1043,7 +1130,8 @@ check('拉流按低延迟配，不用点播那套缓冲',
       /setTrackTypeDisabled\(C\.TRACK_TYPE_AUDIO, !listenAudio\)/.test(nativeVideo) &&
       /isBallUrl/.test(nativeVideo) &&
       /setTalking/.test(nativeVideo) &&
-      /对讲只改音量/.test(nativeVideo));
+      /setListening/.test(nativeVideo) &&
+      /USAGE_MEDIA/.test(nativeVideo));
 // 光调小缓冲不够：链路抖一下就攒出一段，之后一直背着走。
 check('攒出来的延迟会被追掉',
       /function trimLatency|private void trimLatency/.test(nativeVideo) &&
@@ -1123,9 +1211,21 @@ check('右小左右回中再拨会切画中画',
       /step < 0/.test(ptzJs) &&
       /applyRcButtons/.test(radioBridge) &&
       /cyclePipNative/.test(radioBridge) &&
+      /refreshAfterPip/.test(nativeVideo) &&
+      /refreshStream/.test(nativeVideo) &&
+      /refreshBallVideo/.test(radioBridge) &&
+      /videoRefresh/.test(radioBridge) &&
+      /videoRefresh/.test(ptzJs) &&
       /static void setPip/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
+      /getPipMode/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
+      /setPipNow/.test(radioBridge) &&
+      /paintPipWeb/.test(radioBridge) &&
+      /applyMode/.test(ptzJs) &&
+      /'cameraGet' in n/.test(ptzJs) &&
       !/setTimeout\(\(\) => \{ busy = false; \}, 400\)/.test(ptzJs));
 check('空口令或 PASSWORD 占位按 admin 登录球机',
       /password == "PASSWORD"/.test(ptzCpp) &&
@@ -1235,11 +1335,14 @@ check('实体键每一条派发都念',
 check('按住说话时闭嘴',
       /function talking/.test(read('media.js')) &&
       /talking,?\s*\n?\};/.test(read('media.js')) &&
-      /X30Media\.talking/.test(voiceJs));
+      /X30Media\.talking/.test(voiceJs) &&
+      /indexOf\('对讲开'\)/.test(voiceJs) &&
+      /听球开/.test(voiceJs));
 check('App 对讲走球机 SRS，不经网关 WHIP',
       /function hasNativeTalk/.test(mediaJs) &&
       /X30Native\.talkStart/.test(mediaJs) &&
       /nativeTalkOn/.test(mediaJs) &&
+      /if \(!hasNativeTalk\(\)\) talkStop/.test(mediaJs) &&
       /talkStart/.test(radioBridge) &&
       /class CameraTalk/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
@@ -1253,11 +1356,19 @@ check('App 对讲走球机 SRS，不经网关 WHIP',
       /bindProcessToNetwork\(null\)/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /pinMesh/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /REC_SOURCES/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /网页 hidden 会误报/.test(radioBridge) &&
       /cameraGetFire' in window.X30Native/.test(read('ptzball.js')) &&
       /audio_cgi2/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
-      /1\.6f/.test(nativeVideo) &&
+      /USAGE_MEDIA/.test(nativeVideo) &&
+      /LISTEN_GAIN/.test(nativeVideo) &&
       /setSpeakerMute/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
@@ -1267,8 +1378,20 @@ check('App 对讲走球机 SRS，不经网关 WHIP',
       /downsample/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /lowpass8k/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /feedAac/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
       /boostAudio/.test(ptzJs) &&
       /OK\\0/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /wantsAac/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /MIMETYPE_AUDIO_AAC/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
       /status=SoundOn/.test(fs.readFileSync(
@@ -1294,14 +1417,79 @@ check('App 对讲走球机 SRS，不经网关 WHIP',
       /ensureMicPump/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
-      /HOME 和对讲/.test(radioBridge) &&
-      /rcButtonsLive/.test(read('gamepad.js')) &&
+      /左旋 CH11/.test(radioBridge) &&
+      /toggleTalkFromUser/.test(radioBridge) &&
+      /toggleListenFromUser/.test(radioBridge) &&
+      /listenToggle/.test(read('gamepad.js')) &&
+      /btnRest/.test(radioBridge) &&
+      /通道九/.test(radioBridge) &&
+      /对讲开/.test(radioBridge) &&
+      /对讲关/.test(radioBridge) &&
+      /pollRc' in window.X30Native/.test(read('gamepad.js')) &&
+      /ignore stop bounce/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /ignore js stop/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /maxRetransmits/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /sctp-port:5000/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /buf.binary/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /keepSoundOn/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /startFromUser/.test(radioBridge) &&
+      /speakThen/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'Tts.java'), 'utf8')) &&
+      /AudioSource.MIC/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
       /if \(gen == talkGen\.get\(\)\) teardownSession/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
       /对讲开/.test(read('gamepad.js')) &&
       /对讲关/.test(read('gamepad.js')) &&
-      /listenAudio && talking/.test(nativeVideo) &&
+      !/talk: \{ ch: 8 \}/.test(read('gamepad.js')) &&
+      !/listen: \{ ch: 9 \}/.test(read('gamepad.js')) &&
+      /index == 10 \|\| index == 11/.test(radioBridge) &&
+      !/chNum >= 10 && chNum <= 12/.test(radioBridge) &&
+      /LISTEN_DUCK/.test(nativeVideo) &&
+      /setSpeakDuck/.test(nativeVideo) &&
+      /setTalkMix/.test(nativeVideo) &&
+      /setAudioSessionId/.test(nativeVideo) &&
+      /playSessionId/.test(nativeVideo) &&
+      /TeeAudioProcessor/.test(nativeVideo) &&
+      /echoCancel/.test(nativeVideo) &&
+      /class SoftwareAec/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'SoftwareAec.java'), 'utf8')) &&
+      /VAD_HANG_MS/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /只改音量/.test(nativeVideo) &&
+      /关麦不再重拉/.test(nativeVideo) &&
+      /LISTEN_GAIN/.test(nativeVideo) &&
+      /请您讲/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /playGoAhead/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /synthesizeToFile/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /MODE_IN_COMMUNICATION/.test(nativeVideo) &&
+      /AcousticEchoCanceler/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
+      /setListening/.test(nativeVideo) &&
       /setAdmPlaying/.test(nativeVideo) &&
       /ADM 喇叭保持静音/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
@@ -1309,7 +1497,7 @@ check('App 对讲走球机 SRS，不经网关 WHIP',
       /setSpeakerMute\(true\)/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraTalk.java'), 'utf8')) &&
-      /不改 AudioFormat/.test(fs.readFileSync(
+      /漏写会被固件存成 0/.test(fs.readFileSync(
         path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
                   'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
       /RECORD_AUDIO/.test(fs.readFileSync(

@@ -2,9 +2,14 @@ package com.dogx30.control;
 
 import android.content.Context;
 import android.media.AudioAttributes;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 
+import java.io.File;
 import java.util.Locale;
 
 /**
@@ -31,9 +36,12 @@ final class Tts {
     static final String NONE = "none";
 
     private final TextToSpeech tts;
+    private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile String status = INIT;
     /** 引擎起来之前按下的最后一句。开机后第一次按键正好落在这一秒里。 */
     private volatile String pending = "";
+    private volatile Runnable pendingDone;
+    private int utterSeq;
 
     Tts(Context ctx) {
         tts = new TextToSpeech(ctx.getApplicationContext(), this::onInit);
@@ -47,28 +55,49 @@ final class Tts {
         }
         int lang = tts.setLanguage(Locale.CHINA);
         if (lang == TextToSpeech.LANG_MISSING_DATA || lang == TextToSpeech.LANG_NOT_SUPPORTED) {
-            // 平板上没装中文语音包。用英文引擎念中文只会出来一串乱码音，不如不念，
-            // 设置面板会把原因写出来，让人去系统设置里装一个。
+            lang = tts.setLanguage(Locale.SIMPLIFIED_CHINESE);
+        }
+        if (lang == TextToSpeech.LANG_MISSING_DATA || lang == TextToSpeech.LANG_NOT_SUPPORTED) {
             Log.w(TAG, "没有中文语音：" + lang);
             fail();
             return;
         }
         tts.setSpeechRate(RATE);
-        // 跟着媒体音量走：现场调音量按的是音量键，而那颗键默认调的就是媒体音量。
-        // 挂到通知或无障碍通道上的话，人把音量拧到底也不知道该去哪里调回来。
+        // 必须走媒体音量：平板导航音量经常是 0，改导航通道就完全没声。
+        // 开麦前先念完再开 AudioRecord，避免媒体通道被麦抢走。
         tts.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build());
+        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+            @Override public void onStart(String id) {}
+
+            @Override public void onDone(String id) {
+                fireDone();
+            }
+
+            @Override public void onError(String id) {
+                fireDone();
+            }
+        });
         status = OK;
         String first = pending;
         pending = "";
-        if (!first.isEmpty()) speak(first);
+        Runnable after = pendingDone;
+        if (!first.isEmpty()) speakThen(first, after);
+        else if (after != null) fireDone();
+    }
+
+    private void fireDone() {
+        Runnable r = pendingDone;
+        pendingDone = null;
+        if (r != null) ui.post(r);
     }
 
     private void fail() {
         status = NONE;
         pending = "";
+        fireDone();
     }
 
     String status() {
@@ -82,21 +111,58 @@ final class Tts {
      * 哪个线程调都行；不特意切回主线程是因为要把「念没念上」同步返回给网页。
      */
     boolean speak(String text) {
-        if (text == null) return false;
+        return speakThen(text, null);
+    }
+
+    /** 念完（或念不了）再跑 after。对讲开必须等这句落地再开麦。 */
+    boolean speakThen(String text, Runnable after) {
+        pendingDone = after;
+        if (text == null) {
+            fireDone();
+            return false;
+        }
         String line = text.trim();
-        if (line.isEmpty()) return false;
+        if (line.isEmpty()) {
+            fireDone();
+            return false;
+        }
         if (INIT.equals(status)) {
-            // 引擎初始化要一秒左右。记下最后一句等它起来补念 —— 丢掉的表现是
-            // 「开机后第一次按键不出声」，而那一下往往正是起立。
             pending = line;
             return true;
         }
-        if (!OK.equals(status)) return false;
-        return tts.speak(line, TextToSpeech.QUEUE_FLUSH, null, "x30") == TextToSpeech.SUCCESS;
+        if (!OK.equals(status)) {
+            fireDone();
+            return false;
+        }
+        String id = "x30-" + (++utterSeq);
+        boolean ok = tts.speak(line, TextToSpeech.QUEUE_FLUSH, null, id)
+                == TextToSpeech.SUCCESS;
+        if (!ok) fireDone();
+        return ok;
+    }
+
+    /** 合成到文件，不走喇叭。对讲关麦后把「请您讲」推到球机用。 */
+    boolean synthToFile(String text, File file, Runnable after) {
+        pendingDone = after;
+        if (text == null || file == null || !OK.equals(status)) {
+            fireDone();
+            return false;
+        }
+        String line = text.trim();
+        if (line.isEmpty()) {
+            fireDone();
+            return false;
+        }
+        String id = "x30-s-" + (++utterSeq);
+        boolean ok = tts.synthesizeToFile(line, new Bundle(), file, id)
+                == TextToSpeech.SUCCESS;
+        if (!ok) fireDone();
+        return ok;
     }
 
     void stop() {
         pending = "";
+        pendingDone = null;
         try {
             tts.stop();
         } catch (Exception e) {
@@ -106,6 +172,7 @@ final class Tts {
 
     void shutdown() {
         pending = "";
+        pendingDone = null;
         try {
             tts.stop();
             tts.shutdown();

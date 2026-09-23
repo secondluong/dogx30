@@ -10,8 +10,8 @@ android {
         applicationId "com.dogx30.control"
         minSdk 24
         targetSdk 34
-        versionCode 94
-        versionName "0.4.79"
+        versionCode 138
+        versionName "0.5.23"
     }
 
     buildTypes {
@@ -55,6 +55,6 @@ dependencies {
     // **编译**类路径上取决于别人怎么声明依赖，写明了才不会哪天忽然编不过。
     implementation 'androidx.annotation:annotation-experimental:1.4.1'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    // 球机网页对讲走 SRS 数据通道。App 用同一套 WebRTC 把 G.711A 推上去。
+    // 球机网页对讲走 SRS 数据通道。App 用同一套 WebRTC，编码跟网页：默认 AAC。
     implementation 'io.github.webrtc-sdk:android:125.6422.05'
 }

@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260921i">
+<link rel="stylesheet" href="style.css?v=20260923k">
 </head>
 <body>
 
@@ -35,6 +35,7 @@
   </div>
 
   <div class="bar-right">
+    <button type="button" class="btn btn-ghost" id="btn-learn" data-say="">学习</button>
     <div class="bar-mode" id="bar-mode">
       <button type="button" class="btn btn-ghost" id="btn-mode">模式</button>
       <div id="hud-mode-pop" class="bar-pop hidden">
@@ -44,7 +45,7 @@
     </div>
     <!-- 仅安卓壳显示：顶栏切背景。网页直接打开时由 CSS 藏掉。 -->
     <div class="bar-view" id="bar-view">
-      <button type="button" class="btn btn-ghost" id="btn-view">背景</button>
+      <button type="button" class="btn btn-ghost" id="btn-view">主图</button>
       <div id="hud-view-pop" class="bar-pop hidden">
         <button type="button" class="btn" data-view-pick="dog_cam">狗身视频</button>
         <button type="button" class="btn" data-view-pick="ptz_vis">双光视频</button>
@@ -135,6 +136,87 @@
 <main class="stage-wrap dog-prone" id="stage-wrap">
   <div id="banner" class="banner hidden"></div>
 
+  <div id="rc-learn" class="rc-learn hidden is-inspect" aria-hidden="true">
+    <div class="rc-learn-head">
+      <span>按键学习</span>
+      <button type="button" class="btn sm btn-ghost" id="btn-learn-close">关闭</button>
+    </div>
+    <div class="rc-learn-map">
+      <article class="rc-learn-card" data-key="sw1">
+        <img class="rc-learn-ico" src="icons/rc-sw.png" alt="拨动开关">
+        <div class="rc-learn-txt">
+          <b>SW1 左拨动开关</b>
+          <p>选择主图内容（狗身视频 / 双光 / 点云）</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="lstick">
+        <img class="rc-learn-ico" src="icons/rc-stick.png" alt="大摇杆">
+        <div class="rc-learn-txt">
+          <b>左大摇杆</b>
+          <p>控制狗前进后退、左右平移</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="laux">
+        <img class="rc-learn-ico" src="icons/rc-hat.png" alt="小摇杆">
+        <div class="rc-learn-txt">
+          <b>左小摇杆</b>
+          <p class="for-inspect">侦检：控制球机水平和俯仰</p>
+          <p class="for-cannon">水炮：控制水炮水平和俯仰</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="l1">
+        <img class="rc-learn-ico" src="icons/rc-l1.png" alt="L1">
+        <div class="rc-learn-txt">
+          <b>L1</b>
+          <p>力控 / 起步 / 停步</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="l2">
+        <img class="rc-learn-ico" src="icons/rc-l2.png" alt="L2">
+        <div class="rc-learn-txt">
+          <b>L2</b>
+          <p>起立 / 趴下 / 卸力</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="sw2">
+        <img class="rc-learn-ico" src="icons/rc-sw.png" alt="拨动开关">
+        <div class="rc-learn-txt">
+          <b>SW2 右拨动开关</b>
+          <p>指标 / 开关 / 气体显示</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="rstick">
+        <img class="rc-learn-ico" src="icons/rc-stick.png" alt="大摇杆">
+        <div class="rc-learn-txt">
+          <b>右大摇杆</b>
+          <p>控制狗转向和俯仰</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="raux">
+        <img class="rc-learn-ico" src="icons/rc-hat.png" alt="小摇杆">
+        <div class="rc-learn-txt">
+          <b>右小摇杆</b>
+          <p class="for-inspect">侦检：球机画中画切换</p>
+          <p class="for-cannon">水炮：喷射模式</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="lknob">
+        <img class="rc-learn-ico" src="icons/rc-knob.png" alt="左旋">
+        <div class="rc-learn-txt">
+          <b>左旋</b>
+          <p class="for-inspect">侦检：对讲开关，中间行程调对讲音量</p>
+        </div>
+      </article>
+      <article class="rc-learn-card" data-key="rknob">
+        <img class="rc-learn-ico" src="icons/rc-knob.png" alt="右旋">
+        <div class="rc-learn-txt">
+          <b>右旋</b>
+          <p class="for-inspect">侦检：听球开关，中间行程调听球音量</p>
+        </div>
+      </article>
+    </div>
+  </div>
+
   <div id="stage" class="stage layout-1x1">
     <div id="pane-video" class="pane is-main" data-view="dog_cam">
       <video id="media-video" class="media-video" autoplay playsinline muted></video>
@@ -189,7 +271,7 @@
         <div class="placeholder cloud-idle" id="cloud-idle">
           <div class="ph-icon">⁘</div>
           <p>点云未订阅</p>
-          <small>进入点云画面后自动向感知主机订阅。累积和轨迹在本机用里程计对齐，不额外占带宽。</small>
+          <small>点云经 MESH/WiFi 连网关再从感知主机拉，不走 2.4G。进入本画面后自动订阅。</small>
         </div>
       </div>
       <div class="pane-label">
@@ -345,15 +427,14 @@
   </div>
 
   <div class="hud-stand">
-    <!-- 力控是起步前置状态；当前机器未开放姿态扭身，只有起步后摇杆才控制行走。 -->
+    <!-- 与 L1 同一颗循环键：力控 → 起步 → 停步。L2 / 起立键管起立/趴下/卸力。 -->
     <div class="hud-walk">
-      <button type="button" class="btn sm" data-cmd="torque">力控</button>
-      <button type="button" class="btn sm" data-cmd="step">起步</button>
+      <button type="button" class="btn sm" id="btn-walk" data-cmd="walk_cycle">力控</button>
     </div>
     <button type="button" class="btn hud-stand-btn" data-cmd="stand" id="btn-stand">起立</button>
   </div>
 
-  <!-- 底栏只放三个档位：力控/起步挪到左下角起立上方了（放这一排会折成两行）。 -->
+  <!-- 底栏只放三个档位：力控/起步在左下角与 L1 共用一颗循环键。 -->
   <div id="hud-standing" class="hud-menus">
     <div class="acc">
       <!-- 收起来是「菜单名 | 当前选的那一档 ›」。菜单名要留着：只显示「常规」的话，
@@ -427,14 +508,14 @@
 </main>
 
 <!-- voice.js 要排在最前：后面几个模块都会调它念结果。 -->
-<script src="voice.js?v=20260826y"></script>
-<script src="media.js?v=20260921z"></script>
+<script src="voice.js?v=20260922e"></script>
+<script src="media.js?v=20260922b"></script>
 <script src="capture.js?v=20260826y"></script>
 <script src="cloud.js?v=20260921b"></script>
-<script src="gamepad.js?v=20260921ah"></script>
+<script src="gamepad.js?v=20260923k"></script>
 <script src="settings.js?v=20260921aj"></script>
-<script src="dogcam24.js?v=20260921q"></script>
-<script src="ptzball.js?v=20260921ah"></script>
-<script src="app.js?v=20260921aj"></script>
+<script src="dogcam24.js?v=20260922a"></script>
+<script src="ptzball.js?v=20260922c"></script>
+<script src="app.js?v=20260923m"></script>
 </body>
 </html>

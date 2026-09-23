@@ -96,6 +96,10 @@ var pipL = G.g20Channels([1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500, 
 check('CH15 左拨是画中画上一档', pipL.auxPip < -0.9 && G.pipDetent(pipL.auxPip) === 'prev',
       JSON.stringify(pipL));
 check('CH15 中位不切画中画', G.pipDetent(0) === 'mid');
+check('R1/R2 离中位 180 算按下', G.btnDown(1320) && G.btnDown(1680));
+check('R1/R2 中位不算按下', !G.btnDown(1500));
+check('松开停在 1050 时再按到 1950 算按下', G.btnRestDown(1950, 1050));
+check('松开 1050 自己不算按下', !G.btnRestDown(1050, 1050));
 check('CH5 上是点云', G.ch5Toggle(1950) === 'cloud');
 check('CH5 中是狗身视频', G.ch5Toggle(1500) === 'dog_cam');
 check('CH5 下是双光视频', G.ch5Toggle(1050) === 'ptz_vis');

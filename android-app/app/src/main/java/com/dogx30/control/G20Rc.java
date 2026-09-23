@@ -41,13 +41,20 @@ public final class G20Rc {
         public final String device;
         public final String error;
         public final int[] ch;
+        public final int[] h16;
+        public final boolean[] keys;
+        public final String custom;
         public final int seq;
 
-        Snapshot(boolean connected, String device, String error, int[] ch, int seq) {
+        Snapshot(boolean connected, String device, String error, int[] ch,
+                 int[] h16, boolean[] keys, String custom, int seq) {
             this.connected = connected;
             this.device = device == null ? "" : device;
             this.error = error == null ? "" : error;
             this.ch = ch;
+            this.h16 = h16;
+            this.keys = keys;
+            this.custom = custom == null ? "" : custom;
             this.seq = seq;
         }
 
@@ -62,6 +69,13 @@ public final class G20Rc {
                 JSONArray arr = new JSONArray();
                 for (int v : ch) arr.put(v);
                 o.put("ch", arr);
+                JSONArray h = new JSONArray();
+                for (int v : h16) h.put(v);
+                o.put("h16", h);
+                JSONArray k = new JSONArray();
+                for (boolean v : keys) k.put(v);
+                o.put("keys", k);
+                o.put("custom", custom);
                 return o.toString();
             } catch (Exception e) {
                 return "{}";
@@ -87,6 +101,9 @@ public final class G20Rc {
     private String device = "";
     private String error = "";
     private int[] ch = new int[0];
+    private int[] h16 = new int[0];
+    private boolean[] keys = new boolean[8];
+    private String custom = "";
     private int seq;
 
     private final Runnable poll = this::requestChannels;
@@ -163,7 +180,10 @@ public final class G20Rc {
     }
 
     public synchronized Snapshot snapshot() {
-        return new Snapshot(connected, device, error, Arrays.copyOf(ch, ch.length), seq);
+        return new Snapshot(connected, device, error,
+                Arrays.copyOf(ch, ch.length),
+                Arrays.copyOf(h16, h16.length),
+                Arrays.copyOf(keys, keys.length), custom, seq);
     }
 
     public synchronized String pollJson() {
@@ -224,8 +244,10 @@ public final class G20Rc {
 
     private synchronized void onChannels(int[] value) {
         if (value == null) return;
-        ch = Arrays.copyOf(value, value.length);
-        seq++;
+        if (!Arrays.equals(ch, value)) {
+            ch = Arrays.copyOf(value, value.length);
+            seq++;
+        }
         emit();
     }
 

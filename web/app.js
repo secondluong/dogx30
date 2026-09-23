@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0921aj';
+const WEB_BUILD = '0923m';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -180,16 +180,23 @@ function noteWalkCmd(name) {
 app.noteWalkCmd = noteWalkCmd;
 
 function paintWalkButtons() {
+  const btn = $('btn-walk');
+  if (!btn) return;
   const walk = effectiveWalk();
-  document.querySelectorAll('[data-cmd="torque"]').forEach((b) => {
-    b.classList.toggle('on', walk === 'torque');
-  });
-  document.querySelectorAll('[data-cmd="step"]').forEach((b) => {
-    b.classList.toggle('on', walk === 'step');
-    const stopping = app.motionState === 'stopping';
-    b.textContent = walk === 'step' ? (stopping ? '停步中' : '停步') : '起步';
-    b.disabled = !!app.lioAligning || app.motionState === 'starting' || stopping;
-  });
+  const starting = app.motionState === 'starting';
+  const stopping = app.motionState === 'stopping';
+  // 与 L1 同序：显示「下一拍会做什么」。
+  if (walk === 'step') {
+    btn.textContent = stopping ? '停步中' : '停步';
+  } else if (walk === 'torque' || starting) {
+    btn.textContent = starting ? '起步中' : '起步';
+  } else {
+    btn.textContent = '力控';
+  }
+  // 不用全局 .btn.on（绿底黑字看不清）；行走态用白字高亮。
+  btn.classList.remove('on');
+  btn.classList.toggle('walk-hot', walk === 'step' || walk === 'torque' || starting);
+  btn.disabled = !!app.lioAligning || starting || stopping;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,8 +232,8 @@ function onWsOpen() {
   app.wsNativeOpen = hasNativeWs() && !app.useBrowserWs;
   app.wsNativeOpening = false;
   setLink(true);
-  // App 壳不自动订点云：MESH 上一上来就推大帧，WebSocket 会被撑断，看着像闪断。
-  if (!isAppShell && window.X30Cloud && window.X30Cloud.resubscribe) {
+  // 重连后若本地点云仍在订，补发一次。App 壳以前不补，断线后点云会一直空。
+  if (window.X30Cloud && window.X30Cloud.resubscribe) {
     window.X30Cloud.resubscribe();
   }
   if (window.X30Media && window.X30Media.onLinkOpen) {
@@ -404,13 +411,38 @@ window.X30NativeWs = {
 
 function drainNativeWs() {
   if (!hasNativeWs() || app.useBrowserWs) return;
-  if (!window.X30Native || typeof window.X30Native.wsPoll !== 'function') return;
+  // 安卓 WebView 里桥方法 typeof 常不是 function，用 in 判断。
+  if (!window.X30Native || !('wsPoll' in window.X30Native)) return;
   let raw = '[]';
   try { raw = window.X30Native.wsPoll() || '[]'; } catch (e) { return; }
   let arr;
   try { arr = JSON.parse(raw); } catch (e) { return; }
-  if (!arr || !arr.length) return;
-  for (let i = 0; i < arr.length; i++) handleWsText(arr[i]);
+  if (arr && arr.length) {
+    for (let i = 0; i < arr.length; i++) handleWsText(arr[i]);
+  }
+  // 点云走 MESH 网关的二进制帧，不是 2.4G。以前 typeof 误判把这一支整段跳过。
+  if (!('wsPollBin' in window.X30Native)) return;
+  let binRaw = '[]';
+  try { binRaw = window.X30Native.wsPollBin() || '[]'; } catch (e) { return; }
+  let bins;
+  try { bins = JSON.parse(binRaw); } catch (e) { return; }
+  if (!bins || !bins.length || !window.X30Cloud) return;
+  for (let i = 0; i < bins.length; i++) {
+    const buf = b64ToArrayBuffer(bins[i]);
+    if (buf) window.X30Cloud.onCloudFrame(buf);
+  }
+}
+
+function b64ToArrayBuffer(b64) {
+  if (!b64 || typeof b64 !== 'string') return null;
+  try {
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8.buffer;
+  } catch (e) {
+    return null;
+  }
 }
 
 // 切之前是哪一档。网关说切不成时要退回它，见 onGaitResult。
@@ -600,8 +632,9 @@ function syncRadioStanding(st0) {
   // 网页并不经手）。没有遥测时 basic 一直是 -1，只有 RadioLink 自己记着这件事，
   // 不读它的话左下角一直显示「起立」，操作员就找不到卸力 —— 而急停后不卸力
   // 起立是发不动的。有遥测时以遥测为准：别人卸过力我们也得跟着改口。
-  const src = typeof st.emergSrc === 'number' ? st.emergSrc : 0;
-  const locked = jointsLocked(basic, src) || !!st.emergency;
+  // 锁不锁以 RadioLink 为准。网页再按来源字节判一次，坐下+摔倒(7)会被
+  // 误判成卸力，左下角就出不了起立。
+  const locked = !!st.emergency;
   if (locked !== app.emergencyLocked) {
     app.emergencyLocked = locked;
     changed = true;
@@ -1297,6 +1330,7 @@ function paintModes() {
   if ($('btn-mode')) {
     $('btn-mode').textContent = app.workMode === 'cannon' ? '水炮' : '侦检';
   }
+  paintLearn();
 }
 
 // 气体类型格是固定的 10 路。空槽不占格；掉线把对应类型标成「掉线」。
@@ -1476,7 +1510,8 @@ function selectView(view) {
   speak(viewLabel(viewLayout.main));
 }
 
-// L1：没力控先出力控，出力控后再起步，走着再按就停步。
+// L1 / 屏幕行走键：力控 → 起步 → 停步。三级分开，不能把「未力控」直接当起步。
+// 踏步码是切换指令：本地状态一旦和狗错位，点「起步」就会变成停步。
 function cycleWalk() {
   const moving = app.motionState === 'walking' || app.motionState === 'starting';
   if (moving) {
@@ -1492,7 +1527,9 @@ function cycleWalk() {
     speak('停步');
     return;
   }
-  if (app.axisMode === 'pose') {
+  // 只有已力控才起步。stopped 必须先出力控，否则一键等于力控+踏步，
+  // 本地/狗不同步时下一次切换就会整反。
+  if (app.motionState === 'torque') {
     if (app.lioAligning) {
       showBanner('LIO 还在对准，请站稳，不要走', 4000);
       speak('LIO 对准中');
@@ -1699,6 +1736,31 @@ function sendRadioVel(c) {
   n.radioVel(c.fwd || 0, c.lat || 0, c.turn || 0, c.tilt || 0);
 }
 
+function paintLearn() {
+  const box = $('rc-learn');
+  if (!box) return;
+  const cannon = app.workMode === 'cannon';
+  box.classList.toggle('is-cannon', cannon);
+  box.classList.toggle('is-inspect', !cannon);
+}
+
+function learnOpen() {
+  const box = $('rc-learn');
+  return !!(box && !box.classList.contains('hidden'));
+}
+
+function setLearnOpen(on) {
+  const box = $('rc-learn');
+  if (!box) return;
+  box.classList.toggle('hidden', !on);
+  box.setAttribute('aria-hidden', on ? 'false' : 'true');
+  if ($('btn-learn')) $('btn-learn').classList.toggle('active', on);
+  if (on) {
+    closeBarPops();
+    paintLearn();
+  }
+}
+
 function setWorkMode(mode) {
   if (mode !== 'inspect' && mode !== 'cannon') return;
   app.workMode = mode;
@@ -1893,6 +1955,18 @@ function radioCmdFromEl(el) {
 function fireRadioFromEl(el) {
   let name = radioCmdFromEl(el);
   if (!name) return '';
+  // 与实体 L1 同一条循环：力控 → 起步 → 停步。
+  if (name === 'walk_cycle') {
+    const st = nativeRadioStatus() || {};
+    if (app.radioAcquirePending || !st.enabled || !st.ready) {
+      showBanner('2.4G 尚未完成控制权交接，请稍候', 4000);
+      speak('2.4G 尚未接管');
+      return 'blocked';
+    }
+    cycleWalk();
+    markPending(el);
+    return name;
+  }
   if (name === 'step') {
     const moving = app.motionState === 'walking' || app.motionState === 'starting';
     name = moving ? 'step_off' : 'step_on';
@@ -1938,6 +2012,11 @@ function markPending(el) {
 document.querySelectorAll('[data-cmd]').forEach((b) => {
   b.addEventListener('click', guarded(() => {
     let name = b.dataset.cmd;
+    if (name === 'walk_cycle') {
+      cycleWalk();
+      markPending(b);
+      return;
+    }
     if (name === 'stand' && app.emergencyLocked) name = 'unload';
     else if (name === 'stand') {
       name = isStandingUi() ? 'sit_down' : 'stand_up';
@@ -2148,6 +2227,22 @@ function cycleView() {
   viewLayout.mode = '1x1';
   applyLayout();
   speak(viewLabel(viewLayout.main));
+}
+
+if ($('btn-learn')) {
+  $('btn-learn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const next = !learnOpen();
+    setLearnOpen(next);
+    speak(next ? '按键学习已开' : '按键学习已关');
+  });
+}
+if ($('btn-learn-close')) {
+  $('btn-learn-close').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setLearnOpen(false);
+    speak('按键学习已关');
+  });
 }
 
 $('btn-mode').addEventListener('click', (e) => {

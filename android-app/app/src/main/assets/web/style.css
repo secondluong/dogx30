@@ -102,6 +102,68 @@ body {
 .bar-mode, .bar-view { position: relative; }
 .bar-view { display: none; }
 
+/* 按键学习：铺在主画面上，左右分区对上遥控器。 */
+.rc-learn {
+  position: absolute;
+  inset: 0;
+  z-index: 16;
+  pointer-events: none;
+}
+.rc-learn-head {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 14px;
+  border-radius: 999px;
+  background: rgba(13, 17, 23, .82);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: auto;
+  z-index: 1;
+}
+.rc-learn-map { position: absolute; inset: 52px 14px 14px; }
+.rc-learn-card {
+  position: absolute;
+  width: min(240px, 34vw);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(13, 17, 23, .78);
+  border: 1px solid rgba(127, 178, 255, .35);
+  color: var(--text);
+  pointer-events: auto;
+  backdrop-filter: blur(6px);
+}
+.rc-learn-card b {
+  display: block;
+  font-size: 13px;
+  color: var(--accent-soft);
+  margin-bottom: 2px;
+}
+.rc-learn-card p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #d5dde6;
+}
+.rc-learn.is-cannon .for-inspect,
+.rc-learn.is-inspect .for-cannon { display: none; }
+.rc-learn-card[data-key="sw1"] { top: 0; left: 0; }
+.rc-learn-card[data-key="lstick"] { top: 22%; left: 0; }
+.rc-learn-card[data-key="laux"] { top: 48%; left: 0; }
+.rc-learn-card[data-key="l1"] { bottom: 0; left: 0; width: min(150px, 22vw); }
+.rc-learn-card[data-key="l2"] { bottom: 0; left: calc(min(150px, 22vw) + 8px); width: min(168px, 24vw); }
+.rc-learn-card[data-key="sw2"] { top: 0; right: 0; }
+.rc-learn-card[data-key="rstick"] { top: 22%; right: 0; }
+.rc-learn-card[data-key="raux"] { top: 48%; right: 0; }
+.rc-learn-card[data-key="lknob"] { bottom: 0; right: calc(min(168px, 24vw) + 8px); width: min(168px, 24vw); }
+.rc-learn-card[data-key="rknob"] { bottom: 0; right: 0; width: min(168px, 24vw); }
+
 /* ---------- 按钮 ---------- */
 
 .btn {
@@ -1184,6 +1246,14 @@ html.shell-app .hud-info {
   background: rgba(28, 34, 48, .78);
   backdrop-filter: blur(6px);
   white-space: nowrap;
+  color: var(--text);
+}
+/* 起步/停步高亮：白字。全局 .btn.on 是绿底近黑字，在这块看不清。 */
+.hud-stand .hud-walk .btn.walk-hot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
 }
 .hud-stand-btn.need {
   background: #c9a227;
@@ -1385,4 +1455,88 @@ html.radio-24.pose-known .dog-prone .hud-stand .hud-walk { display: none !import
   .sw-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .hud-info { width: min(640px, calc(100% - 24px)); }
   .hud-gp { right: 16px; top: 88px; }
+}
+
+/* 按键学习：按遥控器左右分区铺在主画面上，不挡顶栏操作。 */
+.rc-learn {
+  position: absolute;
+  inset: 0;
+  z-index: 16;
+  pointer-events: none;
+}
+.rc-learn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 10, 16, .42);
+}
+.rc-learn-head {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 14px;
+  border-radius: 999px;
+  background: rgba(22, 27, 34, .88);
+  border: 1px solid var(--line);
+  pointer-events: auto;
+  font-weight: 600;
+}
+.rc-learn-map { position: absolute; inset: 52px 12px 16px; }
+.rc-learn-card {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(280px, 38vw);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(22, 27, 34, .88);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+.rc-learn-ico {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #ececec;
+}
+.rc-learn-txt { min-width: 0; }
+.rc-learn-card b {
+  display: block;
+  font-size: 13px;
+  color: var(--accent-soft);
+  margin-bottom: 2px;
+}
+.rc-learn-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.rc-learn.is-cannon .for-inspect,
+.rc-learn.is-inspect .for-cannon { display: none; }
+.rc-learn-card[data-key="sw1"] { top: 0; left: 0; }
+.rc-learn-card[data-key="lstick"] { top: 20%; left: 0; }
+.rc-learn-card[data-key="laux"] { top: 44%; left: 0; }
+.rc-learn-card[data-key="l1"] { bottom: 80px; left: 0; }
+.rc-learn-card[data-key="l2"] { bottom: 0; left: 0; }
+.rc-learn-card[data-key="sw2"] { top: 0; right: 0; }
+.rc-learn-card[data-key="rstick"] { top: 20%; right: 0; }
+.rc-learn-card[data-key="raux"] { top: 44%; right: 0; }
+.rc-learn-card[data-key="lknob"] { bottom: 80px; right: 0; }
+.rc-learn-card[data-key="rknob"] { bottom: 0; right: 0; }
+
+@media (max-width: 820px) {
+  .rc-learn-card { width: min(200px, 42vw); padding: 6px 8px; }
+  .rc-learn-ico { width: 40px; height: 40px; flex-basis: 40px; }
+  .rc-learn-card[data-key="l1"],
+  .rc-learn-card[data-key="lknob"] { bottom: 70px; }
 }

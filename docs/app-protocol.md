@@ -165,8 +165,10 @@ App 在能直达球机时也会自己发同一条 CGI，所以 2.4G、没拿到�
 {"t":"ptz_pip","ok":true,"mode":2,"size":0,"pos":0}
 ```
 
-对讲不走本协议。App 点一下 HOME（CH10）开麦并听球机返回声，再点关麦并静音。
-经球机 `https://<球IP>:1988/rtc/v1/play/` 建 WebRTC 数据通道，推 G.711A；
+对讲不走本协议。左旋钮 CH11 关到开并调对讲音量，右旋钮 CH12 关到开并调听球音量。
+R1/HOME 不再开关对讲和听球。人讲话时把球听压低。R2 硬件会滴但没有键值。
+经球机 `https://<球IP>:1988/rtc/v1/play/` 建 WebRTC 数据通道，等 interaction
+回 `OK\0`，再 `status=SoundOn\0`，按 audioType 推 G.711A/U；
 听现场走已拉的 RTSP 音轨。桌面网页仍走网关 WHIP。
 
 水炮（需要控制权）。侦检模式下小摇杆走上面的 `ptz`；水炮模式下走这两条。
