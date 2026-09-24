@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "x30/payload_switch.hpp"
 #include "x30/udp_endpoint.hpp"
@@ -27,10 +28,10 @@ inline constexpr int kGasSlotCount = 10;
 inline constexpr size_t kGasFrameSize = 65;
 inline constexpr uint16_t kGasDefaultPort = 1000;
 
-// UWB 标签 3A 56，与气体同一条 UDP。白名单 15 / 11 是单兵。
+// UWB 标签 3A 56，与气体同一条 UDP。帧里的 ID 原样收下，不再按名单过滤。
+// 同时记住的标签有上限，只为挡住垃圾帧把状态撑满。
 inline constexpr size_t kUwbFrameSize = 23;
-inline constexpr int kUwbTagCount = 2;
-inline constexpr uint8_t kUwbTagIds[kUwbTagCount] = {15, 11};
+inline constexpr int kUwbTagCap = 16;
 
 enum class GasSlotStatus {
   kEmpty,    // ID=0 且浓度为 0：空槽
@@ -65,7 +66,7 @@ struct UwbTag {
 struct UwbSnapshot {
   bool alive = false;
   bool heard = false;
-  UwbTag tags[kUwbTagCount];
+  std::vector<UwbTag> tags;
 };
 
 struct GasClientConfig {
@@ -96,9 +97,7 @@ bool ParseGasFrame(const uint8_t* data, size_t len, GasSlot slots[kGasSlotCount]
 void BuildGasFrame(const GasSlot slots[kGasSlotCount],
                    uint8_t out[kGasFrameSize]);
 
-int UwbTagIndex(uint8_t id);
-
-// 从一段 UDP 载荷里找出 `3A 56`。valid=0 时仍返回 true，但 xyz 应丢弃。
+// 从一段 UDP 载荷里找出 `3A 56`。任何标签 ID 都收。valid=0 时仍返回 true，但 xyz 应丢弃。
 bool ParseUwbFrame(const uint8_t* data, size_t len, UwbTag* out,
                    bool* crc_ok = nullptr);
 void BuildUwbFrame(uint8_t subtype, uint8_t id, bool valid, int32_t x_mm,
@@ -147,8 +146,12 @@ class GasClient {
   GasSnapshot snap_{};
   std::chrono::steady_clock::time_point last_frame_{};
   bool logged_first_ = false;
-  UwbSnapshot uwb_{};
-  std::chrono::steady_clock::time_point uwb_last_[kUwbTagCount]{};
+  struct UwbTrack {
+    UwbTag tag;
+    std::chrono::steady_clock::time_point last{};
+  };
+  std::vector<UwbTrack> uwb_tracks_;
+  bool uwb_heard_ = false;
   bool logged_uwb_ = false;
   std::function<void(const SwitchAck&)> on_switch_ack_;
   std::function<void(const std::string&, uint16_t)> on_peer_;

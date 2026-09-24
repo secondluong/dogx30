@@ -1,5 +1,6 @@
 #include "x30/gas_client.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
@@ -216,13 +217,6 @@ void BuildGasFrame(const GasSlot slots[kGasSlotCount],
   out[64] = static_cast<uint8_t>(crc);
 }
 
-int UwbTagIndex(uint8_t id) {
-  for (int i = 0; i < kUwbTagCount; ++i) {
-    if (kUwbTagIds[i] == id) return i;
-  }
-  return -1;
-}
-
 bool ParseUwbFrame(const uint8_t* data, size_t len, UwbTag* out, bool* crc_ok) {
   if (crc_ok) *crc_ok = false;
   if (data == nullptr || out == nullptr || len < kUwbFrameSize) return false;
@@ -230,7 +224,6 @@ bool ParseUwbFrame(const uint8_t* data, size_t len, UwbTag* out, bool* crc_ok) {
   size_t off = static_cast<size_t>(-1);
   for (size_t i = 0; i + kUwbFrameSize <= len; ++i) {
     if (data[i] != 0x3A || data[i + 1] != 0x56) continue;
-    if (UwbTagIndex(data[i + 3]) < 0) continue;
     off = i;
     break;
   }
@@ -274,9 +267,7 @@ void BuildUwbFrame(uint8_t subtype, uint8_t id, bool valid, int32_t x_mm,
   out[22] = static_cast<uint8_t>(crc);
 }
 
-GasClient::GasClient(GasClientConfig config) : cfg_(config) {
-  for (int i = 0; i < kUwbTagCount; ++i) uwb_.tags[i].id = kUwbTagIds[i];
-}
+GasClient::GasClient(GasClientConfig config) : cfg_(config) {}
 
 GasClient::~GasClient() { Stop(); }
 
@@ -338,20 +329,23 @@ std::string GasClient::Json() const {
 
 UwbSnapshot GasClient::SnapshotUwb() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  UwbSnapshot s = uwb_;
-  if (s.heard) {
-    s.alive = false;
-    const auto now = Clock::now();
-    for (int i = 0; i < kUwbTagCount; ++i) {
-      if (!s.tags[i].heard) continue;
-      const auto age = now - uwb_last_[i];
-      if (age >= std::chrono::milliseconds(cfg_.uwb_timeout_ms)) {
-        s.tags[i].valid = false;
-      } else if (s.tags[i].valid) {
-        s.alive = true;
-      }
+  UwbSnapshot s;
+  s.heard = uwb_heard_;
+  if (!s.heard) return s;
+  const auto now = Clock::now();
+  s.tags.reserve(uwb_tracks_.size());
+  for (const UwbTrack& tr : uwb_tracks_) {
+    UwbTag t = tr.tag;
+    const auto age = now - tr.last;
+    if (age >= std::chrono::milliseconds(cfg_.uwb_timeout_ms)) {
+      t.valid = false;
+    } else if (t.valid) {
+      s.alive = true;
     }
+    s.tags.push_back(t);
   }
+  std::sort(s.tags.begin(), s.tags.end(),
+            [](const UwbTag& a, const UwbTag& b) { return a.id < b.id; });
   return s;
 }
 
@@ -359,10 +353,9 @@ std::string GasClient::UwbJson() const {
   const UwbSnapshot s = SnapshotUwb();
   JsonWriter w;
   w.BeginObject().Key("alive", s.alive).Key("heard", s.heard).BeginArray("tags");
-  for (int i = 0; i < kUwbTagCount; ++i) {
-    const UwbTag& t = s.tags[i];
+  for (const UwbTag& t : s.tags) {
     w.BeginObject()
-        .Key("id", static_cast<int>(t.id ? t.id : kUwbTagIds[i]))
+        .Key("id", static_cast<int>(t.id))
         .Key("valid", t.valid)
         .Key("heard", t.heard);
     if (t.valid) {
@@ -434,14 +427,27 @@ void GasClient::ApplyFrame(const GasSlot slots[kGasSlotCount]) {
 }
 
 void GasClient::ApplyUwb(const UwbTag& tag) {
-  const int idx = UwbTagIndex(tag.id);
-  if (idx < 0) return;
   std::lock_guard<std::mutex> lock(mutex_);
-  uwb_.tags[idx] = tag;
-  uwb_.tags[idx].id = kUwbTagIds[idx];
-  uwb_.heard = true;
-  if (tag.valid) uwb_.alive = true;
-  uwb_last_[idx] = Clock::now();
+  const auto now = Clock::now();
+  for (UwbTrack& tr : uwb_tracks_) {
+    if (tr.tag.id != tag.id) continue;
+    tr.tag = tag;
+    tr.last = now;
+    uwb_heard_ = true;
+    return;
+  }
+  if (static_cast<int>(uwb_tracks_.size()) >= kUwbTagCap) {
+    auto oldest = uwb_tracks_.begin();
+    for (auto it = uwb_tracks_.begin(); it != uwb_tracks_.end(); ++it) {
+      if (it->last < oldest->last) oldest = it;
+    }
+    uwb_tracks_.erase(oldest);
+  }
+  UwbTrack tr;
+  tr.tag = tag;
+  tr.last = now;
+  uwb_tracks_.push_back(tr);
+  uwb_heard_ = true;
 }
 
 }  // namespace x30

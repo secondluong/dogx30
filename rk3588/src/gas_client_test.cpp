@@ -139,13 +139,15 @@ int main() {
     return Fail("无效 UWB 帧应丢弃 XYZ");
   }
 
-  x30::BuildUwbFrame(0x01, 7, true, 100, 0, 0, 1, uwb);
-  if (x30::ParseUwbFrame(uwb, sizeof(uwb), &tag, nullptr)) {
-    return Fail("非白名单标签不该收下");
+  x30::BuildUwbFrame(0x01, 6, true, 500, -200, 0, 2, uwb);
+  if (!x30::ParseUwbFrame(uwb, sizeof(uwb), &tag, nullptr) || tag.id != 6 ||
+      !tag.valid || !Near(tag.x, 0.5f)) {
+    return Fail("ID 6 应原样收下");
   }
-  if (x30::UwbTagIndex(15) != 0 || x30::UwbTagIndex(11) != 1 ||
-      x30::UwbTagIndex(3) >= 0) {
-    return Fail("UWB 白名单下标不对");
+  x30::BuildUwbFrame(0x01, 9, true, -100, 300, 50, 3, uwb);
+  if (!x30::ParseUwbFrame(uwb, sizeof(uwb), &tag, nullptr) || tag.id != 9 ||
+      !tag.valid || !Near(tag.y, 0.3f)) {
+    return Fail("ID 9 应原样收下");
   }
 
   std::printf("gas_client_test 通过\n");

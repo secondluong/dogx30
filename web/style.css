@@ -690,6 +690,7 @@ html.shell-app #pane-ptz-vis.is-main .ptz-pip-btn {
 .uwb-card[data-id="15"] .uwb-dot { background: #ff7a28; }
 .uwb-card[data-id="11"] .uwb-dot { background: #3fd4ff; }
 .uwb-dot {
+  background: #c8d0dc;
   display: inline-block;
   width: 8px;
   height: 8px;
