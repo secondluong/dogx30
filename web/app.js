@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0924a';
+const WEB_BUILD = '0924c';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -115,6 +115,7 @@ const app = {
   pendingCycle: null,         // MESH 下 L1/L2：要到控制权后再执行 'walk'|'pose'
   modePick: null,         // 狗本体：manual | auto。菜单不再露这两档，默认手动。
   workMode: 'inspect',    // 侦检 | 水炮，只管小摇杆用途
+  cannonTelem: null,      // 网关 state.cannon，有 have_pressure 才画顶栏水压
   left: { x: 0, y: 0 },   // 左摇杆：x=平移, y=前后
   right: { x: 0, y: 0 },  // 右摇杆：x=转向；y 仅在控布控球时为俯仰
 };
@@ -1244,6 +1245,9 @@ function renderState(s) {
     chipState.classList.toggle('online', s.alive);
   }
 
+  if (s.cannon && typeof s.cannon === 'object') app.cannonTelem = s.cannon;
+  paintCannonPressure();
+
   const batt = s.battery || {};
   const battText = batt.valid ? `${batt.level}% · ${fmt(batt.voltage, 1)}V` : '—';
   $('chip-batt').textContent = battText;
@@ -1767,7 +1771,14 @@ function paintStickChip() {
   if (!el) return;
   const cannon = app.workMode === 'cannon';
   el.classList.remove('hidden');
-  el.textContent = cannon ? '水炮' : '侦检';
+  let label = '侦检';
+  if (cannon) {
+    if (cannonFiring) label = '水炮 · 发射';
+    else if (sprayArmed === 'fog') label = '水炮 · 雾';
+    else if (sprayArmed === 'jet') label = '水炮 · 柱';
+    else label = '水炮';
+  }
+  el.textContent = label;
   el.classList.toggle('online', cannon);
   updateStickHints(false);
   updateStickAvailability();
@@ -1811,15 +1822,65 @@ function setLearnOpen(on) {
 
 function setWorkMode(mode) {
   if (mode !== 'inspect' && mode !== 'cannon') return;
+  const prev = app.workMode;
   app.workMode = mode;
   try { window.localStorage.setItem('x30.workMode', mode); } catch (e) { /* */ }
+  if (prev === 'cannon' && mode !== 'cannon') {
+    setCannonFire(false, true);
+    sprayArmed = '';
+    send({ t: 'cannon', pan: 0, tilt: 0 });
+    send({ t: 'cannon_spray', value: 'mid' });
+  }
   paintModes();
   paintStickChip();
+  paintCannonFire();
+  paintCannonPressure();
   speak(mode === 'cannon' ? '水炮模式' : '侦检模式');
 }
 
 let sprayArmed = '';
+let cannonFiring = false;
 let pipArmed = '';
+
+function setCannonFire(on, silent) {
+  const fire = !!on;
+  if (app.workMode !== 'cannon' && fire) return;
+  if (cannonFiring === fire) {
+    if (fire) send({ t: 'cannon_fire', on: true });
+    return;
+  }
+  cannonFiring = fire;
+  send({ t: 'cannon_fire', on: fire });
+  if (!silent) {
+    speak(fire ? '发射' : '停射');
+    if (fire) showBanner('水炮：发射');
+  }
+  paintCannonFire();
+  paintStickChip();
+}
+app.onCannonFire = function (on) { setCannonFire(on, false); };
+
+function paintCannonFire() {
+  const btn = $('btn-cannon-fire');
+  if (!btn) return;
+  const show = app.workMode === 'cannon';
+  btn.classList.toggle('hidden', !show);
+  btn.classList.toggle('walk-hot', cannonFiring);
+  btn.setAttribute('aria-pressed', cannonFiring ? 'true' : 'false');
+}
+
+function paintCannonPressure() {
+  const el = $('cannon-psi');
+  if (!el) return;
+  const c = app.cannonTelem;
+  const psi = c && typeof c.pressure_mpa === 'number' ? c.pressure_mpa : NaN;
+  const has = app.workMode === 'cannon' && c && c.have_pressure && psi > 0;
+  el.classList.toggle('hidden', !has);
+  if (has) {
+    const text = psi >= 10 ? psi.toFixed(1) : psi.toFixed(2);
+    el.textContent = '当前水压：' + text + '  MPa';
+  }
+}
 
 function applyPipStick(c) {
   try {
@@ -1865,20 +1926,25 @@ function sendAuxPayload(c, viaGateway) {
   // 2.4G 档已 yield 运动控制权；载荷仍走 MESH，不要求 hasControl。
   const meshPayload = viaGateway && (app.hasControl || radioDirect());
   if (app.workMode === 'cannon') {
-    if (meshPayload && moving) {
-      send({ t: 'cannon', pan: -ax, tilt: ay });
-    }
+    // 载荷不占运动控制权；能走 MESH 就发。雾/柱是花型，开阀才出水。
     const detent = zoom <= -0.45 ? 'jet' : (zoom >= 0.45 ? 'fog' : 'mid');
-    if (!sprayArmed) sprayArmed = detent;
-    else if (detent !== sprayArmed) {
-      if (sprayArmed === 'mid' && (detent === 'fog' || detent === 'jet')) {
-        if (meshPayload) {
-          send({ t: 'cannon_spray', value: detent });
+    if (viaGateway) {
+      send({
+        t: 'cannon',
+        pan: Math.abs(ax) > 0.08 ? -ax : 0,
+        tilt: Math.abs(ay) > 0.08 ? ay : 0,
+      });
+      if (!sprayArmed) sprayArmed = detent;
+      else if (detent !== sprayArmed) {
+        sprayArmed = detent;
+        send({ t: 'cannon_spray', value: detent });
+        if (detent === 'fog' || detent === 'jet') {
+          speak(detent === 'fog' ? '雾状' : '柱状');
+          showBanner(detent === 'fog' ? '水炮：雾状' : '水炮：柱状');
         }
-        speak(detent === 'fog' ? '雾状喷射' : '柱状喷射');
-        showBanner(detent === 'fog' ? '水炮：雾状' : '水炮：柱状');
+        paintStickChip();
       }
-      sprayArmed = detent;
+      if (cannonFiring) send({ t: 'cannon_fire', on: true });
     }
     return;
   }
@@ -1994,6 +2060,7 @@ $('btn-estop').addEventListener('click', () => {
     applyRadioPose('estop');
   }
   send({ t: 'cmd', name: 'estop' });
+  setCannonFire(false, true);
   app.emergencyLocked = true;
   app.rlStanding = false;
   const wrap = $('stage-wrap');
@@ -2400,6 +2467,30 @@ document.querySelectorAll('#stage .pane').forEach((pane) => {
 
 applyLayout();
 paintModes();
+paintCannonFire();
+paintCannonPressure();
+
+(function bindCannonFire() {
+  const btn = $('btn-cannon-fire');
+  if (!btn) return;
+  const down = (ev) => {
+    ev.preventDefault();
+    setCannonFire(true, false);
+  };
+  const up = (ev) => {
+    ev.preventDefault();
+    setCannonFire(false, false);
+  };
+  btn.addEventListener('pointerdown', down);
+  btn.addEventListener('pointerup', up);
+  btn.addEventListener('pointercancel', up);
+  btn.addEventListener('pointerleave', (ev) => {
+    if (cannonFiring) up(ev);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) setCannonFire(false, true);
+  });
+})();
 
 function closeAccordions() {
   document.querySelectorAll('.acc-pop').forEach((p) => p.classList.add('hidden'));

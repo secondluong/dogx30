@@ -300,6 +300,8 @@ void ApplySettings(const GatewaySettings& s, MotionClientConfig* motion,
   svc->settings.payload_port = s.payload_port;
   svc->settings.light_ip = s.light_ip;
   svc->settings.light_port = s.light_port;
+  svc->settings.cannon_ip = s.cannon_ip;
+  svc->settings.cannon_port = s.cannon_port;
 
   svc->port = s.http_port;
   svc->bind_address = s.bind_address;
@@ -334,6 +336,8 @@ GatewaySettings SettingsOf(const MotionClientConfig& motion,
   s.payload_port = svc.settings.payload_port;
   s.light_ip = svc.settings.light_ip;
   s.light_port = svc.settings.light_port;
+  s.cannon_ip = svc.settings.cannon_ip;
+  s.cannon_port = svc.settings.cannon_port;
 
   s.http_port = svc.port;
   s.bind_address = svc.bind_address;

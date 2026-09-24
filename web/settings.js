@@ -65,6 +65,10 @@
                 '不能填载荷主板，STM32 不处理条纹灯。' },
         { key: 'light_port', label: '条纹灯板端口', type: 'number',
           hint: '默认 9000。' },
+        { key: 'cannon_ip', label: '水炮 IP', type: 'text',
+          hint: '消防炮 TCP Server，现场 1 网 192.168.1.253。网关 eth0 去连。空则不连。' },
+        { key: 'cannon_port', label: '水炮端口', type: 'number',
+          hint: '默认 4000。' },
       ],
     },
     {

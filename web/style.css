@@ -93,6 +93,16 @@ body {
 #chip-stick:not(.hidden) { display: inline-flex; cursor: pointer; }
 
 .bar-right { display: flex; align-items: center; gap: 10px; }
+/* 只靠字重和颜色醒目，不写 display，免得压过 .hidden。 */
+.cannon-psi {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: .04em;
+  color: #ffe566;
+  text-shadow: 0 0 10px rgba(255, 229, 102, .45);
+  white-space: nowrap;
+}
 .bar-mode, .bar-view { position: relative; }
 .bar-view { display: none; }
 
@@ -1309,11 +1319,18 @@ html.shell-app .hud-info {
   color: var(--text);
 }
 /* 起步/停步高亮：白字。全局 .btn.on 是绿底近黑字，在这块看不清。 */
-.hud-stand .hud-walk .btn.walk-hot {
+.hud-stand .hud-walk .btn.walk-hot,
+.hud-stand .hud-fire.walk-hot {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
   font-weight: 600;
+}
+.hud-stand .hud-fire {
+  background: rgba(28, 34, 48, .78);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+  color: var(--text);
 }
 .hud-stand-btn.need {
   background: #c9a227;

@@ -1048,8 +1048,34 @@ check('网关云台水炮不绑运动控制权',
       /云台是载荷/.test(serviceCpp) &&
       /t == "ptz"[\s\S]{0,200}if \(ptz_\)/.test(serviceCpp) &&
       !/t == "ptz"[\s\S]{0,80}HoldsControl/.test(serviceCpp) &&
-      /t == "cannon"[\s\S]{0,120}return;/.test(serviceCpp) &&
+      /t == "cannon" \|\| t == "cannon_spray" \|\| t == "cannon_fire"/.test(serviceCpp) &&
+      /cannon_->SetAim/.test(serviceCpp) &&
+      /cannon_->SetFire/.test(serviceCpp) &&
       !/t == "cannon"[\s\S]{0,80}HoldsControl/.test(serviceCpp));
+var cannonHpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'cannon_client.hpp'), 'utf8');
+var cannonCpp = fs.readFileSync(
+  path.join(__dirname, '..', 'rk3588', 'src', 'cannon_client.cpp'), 'utf8');
+check('水炮走消防炮 TCP，HOME 按住开阀',
+      /192\.168\.1\.253/.test(cannonHpp) &&
+      /kCannonFrameSize = 13/.test(cannonHpp) &&
+      /EncodeCannonFrame/.test(cannonCpp) &&
+      /d2 \|= 0x02/.test(cannonCpp) &&
+      /function setCannonFire/.test(appJs) &&
+      /t: 'cannon_fire'/.test(appJs) &&
+      /app\.onCannonFire/.test(appJs) &&
+      /injectCannonFire/.test(radioBridge) &&
+      /KEYCODE_HOME/.test(radioBridge) &&
+      /id="btn-cannon-fire"/.test(html) &&
+      /data-key="home"/.test(html) &&
+      /cannon_ip/.test(read('settings.js')));
+check('水炮模式有水压时在学习前显示 MPa',
+      /id="cannon-psi"/.test(html) &&
+      html.indexOf('id="cannon-psi"') < html.indexOf('id="btn-learn"') &&
+      /function paintCannonPressure/.test(appJs) &&
+      /当前水压：/.test(appJs) &&
+      /cannon-psi/.test(read('style.css')) &&
+      !/#cannon-psi\s*\{[^}]*display/.test(read('style.css')));
 check('网关连上不依赖狗，芯片写网关已连',
       /网关已连/.test(appJs) &&
       !/把板子 eth0 网线插回机身口/.test(appJs));

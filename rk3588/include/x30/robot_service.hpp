@@ -20,6 +20,7 @@
 #include "x30/gait_coordinator.hpp"
 #include "x30/gas_client.hpp"
 #include "x30/gateway_config.hpp"
+#include "x30/cannon_client.hpp"
 #include "x30/payload_switch.hpp"
 #include "x30/localizer.hpp"
 #include "x30/media_registry.hpp"
@@ -143,6 +144,7 @@ class RobotService {
   std::unique_ptr<RosClient> battery_ros_;
   std::unique_ptr<GasClient> gas_;
   std::unique_ptr<PayloadSwitch> switches_;
+  std::unique_ptr<CannonClient> cannon_;
   Localizer localizer_;
   std::chrono::steady_clock::time_point last_scan_{};
   mutable std::mutex lio_mutex_;

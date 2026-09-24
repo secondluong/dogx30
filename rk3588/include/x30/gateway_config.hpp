@@ -43,6 +43,10 @@ struct GatewaySettings {
   std::string light_ip = "192.168.1.200";
   uint16_t light_port = 9000;
 
+  // 消防炮 TCP Server，现场 1 网 192.168.1.253:4000。空 = 不连。
+  std::string cannon_ip = "192.168.1.253";
+  uint16_t cannon_port = 4000;
+
   uint16_t http_port = 8080;
   std::string bind_address = "192.168.10.120";
 

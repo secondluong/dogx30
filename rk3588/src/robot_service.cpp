@@ -254,6 +254,14 @@ bool RobotService::Start(std::string* error) {
     }
   }
 
+  if (!cfg_.settings.cannon_ip.empty() && cfg_.settings.cannon_port != 0) {
+    CannonConfig cc;
+    cc.host = cfg_.settings.cannon_ip;
+    cc.port = cfg_.settings.cannon_port;
+    cannon_ = std::make_unique<CannonClient>(std::move(cc));
+    cannon_->Start();
+  }
+
   server_.SetStaticRoot(cfg_.static_root);
   server_.SetHandlers([this](WsServer::ClientId id) { OnConnect(id); },
                       [this](WsServer::ClientId id, const std::string& text) {
@@ -280,6 +288,7 @@ void RobotService::Stop() {
   if (body_monitor_) body_monitor_->Stop();
   if (cloud_) cloud_->Stop();
   if (switches_) switches_->Stop();
+  if (cannon_) cannon_->Stop();
   if (gas_) gas_->Stop();
   gaits_.Stop();
   server_.Stop();
@@ -714,6 +723,7 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     if (name == "estop") {
       gaits_.ClearQueued();
       client_.SoftEmergencyStop();
+      if (cannon_) cannon_->Idle();
       std::printf("[ws] 客户端 %llu 触发软急停\n",
                   static_cast<unsigned long long>(id));
       return;
@@ -887,9 +897,20 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     return;
   }
 
-  // 水炮云台/喷射还没接到实机协议上。先把消息吃掉，避免 20 Hz 刷「未知消息」。
-  // 与云台一样：不绑运动控制权，2.4G 运动档 yield 后仍可经 MESH 下发。
-  if (t == "cannon" || t == "cannon_spray") {
+  // 水炮是载荷：不绑运动控制权，2.4G 档 yield 后仍走 MESH。
+  // 网关转成炮台 13 字节 TCP 帧（192.168.1.253:4000）。
+  if (t == "cannon" || t == "cannon_spray" || t == "cannon_fire") {
+    if (cannon_) {
+      if (msg.Has("pan") || msg.Has("tilt") || t == "cannon") {
+        cannon_->SetAim(Clamp01(msg.Number("pan")), Clamp01(msg.Number("tilt")));
+      }
+      if (msg.Has("value") || t == "cannon_spray") {
+        cannon_->SetSpray(msg.String("value"));
+      }
+      if (t == "cannon_fire" || msg.Has("on")) {
+        cannon_->SetFire(msg.Bool("on"));
+      }
+    }
     return;
   }
 
@@ -1454,6 +1475,7 @@ std::string RobotService::BuildStateJson() const {
     w.Raw("uwb", gas_->UwbJson());
   }
   if (switches_) w.Raw("switches", switches_->Json());
+  if (cannon_) w.Raw("cannon", cannon_->Json());
 
   w.BeginArray("errors");
   const std::string errors = DescribeErrors(s.error_state);

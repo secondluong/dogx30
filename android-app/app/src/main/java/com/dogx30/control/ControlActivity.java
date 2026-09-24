@@ -605,7 +605,7 @@ public class ControlActivity extends AppCompatActivity {
                 null);
     }
 
-    /** 左旋 CH11 开麦并调音量，右旋 CH12 听球并调音量。R1/HOME 不再开关。 */
+    /** 左旋 CH11 开麦并调音量，右旋 CH12 听球并调音量。HOME 留给水炮发射。 */
     private void applyRcButtons(G20Rc.Snapshot snap) {
         if (snap == null || !snap.connected) return;
         rcTickAt = System.currentTimeMillis();
@@ -954,10 +954,26 @@ public class ControlActivity extends AppCompatActivity {
         web.evaluateJavascript(js, null);
     }
 
+    private void injectCannonFire(boolean on) {
+        if (web == null) return;
+        String js = "window.app&&app.onCannonFire&&app.onCannonFire("
+                + (on ? "true" : "false") + ")";
+        web.evaluateJavascript(js, null);
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (isListenKey(event.getKeyCode())) {
-            // HOME 等系统键吞掉，避免退出；听球改由右旋 CH12。
+            // HOME 吞掉以免退到桌面。水炮模式按住开阀，侦检模式仍无动作。
+            // 听球改由右旋 CH12。
+            if (event.getKeyCode() == KeyEvent.KEYCODE_HOME) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN
+                        && event.getRepeatCount() == 0) {
+                    injectCannonFire(true);
+                } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                    injectCannonFire(false);
+                }
+            }
             return true;
         }
         injectKey(event);
@@ -1030,6 +1046,7 @@ public class ControlActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        injectCannonFire(false);
         if (pausingForMic || CameraTalk.get().isOn() || pendingTalkStart != null
                 || System.currentTimeMillis() - homeAt < 4000) return;
         if (video != null) video.pauseForBackground();

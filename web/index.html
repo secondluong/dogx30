@@ -17,7 +17,7 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260923m">
+<link rel="stylesheet" href="style.css?v=20260924c">
 </head>
 <body>
 
@@ -34,6 +34,7 @@
   </div>
 
   <div class="bar-right">
+    <span id="cannon-psi" class="cannon-psi hidden" aria-live="polite">当前水压：—  MPa</span>
     <button type="button" class="btn btn-ghost" id="btn-learn" data-say="">学习</button>
     <div class="bar-mode" id="bar-mode">
       <button type="button" class="btn btn-ghost" id="btn-mode">模式</button>
@@ -196,7 +197,14 @@
         <div class="rc-learn-txt">
           <b>右小摇杆</b>
           <p class="for-inspect">侦检：主图双光时左右切画中画、上下变焦；主图点云时上下缩放；主图狗身视频时不控球</p>
-          <p class="for-cannon">水炮：喷射模式</p>
+          <p class="for-cannon">水炮：拨住选雾状或柱状（花型，不是出水）</p>
+        </div>
+      </article>
+      <article class="rc-learn-card for-cannon" data-key="home">
+        <img class="rc-learn-ico" src="icons/rc-home.png" alt="HOME">
+        <div class="rc-learn-txt">
+          <b>HOME</b>
+          <p>水炮：按住发射（开阀出水），松开停射</p>
         </div>
       </article>
       <article class="rc-learn-card" data-key="lknob">
@@ -416,6 +424,7 @@
     <div class="hud-walk">
       <button type="button" class="btn sm" id="btn-walk" data-cmd="walk_cycle">力控</button>
     </div>
+    <button type="button" class="btn sm hud-fire hidden" id="btn-cannon-fire" data-say="" aria-pressed="false">发射</button>
     <button type="button" class="btn hud-stand-btn" data-cmd="stand" id="btn-stand">起立</button>
   </div>
 

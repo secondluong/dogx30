@@ -42,6 +42,8 @@ conf_defaults() {
   PAYLOAD_PORT="2000"
   LIGHT_IP="192.168.1.200"
   LIGHT_PORT="9000"
+  CANNON_IP="192.168.1.253"
+  CANNON_PORT="4000"
   HTTP_PORT="8080"
   BIND_ADDR="192.168.10.120"
   # 点云默认关闭：感知主机的 ROS 可达性没有现场验证过之前，
@@ -73,6 +75,8 @@ conf_load() {
   v=$(conf_get "$file" payload_port);    [[ -n $v ]] && PAYLOAD_PORT=$v
   v=$(conf_get "$file" light_ip);        [[ -n $v ]] && LIGHT_IP=$v
   v=$(conf_get "$file" light_port);      [[ -n $v ]] && LIGHT_PORT=$v
+  v=$(conf_get "$file" cannon_ip);       [[ -n $v ]] && CANNON_IP=$v
+  v=$(conf_get "$file" cannon_port);     [[ -n $v ]] && CANNON_PORT=$v
   v=$(conf_get "$file" http_port);       [[ -n $v ]] && HTTP_PORT=$v
   v=$(conf_get "$file" bind_address);    [[ -n $v ]] && BIND_ADDR=$v
   v=$(conf_get "$file" cloud_enabled);   [[ -n $v ]] && CLOUD=$v
@@ -155,6 +159,8 @@ payload_ip = $PAYLOAD_IP
 payload_port = $PAYLOAD_PORT
 light_ip = $LIGHT_IP
 light_port = $LIGHT_PORT
+cannon_ip = $CANNON_IP
+cannon_port = $CANNON_PORT
 
 http_port = $HTTP_PORT
 bind_address = $BIND_ADDR
