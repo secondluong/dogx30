@@ -3,6 +3,8 @@
 #include "x30/json.hpp"
 #include "x30/net_util.hpp"
 
+#include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -11,7 +13,10 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #define closesocket ::close
@@ -25,6 +30,30 @@ constexpr int kPeriodMs = 100;
 constexpr int kStaleMs = 400;
 constexpr int kConnectMs = 800;
 constexpr int kRecvMs = 40;
+
+std::atomic<int> g_cannon_held{0};
+
+bool CannonHeld() { return g_cannon_held.load() > 0; }
+
+struct CannonHold {
+  CannonHold() { g_cannon_held.fetch_add(1); }
+  ~CannonHold() { g_cannon_held.fetch_sub(1); }
+};
+
+bool WriteAll(int fd, const uint8_t* data, size_t n) {
+  size_t off = 0;
+  while (off < n) {
+#if defined(_WIN32)
+    const int k = ::send(fd, reinterpret_cast<const char*>(data + off),
+                         static_cast<int>(n - off), 0);
+#else
+    const ssize_t k = ::send(fd, data + off, n - off, MSG_NOSIGNAL);
+#endif
+    if (k <= 0) return false;
+    off += static_cast<size_t>(k);
+  }
+  return true;
+}
 
 bool AxisOn(float v) { return std::fabs(v) > kDead; }
 
@@ -146,6 +175,8 @@ CannonCmd CannonClient::Snapshot(bool* stale) const {
 
 bool CannonClient::EnsureConnected() {
   if (fd_ >= 0) return true;
+  // 平板正在经 4001 占用炮台的唯一一条 TCP，这里再连会被拒绝。
+  if (CannonHeld()) return false;
   if (cfg_.host.empty() || cfg_.port == 0) return false;
   fd_ = TcpConnectTimeout(cfg_.host, cfg_.port, kConnectMs, kRecvMs);
   if (fd_ < 0) {
@@ -266,6 +297,132 @@ std::string CannonClient::Json() const {
       .Key("pressure_mpa", telem_.pressure_mpa, 3)
       .EndObject();
   return w.Take();
+}
+
+CannonRelay::CannonRelay(std::string host, uint16_t cannon_port,
+                         uint16_t listen_port)
+    : host_(std::move(host)),
+      cannon_port_(cannon_port),
+      listen_port_(listen_port) {}
+
+CannonRelay::~CannonRelay() { Stop(); }
+
+void CannonRelay::Start() {
+  if (running_.exchange(true)) return;
+  thread_ = std::thread(&CannonRelay::Loop, this);
+}
+
+void CannonRelay::Stop() {
+  if (!running_.exchange(false)) return;
+  if (thread_.joinable()) thread_.join();
+}
+
+void CannonRelay::Serve(int client) {
+  CannonHold hold;
+  const int cannon = TcpConnectTimeout(host_, cannon_port_, 800, 200);
+  if (cannon < 0) {
+    std::fprintf(stderr, "水炮转发连不上 %s:%u\n", host_.c_str(),
+                 static_cast<unsigned>(cannon_port_));
+    closesocket(client);
+    return;
+  }
+  std::printf("水炮转发 %s:%u\n", host_.c_str(),
+              static_cast<unsigned>(cannon_port_));
+  uint8_t buf[256];
+  while (running_.load()) {
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET(client, &read_set);
+    FD_SET(cannon, &read_set);
+    timeval tv{};
+    tv.tv_sec = 0;
+    tv.tv_usec = 200000;
+    const int nfds = (client > cannon ? client : cannon) + 1;
+    const int ready = ::select(nfds, &read_set, nullptr, nullptr, &tv);
+    if (ready < 0) {
+#if !defined(_WIN32)
+      if (errno == EINTR) continue;
+#endif
+      break;
+    }
+    if (ready == 0) continue;
+    if (FD_ISSET(client, &read_set)) {
+#if defined(_WIN32)
+      const int n = ::recv(client, reinterpret_cast<char*>(buf), sizeof(buf), 0);
+#else
+      const ssize_t n = ::recv(client, buf, sizeof(buf), 0);
+#endif
+      if (n <= 0) break;
+      if (!WriteAll(cannon, buf, static_cast<size_t>(n))) break;
+    }
+    if (FD_ISSET(cannon, &read_set)) {
+#if defined(_WIN32)
+      const int n = ::recv(cannon, reinterpret_cast<char*>(buf), sizeof(buf), 0);
+#else
+      const ssize_t n = ::recv(cannon, buf, sizeof(buf), 0);
+#endif
+      if (n <= 0) break;
+      if (!WriteAll(client, buf, static_cast<size_t>(n))) break;
+    }
+  }
+  uint8_t stop[kCannonFrameSize];
+  CannonCmd idle;
+  EncodeCannonFrame(idle, stop);
+  WriteAll(cannon, stop, kCannonFrameSize);
+  closesocket(cannon);
+  closesocket(client);
+}
+
+void CannonRelay::Loop() {
+  while (running_.load()) {
+    const int listen_fd = static_cast<int>(::socket(AF_INET, SOCK_STREAM, 0));
+    if (listen_fd < 0) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      continue;
+    }
+    const int one = 1;
+    ::setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR,
+                 reinterpret_cast<const char*>(&one), sizeof(one));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(listen_port_);
+    if (::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) !=
+            0 ||
+        ::listen(listen_fd, 1) != 0) {
+      std::fprintf(stderr, "水炮转发听不上 %u\n",
+                   static_cast<unsigned>(listen_port_));
+      closesocket(listen_fd);
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      continue;
+    }
+    std::printf("水炮转发监听 0.0.0.0:%u → %s:%u\n",
+                static_cast<unsigned>(listen_port_), host_.c_str(),
+                static_cast<unsigned>(cannon_port_));
+    while (running_.load()) {
+      fd_set read_set;
+      FD_ZERO(&read_set);
+      FD_SET(listen_fd, &read_set);
+      timeval tv{};
+      tv.tv_sec = 0;
+      tv.tv_usec = 200000;
+      const int ready = ::select(listen_fd + 1, &read_set, nullptr, nullptr, &tv);
+      if (ready < 0) {
+#if !defined(_WIN32)
+        if (errno == EINTR) continue;
+#endif
+        break;
+      }
+      if (ready == 0 || !FD_ISSET(listen_fd, &read_set)) continue;
+      const int client = static_cast<int>(::accept(listen_fd, nullptr, nullptr));
+      if (client < 0) continue;
+      const int nodelay = 1;
+      ::setsockopt(client, IPPROTO_TCP, TCP_NODELAY,
+                   reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+      Serve(client);
+    }
+    closesocket(listen_fd);
+  }
 }
 
 }  // namespace x30

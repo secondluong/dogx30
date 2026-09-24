@@ -11,8 +11,10 @@
 
   const MAGIC = 0x43303358; // "X30C" 小端读成 u32
   const HEADER_SIZE = 40;
-  const MAX_LIVE_FRAMES = 80;
   const MAX_PERSIST = 160000;
+  // 同一格要被扫到这么多次才画出来。人走过通常只碰到一次，墙会反复命中。
+  const CONFIRM_HITS = 3;
+  const GHOST_MS = 1500;
   const MAX_TRAIL = 2000;
 
   let gl = null;
@@ -322,67 +324,66 @@
     return xyz;
   }
 
+  function cellConfirmed(cell) {
+    return cell.hits >= CONFIRM_HITS && cell.last - cell.first >= 800;
+  }
+
+  function pruneVoxels(now) {
+    const liveCut = opts.persist || opts.accumMs <= 0 ? 0 : now - opts.accumMs;
+    persistMap.forEach((cell, key) => {
+      // 只出现过一两次的是人或者遮挡，过一会就删，不让它写进墙里。
+      if (!cellConfirmed(cell) && now - cell.last > GHOST_MS) {
+        persistMap.delete(key);
+        return;
+      }
+      if (liveCut && cell.last < liveCut) persistMap.delete(key);
+    });
+  }
+
   function ingestPersist(xyz, n, from, world) {
+    const now = Date.now();
     const inv = 1 / Math.max(opts.voxel, 0.05);
-    for (let i = 0; i < n && persistMap.size < MAX_PERSIST; i++) {
+    for (let i = 0; i < n; i++) {
       const w = world
         ? [xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]]
         : bodyToOdom(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2], from);
       const key = voxelKey(w[0], w[1], w[2], inv);
-      if (!persistMap.has(key)) persistMap.set(key, w);
+      const cell = persistMap.get(key);
+      if (!cell) {
+        if (persistMap.size >= MAX_PERSIST) continue;
+        // 坐标只写这一次。后面位姿再抖，已画上的墙不再挪，重画才和之前一致。
+        persistMap.set(key, {
+          x: w[0], y: w[1], z: w[2], hits: 1, first: now, last: now,
+        });
+      } else if (now - cell.last >= 200) {
+        // 同一帧里的很多点只算一次。人贴得很近也会在一帧里打满一格。
+        cell.hits += 1;
+        cell.last = now;
+      } else {
+        cell.last = now;
+      }
     }
+    pruneVoxels(now);
   }
 
   function rebuild() {
-    const now = pose;
-    let src;
+    const nowPose = pose;
+    const now = Date.now();
+    pruneVoxels(now);
+    let shown = 0;
+    persistMap.forEach((cell) => {
+      if (cellConfirmed(cell)) shown += 1;
+    });
+    const src = new Float32Array(shown * 3);
     let n = 0;
-
-    if (opts.persist && persistMap.size > 0) {
-      src = new Float32Array(persistMap.size * 3);
-      persistMap.forEach((w) => {
-        const b = odomToBody(w[0], w[1], w[2], now);
-        src[n++] = b[0];
-        src[n++] = b[1];
-        src[n++] = b[2];
-      });
-      n /= 3;
-    } else {
-      const cutoff = opts.accumMs > 0 ? Date.now() - opts.accumMs : 0;
-      const use = [];
-      for (let i = 0; i < frames.length; i++) {
-        const f = frames[i];
-        if (opts.accumMs === 0) {
-          if (i === frames.length - 1) use.push(f);
-        } else if (f.t >= cutoff) {
-          use.push(f);
-        }
-      }
-      let total = 0;
-      for (let i = 0; i < use.length; i++) total += use[i].count;
-      src = new Float32Array(total * 3);
-      for (let i = 0; i < use.length; i++) {
-        const f = use[i];
-        const samePose = !f.world &&
-                         Math.abs(f.pose.x - now.x) < 1e-4 &&
-                         Math.abs(f.pose.y - now.y) < 1e-4 &&
-                         Math.abs(f.pose.yaw - now.yaw) < 1e-4;
-        for (let k = 0; k < f.count; k++) {
-          const x = f.xyz[k * 3], y = f.xyz[k * 3 + 1], z = f.xyz[k * 3 + 2];
-          if (f.world) {
-            const b = odomToBody(x, y, z, now);
-            src[n++] = b[0]; src[n++] = b[1]; src[n++] = b[2];
-          } else if (samePose) {
-            src[n++] = x; src[n++] = y; src[n++] = z;
-          } else {
-            const w = bodyToOdom(x, y, z, f.pose);
-            const b = odomToBody(w[0], w[1], w[2], now);
-            src[n++] = b[0]; src[n++] = b[1]; src[n++] = b[2];
-          }
-        }
-      }
-      n /= 3;
-    }
+    persistMap.forEach((cell) => {
+      if (!cellConfirmed(cell)) return;
+      const b = odomToBody(cell.x, cell.y, cell.z, nowPose);
+      src[n++] = b[0];
+      src[n++] = b[1];
+      src[n++] = b[2];
+    });
+    n /= 3;
 
     const packed = voxelize(src, n, opts.voxel);
     if (!gl) {
@@ -440,14 +441,9 @@
 
   function collectZs() {
     const zs = [];
-    if (opts.persist && persistMap.size > 0) {
-      persistMap.forEach((w) => { zs.push(w[2]); });
-    } else {
-      for (let i = 0; i < frames.length; i++) {
-        const f = frames[i];
-        for (let k = 0; k < f.count; k++) zs.push(f.xyz[k * 3 + 2]);
-      }
-    }
+    persistMap.forEach((cell) => {
+      if (cellConfirmed(cell)) zs.push(cell.z);
+    });
     if (zs.length <= 5000) return zs;
     const stride = Math.ceil(zs.length / 4000);
     const out = [];
@@ -764,11 +760,9 @@
       count: count,
       world: world,
     };
-    frames.push(stamped);
-    if (frames.length > MAX_LIVE_FRAMES) frames.splice(0, frames.length - MAX_LIVE_FRAMES);
-    // 持久图按体素去重，每帧都叠。不能等「位姿移动 4cm」：
-    // 转身扫到的墙、LIO 位姿偶发不动，都会让走过的地方丢了。
-    if (opts.persist) ingestPersist(xyz, count, stamped.pose, world);
+    // 实时和持久都进同一张世界系体素。不把原始帧按最新位姿重拼，
+    // 否则 MESH 丢包、位姿一抖，墙就会和上一帧对不上。
+    ingestPersist(xyz, count, stamped.pose, world);
 
     // 帧到了就是订上了。只信本地按钮的话，重连或 2×2 切布局时角标会停在「未订阅」。
     if (!subscribed) {
@@ -1098,14 +1092,7 @@
       if (t.id === 'btn-cloud') return;
       if (t.dataset.cloudMode) {
         opts.persist = t.dataset.cloudMode === 'persist';
-        if (opts.persist) {
-          persistMap.clear();
-          for (let i = 0; i < frames.length; i++) {
-            ingestPersist(frames[i].xyz, frames[i].count, frames[i].pose,
-                          !!frames[i].world);
-          }
-        } else {
-          // 切回实时：固定 30 秒窗、10 cm 体素。
+        if (!opts.persist) {
           opts.accumMs = 30000;
           opts.voxel = 0.10;
         }

@@ -1052,23 +1052,28 @@ check('网关云台水炮不绑运动控制权',
       /cannon_->SetAim/.test(serviceCpp) &&
       /cannon_->SetFire/.test(serviceCpp) &&
       !/t == "cannon"[\s\S]{0,80}HoldsControl/.test(serviceCpp));
-var cannonHpp = fs.readFileSync(
-  path.join(__dirname, '..', 'rk3588', 'include', 'x30', 'cannon_client.hpp'), 'utf8');
-var cannonCpp = fs.readFileSync(
-  path.join(__dirname, '..', 'rk3588', 'src', 'cannon_client.cpp'), 'utf8');
-check('水炮走消防炮 TCP，HOME 按住开阀',
-      /192\.168\.1\.253/.test(cannonHpp) &&
-      /kCannonFrameSize = 13/.test(cannonHpp) &&
-      /EncodeCannonFrame/.test(cannonCpp) &&
-      /d2 \|= 0x02/.test(cannonCpp) &&
-      /function setCannonFire/.test(appJs) &&
-      /t: 'cannon_fire'/.test(appJs) &&
-      /app\.onCannonFire/.test(appJs) &&
-      /injectCannonFire/.test(radioBridge) &&
-      /KEYCODE_HOME/.test(radioBridge) &&
+var cannonJava = fs.readFileSync(
+  path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+            'com', 'dogx30', 'control', 'CannonLink.java'), 'utf8');
+check('水炮 2.4G 直连失败则经网关转发，不经 MESH',
+      /192\.168\.1\.253/.test(cannonJava) &&
+      /192\.168\.1\.120/.test(cannonJava) &&
+      /RELAY_PORT = 4001/.test(cannonJava) &&
+      /bindToDevice/.test(cannonJava) &&
+      /airNetwork\(\)/.test(cannonJava) &&
+      /setOnline\(false, "wait"/.test(cannonJava) &&
+      /function radioReady/.test(appJs) &&
+      /0x02/.test(cannonJava) &&
+      /function pushCannon/.test(appJs) &&
+      /radioCannon\(/.test(appJs) &&
+      /function pollCannonLink/.test(appJs) &&
+      /狗上的网关还没开转发/.test(appJs) &&
+      /void radioCannon\(/.test(radioBridge) &&
+      /radioCannonStatus/.test(radioBridge) &&
+      /obj\.t === 'cannon' \|\| obj\.t === 'cannon_spray' \|\| obj\.t === 'cannon_fire'\) return/.test(appJs) &&
+      /kCannonRelayPort/.test(serviceCpp) &&
       /id="btn-cannon-fire"/.test(html) &&
-      /data-key="home"/.test(html) &&
-      /cannon_ip/.test(read('settings.js')));
+      /data-key="home"/.test(html));
 check('水炮模式有水压时在学习前显示 MPa',
       /id="cannon-psi"/.test(html) &&
       html.indexOf('id="cannon-psi"') < html.indexOf('id="btn-learn"') &&
@@ -1167,7 +1172,10 @@ check('没画面时占位图说得出原因',
 // 运动走 2.4G 时 MESH 仍连着，热成像不该再被标成「2.4G 不可用」。
 var cloudJs = read('cloud.js');
 check('持久点云每帧都叠，机体帧不清配准图',
-      /if \(opts\.persist\) ingestPersist/.test(cloudJs) &&
+      /ingestPersist\(xyz, count, stamped\.pose, world\)/.test(cloudJs) &&
+      /function cellConfirmed/.test(cloudJs) &&
+      /CONFIRM_HITS = 3/.test(cloudJs) &&
+      /坐标只写这一次/.test(cloudJs) &&
       /if \(est\.world && !world\) return/.test(cloudJs) &&
       /payloadEnd \+ 12/.test(cloudJs) &&
       /if \(est\.source && !est\.world\)/.test(cloudJs));
@@ -1295,6 +1303,24 @@ check('布控球云台走 anv CGI 而不是海康 ISAPI',
       /ZoomAdd/.test(ptzCpp));
 check('右小变焦按住会补发，避免只动一步',
       /lastZoomAt/.test(ptzJs) && /ZoomAdd/.test(ptzJs) && /ZoomSub/.test(ptzJs));
+check('小摇杆轻拨先停一下，速度按平方升，推深了会改档',
+      /START_HOLD_MS/.test(ptzJs) &&
+      /mag \* mag \* 7/.test(ptzJs) &&
+      /lastSpeed/.test(ptzJs) &&
+      /speedChanged/.test(ptzJs));
+check('平板直连球机时不经网关再发一条转动',
+      /function nativeBall/.test(appJs) &&
+      /!direct && meshPayload && \(moving \|\| ptzGwLive\)/.test(appJs));
+check('云台 CGI 停转会拆掉还在等的转动',
+      /fireQueue/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
+      /FIRE_READ_MS/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')) &&
+      /pending\.disconnect\(\)/.test(fs.readFileSync(
+        path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
+                  'com', 'dogx30', 'control', 'CameraCgi.java'), 'utf8')));
 check('左小水平走 CH13，不占用右小的 CH15',
       /pwmAxis\(ch\[12\]/.test(read('gamepad.js')) &&
       /pwmAxis\(ch\[13\]/.test(read('gamepad.js')) &&

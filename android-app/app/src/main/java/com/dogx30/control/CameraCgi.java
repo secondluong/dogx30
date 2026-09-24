@@ -9,6 +9,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.util.ArrayDeque;
+import java.util.Iterator;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -25,13 +27,77 @@ final class CameraCgi {
     private static final String TAG = "CameraCgi";
     private static final int CONNECT_MS = 400;
     private static final int READ_MS = 800;
+    private static final int FIRE_CONNECT_MS = 250;
+    private static final int FIRE_READ_MS = 200;
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
+    private static final Object FIRE_LOCK = new Object();
+    private static final ArrayDeque<String> fireQueue = new ArrayDeque<>();
+    private static boolean fireBind;
+    private static boolean fireBusy;
+    private static volatile HttpURLConnection fireConn;
 
     private CameraCgi() {}
 
+    /**
+     * 只保留最新一条。转动还堵在读响应时，停转会拆掉那条连接马上发出去，
+     * 否则松杆后球还要再转一整段超时。
+     */
     static void fire(String url, boolean bindRadio) {
         if (url == null || url.isEmpty()) return;
-        IO.execute(() -> get(url, bindRadio));
+        final boolean stop = url.contains("action=Stop");
+        synchronized (FIRE_LOCK) {
+            fireBind = bindRadio;
+            if (stop) {
+                fireQueue.clear();
+                fireQueue.add(url);
+                HttpURLConnection pending = fireConn;
+                if (pending != null) {
+                    try {
+                        pending.disconnect();
+                    } catch (Exception ignored) {
+                    }
+                }
+            } else {
+                if (!fireQueue.isEmpty() && fireQueue.peekLast().contains("action=Stop")) {
+                    fireQueue.clear();
+                }
+                String kind = actionKind(url);
+                Iterator<String> it = fireQueue.iterator();
+                while (it.hasNext()) {
+                    if (kind.equals(actionKind(it.next()))) it.remove();
+                }
+                fireQueue.add(url);
+            }
+            if (fireBusy) return;
+            fireBusy = true;
+        }
+        IO.execute(CameraCgi::drainFire);
+    }
+
+    private static String actionKind(String url) {
+        if (url.contains("ZoomAdd") || url.contains("ZoomSub")) return "zoom";
+        if (url.contains("action=Stop")) return "stop";
+        return "move";
+    }
+
+    private static void drainFire() {
+        while (true) {
+            String url;
+            boolean bindRadio;
+            synchronized (FIRE_LOCK) {
+                if (fireQueue.isEmpty()) {
+                    fireBusy = false;
+                    return;
+                }
+                url = fireQueue.removeFirst();
+                bindRadio = fireBind;
+            }
+            try {
+                fetch(url, bindRadio, FIRE_CONNECT_MS, FIRE_READ_MS, true);
+            } catch (Exception e) {
+                Log.w(TAG, brief(e));
+            }
+        }
     }
 
     private static final String USER_MD5 = "21232f297a57a5a743894a0e4a801fc3";
@@ -115,14 +181,15 @@ final class CameraCgi {
     static String get(String url, boolean bindRadio) {
         if (url == null || url.isEmpty()) return "";
         try {
-            return fetch(url, bindRadio);
+            return fetch(url, bindRadio, CONNECT_MS, READ_MS, false);
         } catch (Exception e) {
             Log.w(TAG, brief(e));
             return "";
         }
     }
 
-    private static String fetch(String spec, boolean bindRadio) throws Exception {
+    private static String fetch(String spec, boolean bindRadio, int connectMs, int readMs,
+                                boolean trackFire) throws Exception {
         URL url = new URL(spec);
         HttpURLConnection conn;
         Network net = bindRadio
@@ -136,11 +203,12 @@ final class CameraCgi {
         if (conn instanceof HttpsURLConnection) {
             trust((HttpsURLConnection) conn);
         }
-        conn.setConnectTimeout(CONNECT_MS);
-        conn.setReadTimeout(READ_MS);
+        conn.setConnectTimeout(connectMs);
+        conn.setReadTimeout(readMs);
         conn.setUseCaches(false);
         conn.setRequestMethod("GET");
         conn.setInstanceFollowRedirects(true);
+        if (trackFire) fireConn = conn;
         try (InputStream in = conn.getInputStream()) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[256];
@@ -148,6 +216,7 @@ final class CameraCgi {
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             return out.toString("UTF-8");
         } finally {
+            if (trackFire && fireConn == conn) fireConn = null;
             conn.disconnect();
         }
     }

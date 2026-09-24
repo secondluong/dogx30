@@ -145,6 +145,7 @@ class RobotService {
   std::unique_ptr<GasClient> gas_;
   std::unique_ptr<PayloadSwitch> switches_;
   std::unique_ptr<CannonClient> cannon_;
+  std::unique_ptr<CannonRelay> cannon_relay_;
   Localizer localizer_;
   std::chrono::steady_clock::time_point last_scan_{};
   mutable std::mutex lio_mutex_;

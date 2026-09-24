@@ -66,7 +66,7 @@
         { key: 'light_port', label: '条纹灯板端口', type: 'number',
           hint: '默认 9000。' },
         { key: 'cannon_ip', label: '水炮 IP', type: 'text',
-          hint: '消防炮 TCP Server，现场 1 网 192.168.1.253。网关 eth0 去连。空则不连。' },
+          hint: '消防炮在 1 网 192.168.1.253。平板 2.4G 直连失败时，改经网关 192.168.1.120 转发，不走 MESH。' },
         { key: 'cannon_port', label: '水炮端口', type: 'number',
           hint: '默认 4000。' },
       ],

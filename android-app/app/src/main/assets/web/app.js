@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0924c';
+const WEB_BUILD = '0924j';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -512,7 +512,8 @@ function radioDirect() {
 function send(obj) {
   if (!obj) return;
   // 运动链路跟档位互斥：2.4G 时网关不再发 claim/vel/pose/运动 cmd，避免双 0x21。
-  // 云台/水炮/开关/媒体/点云等载荷不挡——能走 MESH 仍走 MESH。
+  // 云台/开关/媒体/点云能走 MESH 仍走 MESH。水炮在 1 网，只走 2.4G，不进这条 WebSocket。
+  if (obj.t === 'cannon' || obj.t === 'cannon_spray' || obj.t === 'cannon_fire') return;
   if (radioDirect() && hasNativeRadio()) {
     const t = obj.t;
     if (t === 'claim' || t === 'vel' || t === 'pose' || t === 'release') return;
@@ -1245,7 +1246,10 @@ function renderState(s) {
     chipState.classList.toggle('online', s.alive);
   }
 
-  if (s.cannon && typeof s.cannon === 'object') app.cannonTelem = s.cannon;
+  if (s.cannon && typeof s.cannon === 'object'
+      && !(window.X30Native && ('radioCannonStatus' in window.X30Native))) {
+    app.cannonTelem = s.cannon;
+  }
   paintCannonPressure();
 
   const batt = s.battery || {};
@@ -1828,8 +1832,7 @@ function setWorkMode(mode) {
   if (prev === 'cannon' && mode !== 'cannon') {
     setCannonFire(false, true);
     sprayArmed = '';
-    send({ t: 'cannon', pan: 0, tilt: 0 });
-    send({ t: 'cannon_spray', value: 'mid' });
+    pushCannon(0, 0, '', false);
   }
   paintModes();
   paintStickChip();
@@ -1840,18 +1843,61 @@ function setWorkMode(mode) {
 
 let sprayArmed = '';
 let cannonFiring = false;
+let cannonPan = 0;
+let cannonTilt = 0;
+let cannonSpray = '';
+let cannonNetStatus = '';
 let pipArmed = '';
+let ptzGwLive = false;
+
+function pushCannon(pan, tilt, spray, fire) {
+  cannonPan = pan || 0;
+  cannonTilt = tilt || 0;
+  cannonSpray = spray || '';
+  const n = window.X30Native;
+  if (!n || !('radioCannon' in n)) return;
+  try { n.radioCannon(cannonPan, cannonTilt, cannonSpray, !!fire); } catch (e) { /* */ }
+}
+
+function radioReady() {
+  const st = nativeRadioStatus();
+  return !!(st && st.ready);
+}
+
+function pollCannonLink() {
+  const n = window.X30Native;
+  if (!n || !('radioCannonStatus' in n)) return;
+  let raw = '';
+  try { raw = n.radioCannonStatus() || ''; } catch (e) { return; }
+  if (!raw) return;
+  let st;
+  try { st = JSON.parse(raw); } catch (e) { return; }
+  app.cannonTelem = st;
+  // 射频还没起来时是 wait，不要开机就喊连不上。链路已经在发心跳仍失败才提示。
+  if (app.workMode === 'cannon' && st && st.status === 'tcp-fail'
+      && st.status !== cannonNetStatus && radioReady()) {
+    cannonNetStatus = st.status;
+    const from = st.via ? ('从 ' + st.via + ' ') : '';
+    const why = st.err === 'refused' ? '炮台拒绝了连接'
+      : (st.err === 'timeout' ? '炮台没有回应'
+        : (st.err === 'unreachable' ? '到不了炮台' : '水炮连不上'));
+    const relay = st.relay === 'refused' ? '，狗上的网关还没开转发'
+      : (st.relay === 'timeout' || st.relay === 'unreachable'
+        ? '，网关 192.168.1.120 也到不了' : '');
+    showBanner(from + why + ' 192.168.1.253' + relay);
+  } else if (st && st.status === 'tcp') {
+    cannonNetStatus = 'tcp';
+  }
+  paintCannonPressure();
+}
 
 function setCannonFire(on, silent) {
   const fire = !!on;
   if (app.workMode !== 'cannon' && fire) return;
-  if (cannonFiring === fire) {
-    if (fire) send({ t: 'cannon_fire', on: true });
-    return;
-  }
+  const edge = cannonFiring !== fire;
   cannonFiring = fire;
-  send({ t: 'cannon_fire', on: fire });
-  if (!silent) {
+  pushCannon(cannonPan, cannonTilt, cannonSpray, fire);
+  if (edge && !silent) {
     speak(fire ? '发射' : '停射');
     if (fire) showBanner('水炮：发射');
   }
@@ -1905,6 +1951,14 @@ function applyPipStick(c) {
   pipArmed = detent;
 }
 
+function nativeBall() {
+  try {
+    return !!(window.X30Native && ('cameraGetFire' in window.X30Native));
+  } catch (e) {
+    return false;
+  }
+}
+
 function stopPtz() {
   if (window.X30PtzBall && window.X30PtzBall.move) {
     window.X30PtzBall.move(0, 0, 0);
@@ -1912,6 +1966,7 @@ function stopPtz() {
   if (app.hasControl || radioDirect()) {
     send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
   }
+  ptzGwLive = false;
 }
 
 function sendAuxPayload(c, viaGateway) {
@@ -1923,29 +1978,24 @@ function sendAuxPayload(c, viaGateway) {
   const ay = c.auxY || 0;
   const zoom = c.auxZoom || 0;
   const moving = Math.abs(ax) > 0.08 || Math.abs(ay) > 0.08 || Math.abs(zoom) > 0.08;
-  // 2.4G 档已 yield 运动控制权；载荷仍走 MESH，不要求 hasControl。
+  // 2.4G 档已 yield 运动控制权；云台仍可走 MESH。水炮不在这里走网关。
   const meshPayload = viaGateway && (app.hasControl || radioDirect());
   if (app.workMode === 'cannon') {
-    // 载荷不占运动控制权；能走 MESH 就发。雾/柱是花型，开阀才出水。
+    // 炮在 1 网，平板经 2.4G 直连。雾/柱是花型，开阀才出水。
     const detent = zoom <= -0.45 ? 'jet' : (zoom >= 0.45 ? 'fog' : 'mid');
-    if (viaGateway) {
-      send({
-        t: 'cannon',
-        pan: Math.abs(ax) > 0.08 ? -ax : 0,
-        tilt: Math.abs(ay) > 0.08 ? ay : 0,
-      });
-      if (!sprayArmed) sprayArmed = detent;
-      else if (detent !== sprayArmed) {
-        sprayArmed = detent;
-        send({ t: 'cannon_spray', value: detent });
-        if (detent === 'fog' || detent === 'jet') {
-          speak(detent === 'fog' ? '雾状' : '柱状');
-          showBanner(detent === 'fog' ? '水炮：雾状' : '水炮：柱状');
-        }
-        paintStickChip();
+    const pan = Math.abs(ax) > 0.08 ? -ax : 0;
+    const tilt = Math.abs(ay) > 0.08 ? ay : 0;
+    if (!sprayArmed) sprayArmed = detent;
+    else if (detent !== sprayArmed) {
+      sprayArmed = detent;
+      if (detent === 'fog' || detent === 'jet') {
+        speak(detent === 'fog' ? '雾状' : '柱状');
+        showBanner(detent === 'fog' ? '水炮：雾状' : '水炮：柱状');
       }
-      if (cannonFiring) send({ t: 'cannon_fire', on: true });
+      paintStickChip();
     }
+    const spray = detent === 'mid' ? '' : detent;
+    pushCannon(pan, tilt, spray, cannonFiring);
     return;
   }
   if (cloudMain) {
@@ -1963,12 +2013,19 @@ function sendAuxPayload(c, viaGateway) {
   if (!ptzMain) return;
   const pan = -ax;
   const tilt = ay;
-  // 球机 CGI 钉 WiFi；网关 ptz 作备份，2.4G 档同样可走 MESH。
+  // 平板能直连球机就只走 CGI。再经网关发同一条时，网关的转动经常比停转晚到，球会停不住。
+  const direct = nativeBall();
   if (window.X30PtzBall && window.X30PtzBall.move) {
     window.X30PtzBall.move(pan, tilt, zoom);
   }
-  if (meshPayload && moving) {
-    send({ t: 'ptz', pan: pan, tilt: tilt, zoom: zoom });
+  if (!direct && meshPayload && (moving || ptzGwLive)) {
+    send({
+      t: 'ptz',
+      pan: moving ? pan : 0,
+      tilt: moving ? tilt : 0,
+      zoom: moving ? zoom : 0,
+    });
+    ptzGwLive = moving;
   }
 }
 
@@ -1978,6 +2035,7 @@ let ptzClaimedAt = 0;
 setInterval(() => {
   syncNativeRadioPath();
   paintStickChip();
+  pollCannonLink();
   const onRadio = radioDirect() && hasNativeRadio();
   // 一轮只读一次原生状态，芯片和姿态同步共用。
   const radioSt = onRadio ? (nativeRadioStatus() || {}) : null;
@@ -1988,7 +2046,6 @@ setInterval(() => {
     syncRadioPickers(radioSt);
     ensureManualMode();
     sendRadioVel(c);
-    // 运动已走 2.4G；云台/水炮仍尽量走 MESH。
     sendAuxPayload(c, true);
     return;
   }

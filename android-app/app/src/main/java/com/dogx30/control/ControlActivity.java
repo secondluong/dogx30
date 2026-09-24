@@ -118,6 +118,7 @@ public class ControlActivity extends AppCompatActivity {
         // 引擎初始化要一秒左右，越早开始越好：开机后第一次按键往往就在这一秒里。
         tts = new Tts(this);
         CameraTalk.get().attachTts(tts);
+        CannonLink.get().attach(this);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -414,6 +415,17 @@ public class ControlActivity extends AppCompatActivity {
         @JavascriptInterface
         public void radioAdoptMotion(boolean standing, String walk) {
             RadioLink.get().adoptMotion(standing, walk);
+        }
+
+        /** 水炮走 2.4G 直连 1 网炮台，不经 MESH。 */
+        @JavascriptInterface
+        public void radioCannon(double pan, double tilt, String spray, boolean fire) {
+            CannonLink.get().set((float) pan, (float) tilt, spray, fire);
+        }
+
+        @JavascriptInterface
+        public String radioCannonStatus() {
+            return CannonLink.get().statusJson();
         }
 
         /**

@@ -4,7 +4,8 @@
 // 全 0 是停止。开阀才是出水，雾/柱只是花型。
 // 遥控端 20 Hz 送来的摇杆量在这里合成位标志，本类自己节流。
 //
-// 不绑运动控制权：2.4G 档 yield 后仍走 MESH 下发。连不上不让网关起不来。
+// 不绑运动控制权。平板 2.4G 到不了炮台时，走同交换机上的转发口，
+// 由本机 eth0 去连炮。连不上不让网关起不来。
 
 #pragma once
 
@@ -24,6 +25,10 @@ struct CannonConfig {
   std::string host = "192.168.1.253";
   uint16_t port = 4000;
 };
+
+// 平板经 2.4G 连这个口，本机再转到炮台。炮台只收一条 TCP，转发占用时
+// CannonClient 不再自己去连。
+inline constexpr uint16_t kCannonRelayPort = 4001;
 
 struct CannonCmd {
   float pan = 0;   // 右为正
@@ -87,6 +92,30 @@ class CannonClient {
   bool sent_idle_ = true;
   uint8_t rx_[64]{};
   size_t rx_len_ = 0;
+};
+
+// 听 0.0.0.0:4001，把平板送来的 13 字节帧原样转到炮台，回包原样送回。
+// 只服务一个客户端。客户端断开时先发一帧停止再放开炮台。
+class CannonRelay {
+ public:
+  CannonRelay(std::string host, uint16_t cannon_port, uint16_t listen_port);
+  ~CannonRelay();
+
+  CannonRelay(const CannonRelay&) = delete;
+  CannonRelay& operator=(const CannonRelay&) = delete;
+
+  void Start();
+  void Stop();
+
+ private:
+  void Loop();
+  void Serve(int client);
+
+  std::string host_;
+  uint16_t cannon_port_ = 4000;
+  uint16_t listen_port_ = kCannonRelayPort;
+  std::atomic<bool> running_{false};
+  std::thread thread_;
 };
 
 }  // namespace x30

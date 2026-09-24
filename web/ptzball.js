@@ -21,7 +21,11 @@
   let pipSize = 0;
   let pipPos = 0;
   let lastMoveKey = '';
+  let lastSpeed = 0;
   let lastZoomAt = 0;
+  let armAt = 0;
+  // 轻拨不满这一下就不开转。球机是持续转，开了就要等停转指令。
+  const START_HOLD_MS = 90;
 
   function host() {
     const u = (window.X30DogCam && window.X30DogCam.ptzUrl)
@@ -111,7 +115,9 @@
 
   function speedOf(pan, tilt, zoom) {
     const mag = Math.max(Math.abs(pan), Math.abs(tilt), Math.abs(zoom));
-    return Math.max(1, Math.min(8, Math.round(mag * 8)));
+    // 轻推停在 1 档。推过一半才明显加快，满杆才到 8。
+    const speed = 1 + Math.round(mag * mag * 7);
+    return Math.max(1, Math.min(8, speed));
   }
 
   function dirOf(pan, tilt) {
@@ -135,23 +141,35 @@
       (t ? (t > 0 ? 'U' : 'D') : '') +
       (z ? (z > 0 ? '+' : '-') : '');
     if (!key) {
+      armAt = 0;
       if (lastMoveKey) {
         lastMoveKey = '';
+        lastSpeed = 0;
         lastZoomAt = 0;
         fire('ptz_cgi', 'action=Stop&Speed=1');
       }
       return true;
     }
     const now = Date.now();
+    // 刚离开中位先等一下。晃一下杆还没稳住就发转动，停转赶到时球已经转过一截。
+    if (!lastMoveKey) {
+      if (!armAt) {
+        armAt = now;
+        return true;
+      }
+      if (now - armAt < START_HOLD_MS) return true;
+    }
     // 变焦 CGI 有的机型是步进不是持续转。按住时按间隔补发，松手仍走 Stop。
+    const speed = speedOf(p, t, z);
     const zoomDue = !!z && (now - lastZoomAt > 280);
-    if (key === lastMoveKey && !zoomDue) return true;
+    const speedChanged = speed !== lastSpeed;
+    if (key === lastMoveKey && !zoomDue && !speedChanged) return true;
     const dirChanged = key.replace(/[+-]/g, '') !== lastMoveKey.replace(/[+-]/g, '');
     const zoomDropped = !z && /[+-]/.test(lastMoveKey);
     lastMoveKey = key;
-    const speed = speedOf(p, t, z);
+    lastSpeed = speed;
     const dir = dirOf(p, t);
-    if (dir && (dirChanged || zoomDropped)) {
+    if (dir && (dirChanged || zoomDropped || speedChanged)) {
       fire('ptz_cgi', 'action=' + dir + '&Speed=' + speed);
     }
     if (zoomDue) {

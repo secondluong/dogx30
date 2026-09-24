@@ -258,8 +258,11 @@ bool RobotService::Start(std::string* error) {
     CannonConfig cc;
     cc.host = cfg_.settings.cannon_ip;
     cc.port = cfg_.settings.cannon_port;
-    cannon_ = std::make_unique<CannonClient>(std::move(cc));
+    cannon_ = std::make_unique<CannonClient>(cc);
     cannon_->Start();
+    cannon_relay_ = std::make_unique<CannonRelay>(
+        cc.host, cc.port, kCannonRelayPort);
+    cannon_relay_->Start();
   }
 
   server_.SetStaticRoot(cfg_.static_root);
@@ -288,6 +291,7 @@ void RobotService::Stop() {
   if (body_monitor_) body_monitor_->Stop();
   if (cloud_) cloud_->Stop();
   if (switches_) switches_->Stop();
+  if (cannon_relay_) cannon_relay_->Stop();
   if (cannon_) cannon_->Stop();
   if (gas_) gas_->Stop();
   gaits_.Stop();
