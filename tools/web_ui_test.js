@@ -594,7 +594,12 @@ check('切档时把姿态交接给接手的一侧',
       /app\.claimMsg/.test(read('gamepad.js')) &&
       /radioAdoptPose/.test(radioBridge) &&
       /void adoptPosture\(boolean up\)/.test(radioJava) &&
-      /onRadio\(\(\) -> adoptOnRadio\(up\)\)/.test(radioJava) &&
+      /void adoptMotion\(boolean up, String walk\)/.test(radioJava) &&
+      /onRadio\(\(\) -> adoptOnRadio\(up, mode\)\)/.test(radioJava) &&
+      /radioAdoptMotion/.test(radioBridge) &&
+      /function pushMotionToRadio/.test(appJs) &&
+      /const walk = changed \? effectiveWalk/.test(appJs) &&
+      /app\.poseHandoff !== null\) return !!app\.poseHandoff/.test(appJs) &&
       /void AdoptPosture\(bool standing\)/.test(motionHpp) &&
       /msg\.Has\("standing"\)/.test(serviceCpp) &&
       /Key\("pose_adopt", true\)/.test(serviceCpp) &&
@@ -1031,8 +1036,14 @@ check('2.4G 运动独占，载荷仍走 MESH',
       !/t === 'ptz'\) return/.test(appJs) &&
       /sendAuxPayload\(c, true\)/.test(appJs) &&
       /meshPayload = viaGateway && \(app\.hasControl \|\| radioDirect\(\)\)/.test(appJs) &&
-      /function bindRadio\(\) \{[\s\S]*?return false;/.test(dogCamJs) &&
-      /画面一律钉 WiFi\/MESH/.test(dogCamJs));
+      /双光永远走 10 网/.test(dogCamJs));
+check('机身视频 2.4G 直连、MESH 走网关转推',
+      /dog_cam_main/.test(dogCamJs) &&
+      /meshDogCamUrl/.test(dogCamJs) &&
+      /getGatewayHost/.test(dogCamJs) &&
+      /radio24\(\) \|\| meshRelayFailed/.test(dogCamJs) &&
+      /meshRelayFailed/.test(dogCamJs) &&
+      /meshDogCamUrl\(\)/.test(dogCamJs));
 check('网关云台水炮不绑运动控制权',
       /云台是载荷/.test(serviceCpp) &&
       /t == "ptz"[\s\S]{0,200}if \(ptz_\)/.test(serviceCpp) &&
@@ -1134,6 +1145,18 @@ check('持久点云每帧都叠，机体帧不清配准图',
       /if \(est\.world && !world\) return/.test(cloudJs) &&
       /payloadEnd \+ 12/.test(cloudJs) &&
       /if \(est\.source && !est\.world\)/.test(cloudJs));
+// 层高显示是「从地面往上留多少米」，跟楼层切割开关无关；切割只改从哪一层起算。
+check('点云墙身偏黄、点够大才实',
+      /vec3 high = vec3\(0\.99, 0\.92, 0\.18\)/.test(cloudJs) &&
+      /墙脚青、墙身黄/.test(cloudJs) &&
+      /canvas\.height \/ 70/.test(cloudJs) &&
+      /14\.0/.test(cloudJs));
+check('层高显示不跟楼层切割走',
+      /层高显示/.test(html) &&
+      /displayH: 2\.0/.test(cloudJs) &&
+      /opts\.slice = true/.test(cloudJs) &&
+      /楼层切割只改/.test(cloudJs) &&
+      !/if \(!opts\.floorCut \|\| opts\.floorView < 0/.test(cloudJs));
 check('网关配准云带狗位姿，不再夹带机体云',
       /PutF32\(out, frame\.robot_x\)/.test(fs.readFileSync(
         path.join(__dirname, '..', 'rk3588', 'src', 'point_cloud.cpp'), 'utf8')) &&
@@ -1188,6 +1211,26 @@ check('桌面网页大屏也走布控球子码流',
 check('点大布控球时摇杆改控云台',
       /webStickTarget = 'ptz'/.test(appJs) &&
       /viewLayout\.main === 'ptz_vis'/.test(appJs));
+// 切到点云后小摇杆不得再转球机。左小挪显示中心，右小上下缩放。
+check('主图点云时小摇杆只控点云',
+      /function nudgeLook/.test(cloudJs) &&
+      /nudgeLook\(ax, ay\)/.test(appJs) &&
+      /cloudMain/.test(appJs) &&
+      /ptzMain/.test(appJs) &&
+      /只有主图双光才切球机画中画/.test(appJs) &&
+      /只有主图是双光才把小摇杆交给布控球/.test(appJs));
+check('电量跟在姿态和作业模式后面，不压在标题下',
+      /id="chip-state"[\s\S]*id="chip-stick"[\s\S]*id="chip-batt"/.test(html) &&
+      !/brand-batt/.test(html) &&
+      !/id="brand-batt"/.test(appJs) &&
+      !/#chip-batt \{ display: none/.test(read('style.css')));
+check('主图狗身时小摇杆不控球也不念双光',
+      /if \(ptzMain\) applyPipStick/.test(appJs) &&
+      /主图是狗身视频，小摇杆不控球/.test(appJs) &&
+      /function announceView/.test(appJs) &&
+      /小摇杆不控球/.test(appJs) &&
+      /主图狗身视频时不控球/.test(html) &&
+      /showingBall/.test(radioBridge));
 check('App 壳只拉当前大屏那一路视频',
       /function wantedTiles/.test(mediaJs) &&
       /inAppShell\(\)/.test(mediaJs) &&
@@ -1306,9 +1349,25 @@ check('气体格显示端口和板号',
       /端口' \+ sl\.port \+ '-板'/.test(appJs));
 check('点云上显示单兵相对狗的坐标',
       /id="uwb-hud"/.test(html) &&
+      /id="uwb-marks"/.test(html) &&
       /function setSoldiers/.test(read('cloud.js')) &&
+      /function projectSoldier/.test(read('cloud.js')) &&
+      /uwb-mark-id/.test(read('cloud.js')) &&
       /X30Cloud\.setSoldiers/.test(appJs) &&
       /相对狗/.test(read('cloud.js')));
+check('单兵 XY 顺时针转 90 度对齐点云',
+      /function uwbToCloud/.test(read('cloud.js')) &&
+      /x: y, y: -x/.test(read('cloud.js')));
+check('点云设置可清除点和轨迹',
+      /id="btn-cloud-clear"/.test(html) &&
+      html.indexOf('id="btn-cloud-clear"') !== -1 &&
+      !/class="btn sm hidden" id="btn-cloud-clear"/.test(html) &&
+      /clearCloud\(true\)/.test(read('cloud.js')) &&
+      /if \(withTrail\) trail\.length = 0/.test(read('cloud.js')) &&
+      !/clear\.classList\.toggle\('hidden'/.test(read('cloud.js')));
+check('退订不清已画的点云',
+      /只停下行，不清已画的点和轨迹/.test(read('cloud.js')) &&
+      !/if \(!subscribed\) \{\s*[\s\S]{0,80}clearCloud\(\)/.test(read('cloud.js')));
 
 // ---------------------------------------------------------------------------
 console.log('\n== 按键语音播报 ==');

@@ -1,5 +1,5 @@
-// App 原生 RTSP：画面一律钉 WiFi/MESH 网卡。运动走 2.4G 时也不把视频绑到
-// ar_net0——球在 10 网、机身在 1 网都能从 MESH/WiFi 到；绑射频口只会把球拉黑。
+// App 原生 RTSP。双光永远走 10 网。机身相机：2.4G 直连 .105，MESH 拉网关
+// MediaMTX 转推 dog_cam_main——平板 10 网到不了感知主机。
 
 'use strict';
 
@@ -7,6 +7,8 @@ const DOGCAM_KEY = 'x30.dogcam24.url';
 const DOGCAM_DEFAULT = 'rtsp://192.168.1.105:8554/test';
 const PTZ_KEY = 'x30.ptz_vis.rtsp';
 const PTZ_DEFAULT = 'rtsp://192.168.10.168:554/11';
+const MESH_RELAY_PATH = 'dog_cam_main';
+const MESH_GW_DEFAULT = '192.168.10.120';
 
 let lastRect = '';
 let playing = false;
@@ -14,6 +16,7 @@ let lastErr = '';
 let lastBuf = 0;
 let wantedNow = false;
 let playKeyNow = '';
+let meshRelayFailed = false;
 const idleOrig = {};
 
 function nativeVideo() {
@@ -91,18 +94,35 @@ function pane() {
   return mainId() === 'ptz_vis' ? visPane() : dogPane();
 }
 
+function gatewayHost() {
+  try {
+    if (window.X30Native && 'getGatewayHost' in window.X30Native) {
+      const h = String(window.X30Native.getGatewayHost() || '').trim();
+      if (h) return h;
+    }
+  } catch (e) { /* 用默认 10 网网关 */ }
+  return MESH_GW_DEFAULT;
+}
+
+function meshDogCamUrl() {
+  return 'rtsp://' + gatewayHost() + ':8554/' + MESH_RELAY_PATH;
+}
+
 function playUrl() {
   if (mainId() === 'ptz_vis') return ptzUrl();
-  if (mainId() === 'dog_cam') return url();
+  if (mainId() === 'dog_cam') {
+    if (radio24() || meshRelayFailed) return url();
+    return meshDogCamUrl();
+  }
   return '';
 }
 
 function bindRadio() {
-  // 视频/球机属于载荷，不跟运动档位走 2.4G。永远 false → 绑 WiFi/MESH。
-  return false;
+  // 机身直连（顶栏 2.4G，或 MESH 转推失败后的兜底）才绑射频口。
+  // 双光在 10 网，绑 ar_net0 会整路黑。
+  return mainId() === 'dog_cam' && (radio24() || meshRelayFailed);
 }
 
-// 2.4G / MESH 都直拉球/机身，socket 始终走 WiFi/MESH。
 function wanted() {
   if (!nativeVideo()) return false;
   if (document.hidden) return false;
@@ -153,6 +173,7 @@ function stop() {
   wantedNow = false;
   playKeyNow = '';
   lastRect = '';
+  meshRelayFailed = false;
   if (n) n.videoStop();
   playing = false;
   lastErr = '';
@@ -236,7 +257,8 @@ function paint() {
   if (playing) return;
   const small = idleSmall();
   if (!small) return;
-  const prefix = '直连拉流失败：';
+  const viaRelay = mainId() === 'dog_cam' && !radio24() && !meshRelayFailed;
+  const prefix = viaRelay ? '网关转推失败：' : '直连拉流失败：';
   small.textContent = lastErr ? (prefix + lastErr)
                              : ('正在从 ' + playUrl() + ' 拉流…');
 }
@@ -246,6 +268,14 @@ function onState(st) {
   playing = !!s.playing;
   lastErr = s.err || '';
   lastBuf = typeof s.buf === 'number' ? s.buf : 0;
+  // MESH 转推没起来（MediaMTX 没开、8554 不通）时改走 2.4G 直连 .105。
+  if (!playing && lastErr && mainId() === 'dog_cam' && !radio24() && !meshRelayFailed) {
+    meshRelayFailed = true;
+    lastErr = '';
+    playKeyNow = '';
+    sync();
+    return;
+  }
   paint();
 }
 
@@ -256,7 +286,9 @@ function status() {
     if (!radio24()) return '未在拉流（MESH 下这一路不是当前主画面）。';
     return '未在拉流（机身相机不是当前主画面）。';
   }
-  if (!playing) return lastErr ? ('拉流失败：' + lastErr) : '正在连接…';
+  if (!playing) {
+    return lastErr ? ('拉流失败：' + lastErr) : ('正在连接 ' + playUrl() + '…');
+  }
   return '正在放，本机缓冲 ' + Math.round(lastBuf) + ' ms'
     + (lastBuf > 400 ? '（偏大，正在快放追）' : '（延迟主要在上游）');
 }
@@ -266,6 +298,7 @@ function onStageLayout() {
 }
 
 function onRadioPath() {
+  meshRelayFailed = false;
   paintPtz();
   sync();
 }
@@ -289,5 +322,5 @@ function init() {
 
 window.X30DogCam = {
   init, onStageLayout, onRadioPath, onState, url, setUrl, setPtzUrl, ptzUrl,
-  stop, status,
+  meshDogCamUrl, stop, status,
 };

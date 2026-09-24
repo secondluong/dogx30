@@ -67,12 +67,6 @@ body {
 }
 .brand:hover { color: var(--text); }
 .brand.can-config { text-decoration: underline; text-underline-offset: 3px; }
-.brand-batt {
-  font-size: 13px;
-  line-height: 1.25;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
 
 .chips { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
 
@@ -428,7 +422,8 @@ html.shell-app #pane-ptz-vis.is-main .ptz-pip-btn {
 .stage.layout-1x1 .pane.is-pip .pip-hint { display: block; }
 .stage.layout-1x1 .pane.is-pip .pane-cloud-ctl,
 .stage.layout-1x1 .pane.is-pip .hud-cloud-settings,
-.stage.layout-1x1 .pane.is-pip .uwb-hud { display: none; }
+.stage.layout-1x1 .pane.is-pip .uwb-hud,
+.stage.layout-1x1 .pane.is-pip .uwb-marks { display: none; }
 
 /* 2×2：四块均分 */
 .stage.layout-2x2 {
@@ -576,6 +571,77 @@ html.shell-app #pane-ptz-vis.is-main .ptz-pip-btn {
 
 .cloud-wrap { position: relative; }
 
+.uwb-marks {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+}
+.uwb-mark {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translate(-50%, -100%);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .65));
+}
+.uwb-mark.hidden { display: none; }
+.uwb-mark-body {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px 3px 5px;
+  border-radius: 999px;
+  background: rgba(13, 17, 23, .88);
+  border: 1px solid rgba(255, 122, 40, .85);
+  color: #fff;
+}
+.uwb-mark[data-id="11"] .uwb-mark-body { border-color: rgba(63, 212, 255, .9); }
+.uwb-mark-ico {
+  width: 16px;
+  height: 18px;
+  position: relative;
+  flex: 0 0 auto;
+}
+.uwb-mark-ico::before,
+.uwb-mark-ico::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  background: #ff7a28;
+}
+.uwb-mark[data-id="11"] .uwb-mark-ico::before,
+.uwb-mark[data-id="11"] .uwb-mark-ico::after { background: #3fd4ff; }
+.uwb-mark-ico::before {
+  width: 7px;
+  height: 7px;
+  top: 0;
+  margin-left: -3.5px;
+  border-radius: 50%;
+}
+.uwb-mark-ico::after {
+  width: 10px;
+  height: 9px;
+  top: 8px;
+  margin-left: -5px;
+  border-radius: 4px 4px 2px 2px;
+}
+.uwb-mark-id {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.uwb-mark-stem {
+  width: 2px;
+  height: 10px;
+  background: #ff7a28;
+}
+.uwb-mark[data-id="11"] .uwb-mark-stem { background: #3fd4ff; }
+
 .uwb-hud {
   position: absolute;
   left: 10px;
@@ -626,7 +692,7 @@ html.shell-app #pane-ptz-vis.is-main .ptz-pip-btn {
   display: block;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #0d1218;
+  background: #05060a;
   border-radius: 8px;
   /* 拖动旋转视角时不要触发页面滚动和长按选中 */
   touch-action: none;
@@ -1119,14 +1185,12 @@ html.shell-app #btn-radio { display: inline-block; }
 html.shell-app #btn-control { display: none !important; }
 /* MESH 且网关已连时这颗芯片不必占地方：通没通看 MESH 按钮的颜色，
    它只在「重连中」时才露出来。 */
-html.shell-app #chip-link.online,
-html.shell-app #chip-batt { display: none !important; }
+html.shell-app #chip-link.online { display: none !important; }
 /* 顶栏窄，芯片换行会被裁掉，版本戳就凭空消失了。 */
 html.shell-app .chips { flex-wrap: nowrap; min-width: 0; }
 /* 2.4G 档下这颗芯片没内容了：通没通看按钮颜色，不通的原因用黄条讲。
    不限定 shell-app：网页端若从 localStorage 读回 2.4G 档，也不该留一颗空芯片。 */
 html.radio-24 #chip-link { display: none !important; }
-html.shell-app .brand-wrap { gap: 8px; }
 html.shell-app .brand {
   font-size: 14px;
   line-height: 1.2;
@@ -1139,10 +1203,6 @@ html.shell-app .brand.online {
   text-underline-offset: 6px;
 }
 html.shell-app .brand:not(.online) { text-decoration: none; }
-html.shell-app .brand-batt:not(.hidden) {
-  display: block;
-  font-size: 13px;
-}
 html.shell-app .stage .pane:not(.is-main) { display: none !important; }
 html.shell-app .pip-hint { display: none !important; }
 html.shell-app .stage.layout-1x1 .pane.is-main .pane-actions { right: 16px; }

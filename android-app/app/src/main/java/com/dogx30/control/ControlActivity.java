@@ -411,6 +411,11 @@ public class ControlActivity extends AppCompatActivity {
             RadioLink.get().adoptPosture(standing);
         }
 
+        @JavascriptInterface
+        public void radioAdoptMotion(boolean standing, String walk) {
+            RadioLink.get().adoptMotion(standing, walk);
+        }
+
         /**
          * 按键语音。WebView 里没有 speechSynthesis（见 Tts 的注释），网页那侧念的
          * 每一句都从这里出去。返回 false 时网页会自己想办法。
@@ -677,9 +682,13 @@ public class ControlActivity extends AppCompatActivity {
 
     private void applyPipStick(int[] ch) {
         if (ch.length <= 14) return;
-        long now = rcTickAt;
-        String host = video != null ? video.ballHost() : "192.168.10.168";
         String detent = pipDetent(ch[14]);
+        if (video == null || !video.showingBall()) {
+            pipArmed = detent;
+            return;
+        }
+        long now = rcTickAt;
+        String host = video.ballHost();
         if (pipArmed.isEmpty()) {
             pipArmed = detent;
         } else if (!detent.equals(pipArmed)) {

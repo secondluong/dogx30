@@ -358,6 +358,11 @@ final class NativeVideo {
         return hostOf(url);
     }
 
+    /** 主图是双光时才切画中画；狗身 / 点云不能跟着念「热像主图」。 */
+    boolean showingBall() {
+        return wanted && isBallUrl(url);
+    }
+
     private static String hostOf(String u) {
         if (u == null || u.isEmpty()) return "192.168.10.168";
         int a = u.indexOf("://");

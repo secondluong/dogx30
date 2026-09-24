@@ -350,7 +350,10 @@
       setNote('机身相机地址要以 rtsp:// 开头。', 'bad');
       return false;
     }
-    if (window.X30DogCam) window.X30DogCam.setUrl(cam);
+    if (window.X30DogCam) {
+      window.X30DogCam.setUrl(cam);
+      if (window.X30DogCam.onRadioPath) window.X30DogCam.onRadioPath();
+    }
     if (!host) {
       if (reloadIfAddrChanged) setNote('请填服务 IP。', 'bad');
       return !reloadIfAddrChanged;

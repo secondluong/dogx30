@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0923q';
+const WEB_BUILD = '0924a';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -155,8 +155,13 @@ function notePoseCmd(standing) {
 }
 
 function isStandingUi() {
-  return app.posture === 'standing' || app.posture === 'rising' ||
-         app.posture === 'falling';
+  // 切档会把 posture 清成 unknown；RL 起立后遥测常报坐下。
+  // 这两种都不能只信 posture，否则左下角退回「起立」。
+  if (app.posture === 'standing' || app.posture === 'rising' ||
+      app.posture === 'falling') return true;
+  if (app.poseHandoff !== null) return !!app.poseHandoff;
+  if (app.posture === 'prone' || app.posture === 'locked') return false;
+  return !!app.rlStanding;
 }
 app.isStandingUi = isStandingUi;
 app.notePoseCmd = notePoseCmd;
@@ -659,6 +664,10 @@ function syncRadioStanding(st0) {
     changed = true;
   }
   if (st.poseKnown) notePose(isStandingUi());
+  if (app.poseHandoff !== null && st.poseKnown
+      && typeof st.standing === 'boolean' && st.standing === app.poseHandoff) {
+    app.poseHandoff = null;
+  }
   if (!changed) return;
   const wrap = $('stage-wrap');
   if (wrap) {
@@ -941,26 +950,43 @@ function adoptRadioPath(path, announce) {
   // 遥测仍报坐下，谁都从遥测里认不出来。不交接的表现就是切一次档姿态变回趴着，
   // 而且轴会被接手那侧吞掉 —— 狗明明站着却推不动。
   const upright = changed ? handoffPose() : null;
+  const walk = changed ? effectiveWalk() : null;
   app.radioPath = next;
   try { window.localStorage.setItem(RADIO_STORE, app.radioPath); } catch (e) { /* 记不住就当次有效 */ }
   if (changed) {
-    // 力控/起步是切换指令。带着上一条链路的记忆切过去会发反：
-    // 力控变成踏步、起步变成停步。切档后两边都重新点。
-    app.stateValid = false;
-    app.axisMode = 'none';
-    app.motionState = 'unavailable';
-    app.posture = 'unknown';
+    // 指令已是明确 on/off，记忆可以跟着走。清掉的话 MESH 在走、切 2.4G
+    // 左下角就退回「起立」，力控/停步也对不上。
+    if (upright !== null) {
+      app.rlStanding = upright;
+      app.posture = upright ? 'standing' : 'prone';
+    }
+    if (walk === 'step') {
+      app.motionState = 'walking';
+      app.axisMode = 'vel';
+      app.stateValid = true;
+    } else if (walk === 'torque' || walk === 'stopped') {
+      app.motionState = walk;
+      app.axisMode = 'none';
+      app.stateValid = true;
+    } else if (upright !== null) {
+      app.motionState = upright ? 'stopped' : 'unavailable';
+      app.axisMode = 'none';
+      app.stateValid = true;
+    } else {
+      app.stateValid = false;
+      app.axisMode = 'none';
+      app.motionState = 'unavailable';
+    }
+    paintStandButton();
     paintWalkButtons();
     notifyNativeRadio();
   }
   if (changed && upright !== null) {
-    // 交给 2.4G 立刻生效；交给网关要等拿到控制权，所以先存着，claim 时带过去。
-    if (next === 'radio') pushPoseToRadio(upright);
-    else {
-      app.poseHandoff = upright;
-      poseHintAt = 0;
-      app.poseHintWarned = false;
-    }
+    // 接手一侧还没回报前先信这份。2.4G 立刻写入 RadioLink；网关等 claim。
+    app.poseHandoff = upright;
+    poseHintAt = 0;
+    app.poseHintWarned = false;
+    if (next === 'radio') pushMotionToRadio(upright, walk);
   }
   applyRadioPath(!!announce);
   renderControl();
@@ -996,8 +1022,17 @@ function handoffPose() {
 }
 
 function pushPoseToRadio(upright) {
+  pushMotionToRadio(upright, null);
+}
+
+function pushMotionToRadio(upright, walk) {
   try {
+    if (window.X30Native.radioAdoptMotion) {
+      window.X30Native.radioAdoptMotion(!!upright, walk || '');
+      return;
+    }
     window.X30Native.radioAdoptPose(!!upright);
+    if (walk && window.X30Native.radioWalk) window.X30Native.radioWalk(walk);
   } catch (e) { /* 网页没有原生桥 */ }
 }
 
@@ -1212,10 +1247,6 @@ function renderState(s) {
   const batt = s.battery || {};
   const battText = batt.valid ? `${batt.level}% · ${fmt(batt.voltage, 1)}V` : '—';
   $('chip-batt').textContent = battText;
-  if ($('brand-batt')) {
-    $('brand-batt').textContent = battText;
-    $('brand-batt').classList.toggle('hidden', !isAppShell);
-  }
   $('t-batt').textContent = batt.valid ? batt.level : '—';
 
   $('t-vx').textContent = fmt(s.vel.x);
@@ -1519,7 +1550,7 @@ function selectView(view) {
   viewLayout.main = view === 'dual' ? 'ptz_vis' : view;
   viewLayout.mode = '1x1';
   applyLayout();
-  speak(viewLabel(viewLayout.main));
+  announceView(viewLayout.main);
 }
 
 // L1 / 屏幕行走键：力控 → 起步 → 停步。三级分开，不能把「未力控」直接当起步。
@@ -1813,8 +1844,20 @@ function applyPipStick(c) {
   pipArmed = detent;
 }
 
+function stopPtz() {
+  if (window.X30PtzBall && window.X30PtzBall.move) {
+    window.X30PtzBall.move(0, 0, 0);
+  }
+  if (app.hasControl || radioDirect()) {
+    send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
+  }
+}
+
 function sendAuxPayload(c, viaGateway) {
-  applyPipStick(c);
+  const cloudMain = viewLayout.main === 'cloud';
+  const ptzMain = viewLayout.main === 'ptz_vis';
+  // 只有主图双光才切球机画中画。狗身 / 点云拨右小不能念「热像主图」。
+  if (ptzMain) applyPipStick(c);
   const ax = c.auxX || 0;
   const ay = c.auxY || 0;
   const zoom = c.auxZoom || 0;
@@ -1839,10 +1882,19 @@ function sendAuxPayload(c, viaGateway) {
     }
     return;
   }
-  if (viewLayout.main === 'cloud' && Math.abs(zoom) > 0.25 &&
-      window.X30Cloud && window.X30Cloud.nudgeZoom) {
-    window.X30Cloud.nudgeZoom(zoom * 0.35);
+  if (cloudMain) {
+    if (window.X30Cloud) {
+      if ((Math.abs(ax) > 0.08 || Math.abs(ay) > 0.08) && window.X30Cloud.nudgeLook) {
+        window.X30Cloud.nudgeLook(ax, ay);
+      }
+      if (Math.abs(zoom) > 0.08 && window.X30Cloud.nudgeZoom) {
+        window.X30Cloud.nudgeZoom(zoom * 0.35);
+      }
+    }
+    return;
   }
+  // 狗身视频主图：小摇杆空着，不切画中画、不转球。
+  if (!ptzMain) return;
   const pan = -ax;
   const tilt = ay;
   // 球机 CGI 钉 WiFi；网关 ptz 作备份，2.4G 档同样可走 MESH。
@@ -2106,6 +2158,21 @@ $('chip-stick').addEventListener('click', () => {
     setWorkMode(app.workMode === 'cannon' ? 'inspect' : 'cannon');
     return;
   }
+  if (viewLayout.main === 'cloud') {
+    showBanner('主图是点云，小摇杆控点云');
+    speak('小摇杆控点云');
+    return;
+  }
+  if (viewLayout.main === 'dog_cam') {
+    showBanner('主图是狗身视频，小摇杆不控球');
+    speak('主图是狗身视频，小摇杆不控球');
+    return;
+  }
+  if (viewLayout.main !== 'ptz_vis' && webStickTarget !== 'ptz') {
+    showBanner('主图是双光时才控布控球');
+    speak('主图是双光时才控布控球');
+    return;
+  }
   webStickTarget = webStickTarget === 'ptz' ? 'dog' : 'ptz';
   if (webStickTarget === 'dog' && app.hasControl) {
     send({ t: 'ptz', pan: 0, tilt: 0, zoom: 0 });
@@ -2190,10 +2257,13 @@ function applyLayout() {
     window.X30Cloud.setWanted(cloudVisible);
   }
   syncViewPick();
-  // 点小窗放大布控球时，摇杆跟着改控云台。芯片仍可再切回控狗。
+  // 只有主图是双光才把小摇杆交给布控球。切到点云必须停球，否则杆还在转云台。
   if (!g20Live() && viewLayout.main === 'ptz_vis') {
     webStickTarget = 'ptz';
     if (!app.hasControl) requestControl();
+  } else if (webStickTarget === 'ptz') {
+    webStickTarget = 'dog';
+    stopPtz();
   }
   paintStickChip();
   requestAnimationFrame(() => {
@@ -2222,6 +2292,13 @@ function viewLabel(view) {
   return el ? el.textContent.trim() : view;
 }
 
+function announceView(view) {
+  const name = viewLabel(view);
+  if (view === 'cloud') speak(name + '，小摇杆控点云');
+  else if (view === 'ptz_vis') speak(name + '，小摇杆控布控球');
+  else speak(name + '，小摇杆不控球');
+}
+
 function syncViewPick() {
   const main = viewLayout.main;
   document.querySelectorAll('[data-view-pick]').forEach((b) => {
@@ -2246,7 +2323,7 @@ function cycleView() {
   viewLayout.main = VIEW_CYCLE[(i < 0 ? 0 : i + 1) % VIEW_CYCLE.length];
   viewLayout.mode = '1x1';
   applyLayout();
-  speak(viewLabel(viewLayout.main));
+  announceView(viewLayout.main);
 }
 
 if ($('btn-learn')) {
@@ -2393,7 +2470,6 @@ function bootstrap() {
   if ($('telemetry')) $('telemetry').classList.add('hidden');
   if ($('gas-panel')) $('gas-panel').classList.add('hidden');
   if ($('switch-panel')) $('switch-panel').classList.add('hidden');
-  if ($('brand-batt')) $('brand-batt').classList.toggle('hidden', !isAppShell);
   paintVerChip();
   syncNativeRadioPath();
   applyRadioPath(false);

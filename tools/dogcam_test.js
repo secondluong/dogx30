@@ -121,14 +121,14 @@ function harness() {
   return h;
 }
 
-// --- MESH 下原生直拉 1 网 ---------------------------------------------------
-console.log('\n== MESH 下直拉 1 网 ==');
+// --- MESH 下走网关转推 -----------------------------------------------------
+console.log('\n== MESH 下走网关转推 ==');
 
 var h = harness();
 h.mod.init();
-check('MESH 上机身直拉设置地址，不绑射频',
+check('MESH 上机身拉网关 dog_cam_main，不绑射频',
       h.calls[0] === 'rect 0,128,2560,1200' &&
-      h.calls[1] === 'start rtsp://192.168.1.105:8554/test lan',
+      h.calls[1] === 'start rtsp://192.168.1.101:8554/dog_cam_main lan',
       JSON.stringify(h.calls));
 check('把网页背景透出去', !!h.cls['native-video-on']);
 
@@ -149,8 +149,8 @@ check('矩形按 devicePixelRatio 换算成设备像素',
 check('把网页背景透出去，否则看不到底下的画面', !!h.cls['native-video-on']);
 check('占位图说明正在拉哪个地址',
       h.idle().indexOf('rtsp://192.168.1.105:8554/test') !== -1, h.idle());
-check('热成像如实标成 2.4G 下不可用',
-      h.ir().indexOf('热成像在网关那侧') !== -1, h.ir());
+check('热成像占位不改口',
+      h.ir() === '未接通时会停在这里', h.ir());
 check('双光不再标成没有（球在 192.168.1.x，能直拉）',
       h.ptz() === '未接通时会停在这里', h.ptz());
 // 平板同时连着 WiFi 时网关那一路也够得到机身相机。接手时得让 media.js 重算，
@@ -205,18 +205,25 @@ check('回前台重新开流',
       h.calls.indexOf('start rtsp://192.168.1.105:8554/test radio') !== -1,
       JSON.stringify(h.calls));
 
-// --- 切回 MESH：仍直拉机身，只换绑网卡 -------------------------------------
+// --- 切回 MESH：改拉网关转推 -----------------------------------------------
 console.log('\n== 切回 MESH ==');
 
 h.calls.length = 0;
 h.resyncs = 0;
 h.on24 = false;
 h.mod.onRadioPath();
-check('改绑 WiFi，地址仍是机身',
-      h.calls.indexOf('start rtsp://192.168.1.105:8554/test lan') !== -1,
+check('改绑 WiFi，地址换成网关转推',
+      h.calls.indexOf('start rtsp://192.168.1.101:8554/dog_cam_main lan') !== -1,
       JSON.stringify(h.calls));
 check('同一路只换地址，不必再惊动 media.js', h.resyncs === 0, String(h.resyncs));
 check('MESH 原生画面仍把网页背景透掉', !!h.cls['native-video-on']);
+
+console.log('\n== MESH 转推失败改走 2.4G ==');
+h.calls.length = 0;
+h.mod.onState({ playing: false, err: 'TCP: Connection refused' });
+check('转推失败后改直连机身并绑射频',
+      h.calls.indexOf('start rtsp://192.168.1.105:8554/test radio') !== -1,
+      JSON.stringify(h.calls));
 
 // --- 地址可改 ---------------------------------------------------------------
 console.log('\n== 相机地址 ==');

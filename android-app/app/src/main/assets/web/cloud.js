@@ -30,7 +30,8 @@
   const pose = { x: 0, y: 0, yaw: 0 };
   const frames = [];
   const trail = [];
-  // 单兵 UWB，单位米，已经是以狗为原点的机体系。
+  // 单兵 UWB，单位米，相对狗。现场 XY 与机体系差 90°，
+  // 顺时针转到点云：(x, y) → (y, -x)。
   let soldiers = [];
   const persistMap = new Map();
   const est = {
@@ -48,18 +49,18 @@
     voxel: 0.10,      // 固定 10 cm 体素
     trail: true,
     showPoints: true,
-    slice: false,
+    slice: true,
     sliceZ: 0,
-    sliceHalf: 0.6,
+    sliceHalf: 2.0,
     storyH: 3.0,
-    displayH: 0.6,
+    displayH: 2.0,   // 层高显示：从地面往上留多少米，不跟楼层切割开关走
     floorCut: false,
     floorView: -1,
     floors: [],
   };
 
   // 相机：绕原点的轨道视角。仰角限制在两极之间，避免翻转。
-  const cam = { yaw: -2.4, pitch: 0.5, dist: 12 };
+  const cam = { yaw: -2.4, pitch: 0.95, dist: 18, lookX: 0, lookY: 0, lookZ: 0 };
   let dragging = false;
   let lastX = 0;
   let lastY = 0;
@@ -72,12 +73,11 @@
     void main() {
       v_h = a_p.z;
       gl_Position = u_mvp * vec4(a_p, 1.0);
-      gl_PointSize = clamp(u_size / gl_Position.w, 1.0, 4.0);
+      gl_PointSize = clamp(u_size / max(gl_Position.w, 0.8), 3.0, 14.0);
     }
   `;
 
-  // 按高度着色。用高度而不是强度，是因为遥控员真正要判断的是
-  // "前面那团东西是地面起伏还是一堵墙"，高度直接回答这个问题。
+  // 按层高窗口着色：墙脚青、墙身黄。点画大一点互相盖住，墙看起来才实。
   const FRAG = `
     precision mediump float;
     varying float v_h;
@@ -86,11 +86,15 @@
     uniform float u_zHalf;
     void main() {
       if (u_slice > 0.5 && (v_h < u_z0 || v_h > u_z0 + u_zHalf)) discard;
-      float t = clamp((v_h + 0.6) / 2.6, 0.0, 1.0);
-      vec3 low  = vec3(0.15, 0.45, 0.75);
-      vec3 mid  = vec3(0.30, 0.85, 0.60);
-      vec3 high = vec3(0.98, 0.80, 0.25);
-      vec3 c = t < 0.5 ? mix(low, mid, t * 2.0) : mix(mid, high, (t - 0.5) * 2.0);
+      vec2 pc = gl_PointCoord * 2.0 - 1.0;
+      if (dot(pc, pc) > 1.05) discard;
+      float t = u_zHalf > 0.05
+        ? clamp((v_h - u_z0) / u_zHalf, 0.0, 1.0)
+        : clamp((v_h + 0.4) / 2.4, 0.0, 1.0);
+      vec3 low  = vec3(0.22, 0.84, 0.90);
+      vec3 mid  = vec3(0.78, 0.94, 0.28);
+      vec3 high = vec3(0.99, 0.92, 0.18);
+      vec3 c = t < 0.38 ? mix(low, mid, t / 0.38) : mix(mid, high, (t - 0.38) / 0.62);
       gl_FragColor = vec4(c, 1.0);
     }
   `;
@@ -155,7 +159,7 @@
 
     buffer = gl.createBuffer();
     lineBuffer = gl.createBuffer();
-    gl.clearColor(0.05, 0.07, 0.10, 1.0);
+    gl.clearColor(0.02, 0.02, 0.04, 1.0);
     gl.enable(gl.DEPTH_TEST);
 
     bindCamera();
@@ -214,11 +218,11 @@
     const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
 
     const eye = [
-      cam.dist * cp * cy,
-      cam.dist * cp * sy,
-      cam.dist * sp + 1.0,
+      cam.lookX + cam.dist * cp * cy,
+      cam.lookY + cam.dist * cp * sy,
+      cam.lookZ + cam.dist * sp + 1.0,
     ];
-    const target = [0, 0, 0];
+    const target = [cam.lookX, cam.lookY, cam.lookZ];
     const up = [0, 0, 1];
 
     const f = norm(sub(target, eye));
@@ -452,6 +456,21 @@
   }
 
   // 按层高把点云切成若干层。一层里点数太少就丢掉（没走到的楼层不占档）。
+  let lastZMin = 0;
+  let zMinAt = 0;
+
+  function heightBase() {
+    const now = Date.now();
+    if (now - zMinAt < 1500 && lastZMin !== 0) return lastZMin;
+    const zs = collectZs();
+    if (zs.length) {
+      zs.sort((a, b) => a - b);
+      lastZMin = zs[Math.floor(zs.length * 0.03)];
+      zMinAt = now;
+    }
+    return lastZMin;
+  }
+
   function detectFloors() {
     const story = Math.max(opts.storyH, 1.2);
     const zs = collectZs();
@@ -462,6 +481,8 @@
     zs.sort((a, b) => a - b);
     const zMin = zs[Math.floor(zs.length * 0.03)];
     const zMax = zs[Math.floor(zs.length * 0.97)];
+    lastZMin = zMin;
+    zMinAt = Date.now();
     const minCount = Math.max(20, zs.length * 0.015);
     const floors = [];
     const start = zMin;
@@ -479,14 +500,16 @@
     return opts.floors;
   }
 
+  // 层高显示始终生效：从地面（或当前选的楼层）往上留 displayH 米。
+  // 楼层切割只改「地面」取哪一层，不决定切不切。
   function applyFloorView() {
-    if (!opts.floorCut || opts.floorView < 0 || !opts.floors.length) {
-      opts.slice = false;
-      return;
-    }
     opts.slice = true;
-    opts.sliceZ = opts.floors[opts.floorView];
-    opts.sliceHalf = opts.displayH;
+    if (opts.floorCut && opts.floorView >= 0 && opts.floors.length) {
+      opts.sliceZ = opts.floors[opts.floorView];
+    } else {
+      opts.sliceZ = heightBase();
+    }
+    opts.sliceHalf = Math.max(0.2, opts.displayH);
   }
 
   function floorButtonText() {
@@ -503,22 +526,14 @@
   }
 
   function soldierRing(x, y, z) {
-    const out = [x, y, z + 0.10];
-    const n = 10;
-    const r = 0.20;
+    const out = [x, y, z + 0.04];
+    const n = 12;
+    const r = 0.28;
     for (let i = 0; i <= n; i++) {
       const a = (i / n) * Math.PI * 2;
-      out.push(x + Math.cos(a) * r, y + Math.sin(a) * r, z + 0.10);
+      out.push(x + Math.cos(a) * r, y + Math.sin(a) * r, z + 0.04);
     }
     return new Float32Array(out);
-  }
-
-  function soldierPin(x, y, z) {
-    return new Float32Array([
-      x, y, z + 0.48,
-      x + 0.16, y, z,
-      x - 0.16, y, z,
-    ]);
   }
 
   function paintUwbHud(uwb) {
@@ -536,7 +551,11 @@
       const id = t.id;
       const stale = !t.valid;
       const xyz = t.valid
-        ? (t.x.toFixed(2) + '  ' + t.y.toFixed(2) + '  ' + t.z.toFixed(2) + ' m')
+        ? (function () {
+            const xy = uwbToCloud(Number(t.x), Number(t.y));
+            return xy.x.toFixed(2) + '  ' + xy.y.toFixed(2) + '  ' +
+                   Number(t.z).toFixed(2) + ' m';
+          }())
         : '无效';
       html += '<div class="uwb-card' + (stale ? ' stale' : '') +
               '" data-id="' + id + '">' +
@@ -548,16 +567,78 @@
     el.classList.remove('hidden');
   }
 
+  function projectSoldier(mvp, x, y, z) {
+    const cx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
+    const cy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
+    const cw = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15];
+    if (cw <= 0.08) return null;
+    const ndcX = cx / cw;
+    const ndcY = cy / cw;
+    if (ndcX < -1.15 || ndcX > 1.15 || ndcY < -1.15 || ndcY > 1.15) return null;
+    return {
+      x: (ndcX * 0.5 + 0.5) * canvas.clientWidth,
+      y: (-ndcY * 0.5 + 0.5) * canvas.clientHeight,
+    };
+  }
+
+  function syncSoldierMarks() {
+    const host = document.getElementById('uwb-marks');
+    if (!host) return;
+    while (host.children.length > soldiers.length) host.removeChild(host.lastChild);
+    while (host.children.length < soldiers.length) {
+      const el = document.createElement('div');
+      el.className = 'uwb-mark';
+      el.innerHTML = '<span class="uwb-mark-body"><i class="uwb-mark-ico"></i>' +
+                     '<b class="uwb-mark-id"></b></span><i class="uwb-mark-stem"></i>';
+      host.appendChild(el);
+    }
+    for (let i = 0; i < soldiers.length; i++) {
+      const el = host.children[i];
+      const id = String(soldiers[i].id);
+      el.dataset.id = id;
+      el.querySelector('.uwb-mark-id').textContent = id;
+    }
+  }
+
+  function placeSoldierMarks(mvp) {
+    const host = document.getElementById('uwb-marks');
+    if (!host || !canvas) return;
+    for (let i = 0; i < soldiers.length; i++) {
+      const el = host.children[i];
+      if (!el) continue;
+      const s = soldiers[i];
+      const p = projectSoldier(mvp, s.x, s.y, s.z);
+      if (!p) {
+        el.classList.add('hidden');
+        continue;
+      }
+      el.classList.remove('hidden');
+      el.style.transform = 'translate(' + p.x.toFixed(1) + 'px,' +
+                           p.y.toFixed(1) + 'px) translate(-50%,-100%)';
+    }
+  }
+
+  function uwbToCloud(x, y) {
+    return { x: y, y: -x };
+  }
+
   function setSoldiers(uwb) {
     const next = [];
     const tags = uwb && uwb.tags ? uwb.tags : [];
     for (let i = 0; i < tags.length; i++) {
       const t = tags[i];
       if (!t || !t.valid) continue;
-      next.push({ id: t.id, x: t.x, y: t.y, z: t.z });
+      const id = Number(t.id);
+      const rawX = Number(t.x);
+      const rawY = Number(t.y);
+      const z = Number(t.z);
+      if (!isFinite(id) || !isFinite(rawX) || !isFinite(rawY) || !isFinite(z)) continue;
+      const xy = uwbToCloud(rawX, rawY);
+      next.push({ id: id, x: xy.x, y: xy.y, z: z });
     }
     soldiers = next;
     paintUwbHud(uwb);
+    syncSoldierMarks();
     if (gl) draw();
   }
 
@@ -573,7 +654,7 @@
       const loc = gl.getAttribLocation(program, 'a_p');
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-      gl.uniform1f(gl.getUniformLocation(program, 'u_size'), canvas.height / 180);
+      gl.uniform1f(gl.getUniformLocation(program, 'u_size'), canvas.height / 70);
       gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_mvp'), false, mvp);
       gl.uniform1f(gl.getUniformLocation(program, 'u_slice'), opts.slice ? 1 : 0);
       gl.uniform1f(gl.getUniformLocation(program, 'u_z0'), opts.sliceZ);
@@ -581,7 +662,10 @@
       gl.drawArrays(gl.POINTS, 0, pointCount);
     }
 
-    if (!opts.trail && !soldiers.length) return;
+    if (!opts.trail && !soldiers.length) {
+      placeSoldierMarks(mvp);
+      return;
+    }
 
     gl.disable(gl.DEPTH_TEST);
     gl.useProgram(lineProgram);
@@ -628,12 +712,9 @@
       gl.bufferData(gl.ARRAY_BUFFER, ring, gl.DYNAMIC_DRAW);
       gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
       gl.drawArrays(gl.TRIANGLE_FAN, 0, ring.length / 3);
-      const pin = soldierPin(s.x, s.y, s.z);
-      gl.bufferData(gl.ARRAY_BUFFER, pin, gl.DYNAMIC_DRAW);
-      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     gl.enable(gl.DEPTH_TEST);
+    placeSoldierMarks(mvp);
   }
 
   function onCloudFrame(arrayBuffer) {
@@ -696,10 +777,8 @@
     }
     const idle = document.getElementById('cloud-idle');
     if (idle) idle.classList.add('hidden');
-    if (opts.floorCut) {
-      detectFloors();
-      applyFloorView();
-    }
+    if (opts.floorCut) detectFloors();
+    applyFloorView();
     rebuild();
     draw();
     paintTag(lastStatus);
@@ -932,15 +1011,11 @@
         ? `已识别 ${n} 层，点击切换；切完回到全部`
         : '先勾选楼层切割，按高度识别楼层后再切换';
     }
-    const clear = document.getElementById('btn-cloud-clear');
-    if (clear) clear.classList.toggle('hidden', !opts.persist);
   }
 
   function applyOpts() {
-    if (opts.floorCut) {
-      detectFloors();
-      applyFloorView();
-    }
+    if (opts.floorCut) detectFloors();
+    applyFloorView();
     syncToolbar();
     if (frames.length || persistMap.size) {
       rebuild();
@@ -950,10 +1025,16 @@
     }
   }
 
-  function clearCloud() {
+  function clearCloud(withTrail) {
     frames.length = 0;
     persistMap.clear();
+    lastZMin = 0;
+    zMinAt = 0;
     pointCount = 0;
+    est.lastIngestX = null;
+    est.lastIngestY = null;
+    opts.floors = [];
+    if (withTrail) trail.length = 0;
     if (gl && buffer) {
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       gl.bufferData(gl.ARRAY_BUFFER, 0, gl.DYNAMIC_DRAW);
@@ -969,10 +1050,17 @@
     syncSubscribeButton();
     paintTag(lastStatus);
     if (!subscribed) {
-      // 退订只停点云，轨迹继续留着、位姿继续记。切走再回来路还在。
-      clearCloud();
+      // 只停下行，不清已画的点和轨迹。MESH 抖一下再回来还能接着叠，
+      // 否则 App 重订会把前后两段对不齐。
       const idle = document.getElementById('cloud-idle');
-      if (idle) idle.classList.remove('hidden');
+      if (idle && !persistMap.size && !frames.length) {
+        idle.classList.remove('hidden');
+      }
+    } else if (persistMap.size || frames.length) {
+      const idle = document.getElementById('cloud-idle');
+      if (idle) idle.classList.add('hidden');
+      rebuild();
+      draw();
     }
   }
 
@@ -1049,10 +1137,9 @@
         return;
       }
       if (t.id === 'btn-cloud-clear') {
-        persistMap.clear();
-        frames.length = 0;
+        clearCloud(true);
         applyOpts();
-        say('已清除');
+        say('已清除点云和轨迹');
       }
     });
 
@@ -1085,8 +1172,8 @@
       h.addEventListener('change', () => {
         const v = Number(h.value);
         if (!Number.isNaN(v) && v > 0) {
-          opts.displayH = v;
-          opts.sliceHalf = v;
+          opts.displayH = Math.min(8, Math.max(0.2, v));
+          opts.sliceHalf = opts.displayH;
         }
         applyFloorView();
         applyOpts();
@@ -1141,8 +1228,22 @@
     if (gl) draw();
   }
 
+  // 左小摇杆平移显示中心。ax 左为正、ay 上为正，按镜头水平方向在地面上挪。
+  function nudgeLook(ax, ay) {
+    if (!ax && !ay) return;
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    const rx = sy, ry = -cy;
+    const fx = -cy, fy = -sy;
+    const speed = Math.max(4, cam.dist) * 0.045;
+    cam.lookX += (-ax) * rx * speed + ay * fx * speed;
+    cam.lookY += (-ax) * ry * speed + ay * fy * speed;
+    cam.lookX = Math.max(-150, Math.min(150, cam.lookX));
+    cam.lookY = Math.max(-150, Math.min(150, cam.lookY));
+    if (gl) draw();
+  }
+
   window.X30Cloud = {
     initCloud, onCloudFrame, onCloudStatus, onPose, stop, resize, resubscribe,
-    onDenied, setWanted, nudgeZoom, setSoldiers,
+    onDenied, setWanted, nudgeZoom, nudgeLook, setSoldiers,
   };
 })();

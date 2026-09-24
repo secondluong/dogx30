@@ -415,20 +415,44 @@ final class RadioLink {
      * 按钮显示「起立」，而且 axesApply 认为狗趴着，推杆没反应。
      */
     void adoptPosture(boolean up) {
+        adoptMotion(up, "");
+    }
+
+    /**
+     * 切档时把站姿和力控/踏步一起接过来。只接站姿会 clearWalk，MESH 在走
+     * 切到 2.4G 后按钮退回起立、摇杆也不发轴。
+     */
+    void adoptMotion(boolean up, String walk) {
         // 必须排在开/关这一档的后面执行：setEnabled 是投到这个线程上的，
         // 而切档就在同一瞬间发生。直接在调用线程上写，快速来回切档时那次
         // stop() 会后到，把刚交接过来的姿态清掉 —— 又变成「切档姿态丢了」。
-        onRadio(() -> adoptOnRadio(up));
+        final String mode = walk == null ? "" : walk;
+        onRadio(() -> adoptOnRadio(up, mode));
     }
 
-    private synchronized void adoptOnRadio(boolean up) {
+    private synchronized void adoptOnRadio(boolean up, String walk) {
         standing = up;
         poseKnown = true;
         // 姿态是别人告知的，不是我们刚发的起立，所以不必再等身子稳住。
         lastStandAt = 0;
-        // 力控/踏步没人告知，先按最保守的算；有遥测时下一帧就纠回来。
-        clearWalk();
-        stopped = up;
+        if (!up) {
+            clearWalk();
+            return;
+        }
+        if ("step".equals(walk)) {
+            torqued = true;
+            stepping = true;
+            stopped = false;
+            stepSent = true;
+        } else if ("torque".equals(walk)) {
+            adoptWalkMode("torque");
+        } else if ("stopped".equals(walk)) {
+            adoptWalkMode("stopped");
+        } else {
+            clearWalk();
+            torqued = true;
+            stopped = true;
+        }
     }
 
     /** 姿态到底是知道的还是猜的。猜的就别去改网关那份记忆。 */

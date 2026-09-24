@@ -17,21 +17,20 @@
 <meta name="theme-color" content="#0d1117">
 <title>X30 遥控台</title>
 <style>.hidden{display:none!important}</style>
-<link rel="stylesheet" href="style.css?v=20260923k">
+<link rel="stylesheet" href="style.css?v=20260923m">
 </head>
 <body>
 
 <header class="bar">
   <div class="brand-wrap">
     <button type="button" class="brand" id="btn-settings" data-say="设置">X30 遥控台</button>
-    <span class="brand-batt hidden" id="brand-batt"></span>
   </div>
 
   <div class="chips">
     <span class="chip" id="chip-link"><i class="dot"></i><span id="link-text">连接中</span></span>
     <span class="chip" id="chip-state">—</span>
-    <span class="chip" id="chip-batt">—</span>
     <span class="chip hidden" id="chip-stick" title="当前作业模式：侦检或水炮">侦检</span>
+    <span class="chip" id="chip-batt">—</span>
   </div>
 
   <div class="bar-right">
@@ -85,7 +84,7 @@
         <input class="set-input" id="set-app-port" type="number" autocomplete="off">
       </label>
       <div class="set-sect">2.4G 机身相机</div>
-      <p class="set-sect-note">2.4G 下遥控器与狗直连，不经过网关，画面由 App 直接拉狗身上的 RTSP。</p>
+      <p class="set-sect-note">2.4G 直连下面这个地址。MESH 下改拉网关转推 dog_cam_main，不用改这里。</p>
       <label class="set-row">
         <span class="set-label">RTSP 地址</span>
         <input class="set-input" id="set-app-dogcam" autocomplete="off" spellcheck="false">
@@ -160,7 +159,7 @@
         <img class="rc-learn-ico" src="icons/rc-hat.png" alt="小摇杆">
         <div class="rc-learn-txt">
           <b>左小摇杆</b>
-          <p class="for-inspect">侦检：控制球机水平和俯仰</p>
+          <p class="for-inspect">侦检：主图双光时控球机水平和俯仰；主图点云时移动显示中心；主图狗身视频时不控球</p>
           <p class="for-cannon">水炮：控制水炮水平和俯仰</p>
         </div>
       </article>
@@ -196,7 +195,7 @@
         <img class="rc-learn-ico" src="icons/rc-hat.png" alt="小摇杆">
         <div class="rc-learn-txt">
           <b>右小摇杆</b>
-          <p class="for-inspect">侦检：球机画中画切换</p>
+          <p class="for-inspect">侦检：主图双光时左右切画中画、上下变焦；主图点云时上下缩放；主图狗身视频时不控球</p>
           <p class="for-cannon">水炮：喷射模式</p>
         </div>
       </article>
@@ -267,6 +266,7 @@
     <div id="pane-cloud" class="pane" data-view="cloud">
       <div class="cloud-wrap">
         <canvas id="cloud-canvas" class="cloud-canvas"></canvas>
+        <div id="uwb-marks" class="uwb-marks"></div>
         <div id="uwb-hud" class="uwb-hud hidden"></div>
         <div class="placeholder cloud-idle" id="cloud-idle">
           <div class="ph-icon">⁘</div>
@@ -300,14 +300,14 @@
             <input id="cloud-slice-z" type="number" inputmode="decimal" value="3.0" step="0.1" min="1" max="8">
             <span>m</span>
           </label>
-          <label class="cloud-num" title="每一层从地面往上显示到多高，用来看墙脚障碍">
-            <span>显示</span>
-            <input id="cloud-slice-h" type="number" inputmode="decimal" value="0.6" step="0.1" min="0.1" max="5">
+          <label class="cloud-num" title="从地面往上留多少米。天花板以上的点丢掉。楼层切割开不开都生效。">
+            <span>层高显示</span>
+            <input id="cloud-slice-h" type="number" inputmode="decimal" value="2.0" step="0.1" min="0.2" max="8">
             <span>m</span>
           </label>
           <button type="button" class="btn sm" id="btn-floor" title="在识别出的楼层之间切换，最后一档显示全部">楼层</button>
         </div>
-        <button type="button" class="btn sm hidden" id="btn-cloud-clear">清除</button>
+        <button type="button" class="btn sm" id="btn-cloud-clear" title="清掉已画的点云和轨迹，单兵不受影响">清除</button>
         <span class="hint" id="cloud-note">拖动旋转</span>
       </div>
       <span class="pip-hint">点击放大</span>
