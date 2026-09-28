@@ -273,6 +273,9 @@ void CannonClient::Loop() {
       if (EnsureConnected()) {
         if (SendFrame(frame)) sent_idle_ = idle;
       }
+    } else if (fd_ >= 0) {
+      // 停止帧已经发出。炮台只收一条 TCP，2.4G 平板要自己连上来，这里必须放开。
+      CloseFd();
     }
 
     DrainReplies();

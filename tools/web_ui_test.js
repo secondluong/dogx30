@@ -1055,10 +1055,11 @@ check('网关云台水炮不绑运动控制权',
 var cannonJava = fs.readFileSync(
   path.join(__dirname, '..', 'android-app', 'app', 'src', 'main', 'java',
             'com', 'dogx30', 'control', 'CannonLink.java'), 'utf8');
-check('水炮 2.4G 直连失败则经网关转发，不经 MESH',
+check('水炮 2.4G 直连炮台，不经网关',
       /192\.168\.1\.253/.test(cannonJava) &&
-      /192\.168\.1\.120/.test(cannonJava) &&
-      /RELAY_PORT = 4001/.test(cannonJava) &&
+      !/192\.168\.1\.120/.test(cannonJava) &&
+      !/RELAY_PORT/.test(cannonJava) &&
+      !/4001/.test(cannonJava) &&
       /bindToDevice/.test(cannonJava) &&
       /airNetwork\(\)/.test(cannonJava) &&
       /setOnline\(false, "wait"/.test(cannonJava) &&
@@ -1067,11 +1068,11 @@ check('水炮 2.4G 直连失败则经网关转发，不经 MESH',
       /function pushCannon/.test(appJs) &&
       /radioCannon\(/.test(appJs) &&
       /function pollCannonLink/.test(appJs) &&
-      /狗上的网关还没开转发/.test(appJs) &&
+      !/狗上的网关还没开转发/.test(appJs) &&
+      /到不了炮台/.test(appJs) &&
       /void radioCannon\(/.test(radioBridge) &&
       /radioCannonStatus/.test(radioBridge) &&
       /obj\.t === 'cannon' \|\| obj\.t === 'cannon_spray' \|\| obj\.t === 'cannon_fire'\) return/.test(appJs) &&
-      /kCannonRelayPort/.test(serviceCpp) &&
       /id="btn-cannon-fire"/.test(html) &&
       /data-key="home"/.test(html));
 check('水炮模式有水压时在学习前显示 MPa',

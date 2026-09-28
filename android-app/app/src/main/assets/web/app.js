@@ -30,7 +30,7 @@ const RADIO_STORE = 'x30.radioPath';
 
 // 改一次网页就把这个字符串往前挪一位。界面上印出来，就能一眼看出
 // assets/web 是不是真的重拷过 —— 编包漏拷是这套壳最常见的「改了没反应」。
-const WEB_BUILD = '0924j';
+const WEB_BUILD = '0928a';
 
 // 语音播报见 voice.js。按钮上的字由那边的委托监听念，这里只在「按下去之后发生的事
 // 与按钮上写的不一样」时改口：被拦下、开关类按钮的新状态、切完档之后到底走哪条路。
@@ -1881,10 +1881,7 @@ function pollCannonLink() {
     const why = st.err === 'refused' ? '炮台拒绝了连接'
       : (st.err === 'timeout' ? '炮台没有回应'
         : (st.err === 'unreachable' ? '到不了炮台' : '水炮连不上'));
-    const relay = st.relay === 'refused' ? '，狗上的网关还没开转发'
-      : (st.relay === 'timeout' || st.relay === 'unreachable'
-        ? '，网关 192.168.1.120 也到不了' : '');
-    showBanner(from + why + ' 192.168.1.253' + relay);
+    showBanner(from + why + ' 192.168.1.253');
   } else if (st && st.status === 'tcp') {
     cannonNetStatus = 'tcp';
   }

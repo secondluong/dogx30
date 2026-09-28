@@ -901,8 +901,8 @@ void RobotService::OnMessage(WsServer::ClientId id, const std::string& text) {
     return;
   }
 
-  // 水炮是载荷：不绑运动控制权，2.4G 档 yield 后仍走 MESH。
-  // 网关转成炮台 13 字节 TCP 帧（192.168.1.253:4000）。
+  // 桌面/MESH 若把 cannon 送到这里，网关才去连炮。2.4G App 不走这条，
+  // 自己绑射频口直连 192.168.1.253:4000。不绑运动控制权。
   if (t == "cannon" || t == "cannon_spray" || t == "cannon_fire") {
     if (cannon_) {
       if (msg.Has("pan") || msg.Has("tilt") || t == "cannon") {

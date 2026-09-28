@@ -11,18 +11,15 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 
 /**
- * 消防炮在 1 网 192.168.1.253:4000。平板和运动 UDP 用同一张 2.4G 网卡。
- * 现场从 192.168.1.11 直连炮台完不成握手，炮和狗在同一台交换机上，
- * 所以直连失败后改连网关 192.168.1.120:4001，由网关 eth0 去连炮。
- * 帧仍是 13 字节，开阀才出水。
+ * 消防炮在 1 网 192.168.1.253:4000。2.4G 下平板和运动 UDP 用同一张射频网卡，
+ * 直接做炮台的 TCP 客户端，不经网关、不进 MESH。
+ * 绑口顺序和机身相机一样：系统看得见这张网就 bindSocket，否则先 bind 本机地址
+ * （这一步才有 fd）再 SO_BINDTODEVICE。帧是 13 字节，开阀才出水。
  */
 final class CannonLink {
     private static final String TAG = "CannonLink";
     private static final String HOST = "192.168.1.253";
     private static final int PORT = 4000;
-    /** 网关 eth0。平板到得了狗（.103/.106），到不了炮时走这里。 */
-    private static final String RELAY_HOST = "192.168.1.120";
-    private static final int RELAY_PORT = 4001;
     private static final int PERIOD_MS = 100;
     private static final int STALE_MS = 800;
     private static final float DEAD = 0.08f;
@@ -47,8 +44,6 @@ final class CannonLink {
     private String status = "idle";
     private String err = "";
     private String via = "";
-    private String hop = "";
-    private String relay = "";
     private Thread thread;
     private volatile boolean running;
 
@@ -77,9 +72,7 @@ final class CannonLink {
                     + ",\"spray\":\"" + sp + "\""
                     + ",\"status\":\"" + status + "\""
                     + ",\"err\":\"" + err + "\""
-                    + ",\"via\":\"" + via + "\""
-                    + ",\"hop\":\"" + hop + "\""
-                    + ",\"relay\":\"" + relay + "\"}";
+                    + ",\"via\":\"" + via + "\"}";
         }
     }
 
@@ -133,9 +126,10 @@ final class CannonLink {
     }
 
     /**
-     * 和机身监控同一条绑法：有 Network 就 bindSocket，否则 SO_BINDTODEVICE。
-     * 先试炮台。192.168.1.11 直连 .253 在现场完不成握手，再试网关转发口。
-     * 后一次拨号若是本地绑口失败，保留前一次的网络错误，避免横幅被盖成「连不上」。
+     * 只连炮台。系统看得见射频网卡时用 bindSocket；看不见（ar_net0 常见）
+     * 则先 bind 本机地址再 SO_BINDTODEVICE。后一次若是本地绑口失败，保留
+     * 前一次的网络错误，避免横幅被盖成「连不上」。不走默认路由，以免从
+     * WiFi 绕进网关。
      */
     private Socket connect() {
         Radio radio = radio();
@@ -144,64 +138,69 @@ final class CannonLink {
             return null;
         }
         String src = radio.addr != null ? radio.addr.getHostAddress() : radio.name;
-        Socket direct = open(radio, HOST, PORT);
-        if (direct != null) {
-            markUp("direct", src);
+        Socket s = null;
+        if (radio.net != null) s = dial(radio, true);
+        else lastOpenErr = null;
+        if (s == null) {
+            Exception first = lastOpenErr;
+            s = dial(radio, false);
+            if (s == null && first != null && localProblem(lastOpenErr)) lastOpenErr = first;
+        }
+        if (s != null) {
+            markUp(src);
             Log.i(TAG, "水炮已连 " + HOST + ":" + PORT + " via " + src);
-            return direct;
+            return s;
         }
-        String directWhy = lastOpenErr == null ? "other" : reason(lastOpenErr);
-        Socket gw = open(radio, RELAY_HOST, RELAY_PORT);
-        if (gw != null) {
-            markUp("gw", src);
-            Log.i(TAG, "水炮经网关 " + RELAY_HOST + ":" + RELAY_PORT + " via " + src);
-            return gw;
-        }
-        String relayWhy = lastOpenErr == null ? "other" : reason(lastOpenErr);
-        setFail(directWhy, relayWhy, src);
-        Log.w(TAG, "cannon " + directWhy + " relay " + relayWhy + " via " + src);
+        String why = lastOpenErr == null ? "other" : reason(lastOpenErr);
+        setFail(why, src);
+        Log.w(TAG, "cannon " + why + " via " + src);
         return null;
     }
 
     private Exception lastOpenErr;
 
     @Nullable
-    private Socket open(Radio radio, String host, int port) {
-        Exception first = null;
-        Socket s = dial(radio, host, port, false);
-        if (s != null) return s;
-        first = lastOpenErr;
-        if (radio.addr != null) {
-            s = dial(radio, host, port, true);
-            if (s != null) return s;
-            if (first != null && localProblem(lastOpenErr)) lastOpenErr = first;
-        }
-        return null;
-    }
-
-    private Socket dial(Radio radio, String host, int port, boolean bindLocal) {
+    private Socket dial(Radio radio, boolean preferNet) {
         Socket s = new Socket();
         lastOpenErr = null;
         try {
-            if (bindLocal && radio.addr != null) {
-                s.bind(new InetSocketAddress(radio.addr, 0));
+            if (preferNet) {
+                if (radio.net == null) {
+                    close(s);
+                    return null;
+                }
+                radio.net.bindSocket(s);
+            } else if (!bindRadio(s, radio)) {
+                lastOpenErr = new java.net.SocketException("no-radio");
+                close(s);
+                return null;
             }
-            if (!bindLocal && radio.net != null) radio.net.bindSocket(s);
-            else if (radio.name != null && !radio.name.isEmpty()) {
-                RadioLink.bindToDevice(s, radio.name);
-            }
-            s.connect(new InetSocketAddress(InetAddress.getByName(host), port), 1000);
+            s.connect(new InetSocketAddress(InetAddress.getByName(HOST), PORT), 1500);
             s.setTcpNoDelay(true);
             s.setSoTimeout(40);
             return s;
         } catch (Exception e) {
             lastOpenErr = e;
-            Log.w(TAG, "connect " + host + ":" + port
-                    + (bindLocal ? " bind " : " ")
+            Log.w(TAG, "connect " + HOST + ":" + PORT
+                    + (preferNet ? " net " : " dev ")
                     + (radio.addr != null ? radio.addr.getHostAddress() : radio.name), e);
             close(s);
             return null;
         }
+    }
+
+    /** 先 bind 本机地址创建 fd，再按网卡名绑。两样都没有就不连。 */
+    private static boolean bindRadio(Socket s, Radio radio) throws Exception {
+        boolean bound = false;
+        if (radio.addr != null) {
+            s.bind(new InetSocketAddress(radio.addr, 0));
+            bound = true;
+        }
+        if (radio.name != null && !radio.name.isEmpty()) {
+            RadioLink.bindToDevice(s, radio.name);
+            bound = true;
+        }
+        return bound;
     }
 
     private static boolean localProblem(@Nullable Exception e) {
@@ -240,24 +239,20 @@ final class CannonLink {
         return new Radio(net, name == null ? "" : name, addr);
     }
 
-    private void markUp(String which, String src) {
+    private void markUp(String src) {
         synchronized (lock) {
             online = true;
             status = "tcp";
             err = "";
-            hop = which == null ? "" : which;
             via = src == null ? "" : src;
-            relay = "gw".equals(which) ? "ok" : "";
         }
     }
 
-    private void setFail(String error, String relayState, String src) {
+    private void setFail(String error, String src) {
         synchronized (lock) {
             online = false;
             status = "tcp-fail";
             err = error == null ? "" : error;
-            relay = relayState == null ? "" : relayState;
-            hop = "";
             via = src == null ? "" : src;
             havePressure = false;
             pressureMpa = 0;
@@ -342,8 +337,6 @@ final class CannonLink {
                 // 断线后旧水压不再显示，避免没连上还留着上一口的数。
                 havePressure = false;
                 pressureMpa = 0;
-                hop = "";
-                relay = "";
             }
         }
     }
